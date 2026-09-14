@@ -313,7 +313,8 @@ try {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $view "mod-only-root.txt"))) "mod-only name is confined beneath Data"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $view "overwrite-only-root.txt"))) "Overwrite-only name is confined beneath Data"
     Assert-Text (Join-Path $view "Data\WiNnEr.TxT") "overwrite" "case-insensitive Overwrite winner"
-    Assert-True ((Get-Item -LiteralPath (Join-Path $view "Data\WiNnEr.TxT")).Name -ceq "winner.txt") "mixed-case first open preserves backing-store winner casing"
+    $winnerEntries = @(Get-ChildItem -LiteralPath (Join-Path $view "Data") | Where-Object Name -ieq "winner.txt")
+    Assert-True (($winnerEntries.Count -eq 1) -and ($winnerEntries[0].Name -ceq "winner.txt")) "directory enumeration preserves backing-store winner casing after a mixed-case first open"
     Assert-Text (Join-Path $view "Data\priority-high.txt") "high-priority" "high mod wins over low and base without Overwrite"
     Assert-Text (Join-Path $view "Data\priority-low.txt") "low-priority" "low mod wins over base without high or Overwrite"
     Assert-Text (Join-Path $view "Data\root-collision.txt") "overwrite-data-root-collision" "root-like layer names remain Data contributions"
