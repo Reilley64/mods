@@ -169,7 +169,7 @@ function Invoke-Probe {
 function Invoke-NativeTool {
     Push-Location $view
     try {
-        $output = & ".\NativeWhere.exe" "cmd.exe" 2>&1
+        $output = @(& ".\NativeWhere.exe" "cmd.exe" 2>&1)
         Assert-True ($LASTEXITCODE -eq 0) "projected native where.exe copy launched"
         Assert-True (($output.Count -gt 0) -and (($output -join "`n") -match "cmd\.exe")) "projected native tool returned observable output"
         Write-Host "Native tool output: $($output -join '; ')"
