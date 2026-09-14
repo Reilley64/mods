@@ -1,0 +1,90 @@
+name: ProjFS game view prototype
+
+on:
+  push:
+    branches:
+      - prototype/issue-20-projfs
+    paths:
+      - .github/workflows/projfs-prototype.yml
+      - prototypes/projfs-game-view/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scenario:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows 11 ARM64
+            os: windows-11-arm
+            artifact: windows-11-arm64
+          - name: Windows Server 2025 x64
+            os: windows-2025
+            artifact: windows-server-2025-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: prototypes/projfs-game-view
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Capture host and ProjFS preflight
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path evidence -Force | Out-Null
+          $os = Get-CimInstance Win32_OperatingSystem
+          $root = [System.IO.Path]::GetPathRoot($env:RUNNER_TEMP)
+          $drive = $root.TrimEnd([char[]]"\:")
+          $volume = Get-Volume -DriveLetter $drive
+          $feature = Get-WindowsOptionalFeature -Online -FeatureName Client-ProjFS
+          @(
+            "Caption=$($os.Caption)"
+            "Version=$($os.Version)"
+            "Build=$($os.BuildNumber)"
+            "OSArchitecture=$($os.OSArchitecture)"
+            "RunnerArch=$env:RUNNER_ARCH"
+            "ImageOS=$env:ImageOS"
+            "ImageVersion=$env:ImageVersion"
+            "TempRoot=$root"
+            "FileSystem=$($volume.FileSystem)"
+            "ProjFSState=$($feature.State)"
+            "ProjectedFSLib=$((Get-Item $env:SystemRoot\System32\ProjectedFSLib.dll).VersionInfo.FileVersion)"
+            (rustc -vV | Out-String).TrimEnd()
+            (cargo -V)
+          ) | Tee-Object -FilePath evidence/preflight.txt
+          if ($volume.FileSystem -ne "NTFS") { throw "scenario requires NTFS" }
+          if ($feature.State -ne "Enabled") { throw "Client-ProjFS is not enabled" }
+
+      - name: Run portable checks
+        run: |
+          cargo fmt --check
+          cargo test --locked
+
+      - name: Run ProjFS scenario
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "projfs-game-view-evidence"
+          try {
+            & ./run-scenarios.ps1 -FixtureRoot $fixture -KeepFixture *>&1 |
+              Tee-Object -FilePath evidence/scenario.log
+          } finally {
+            if (Test-Path -LiteralPath $fixture) {
+              Copy-Item -LiteralPath $fixture -Destination evidence/fixture -Recurse -Force
+            }
+          }
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: projfs-${{ matrix.artifact }}-${{ github.sha }}
+          path: prototypes/projfs-game-view/evidence
+          if-no-files-found: warn
+          retention-days: 30
