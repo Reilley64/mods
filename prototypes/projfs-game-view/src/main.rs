@@ -16,8 +16,6 @@ struct ServeArgs {
     mods: Vec<PathBuf>,
     ready_file: PathBuf,
     stop_file: PathBuf,
-    #[cfg(windows)]
-    view_was_reparse_point: bool,
 }
 
 fn usage() -> &'static str {
@@ -63,8 +61,6 @@ fn parse_serve(args: &[String]) -> Result<ServeArgs, String> {
         mods,
         ready_file: ready_file.ok_or("missing --ready-file")?,
         stop_file: stop_file.ok_or("missing --stop-file")?,
-        #[cfg(windows)]
-        view_was_reparse_point: false,
     })
 }
 

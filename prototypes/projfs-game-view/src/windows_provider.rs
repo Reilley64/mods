@@ -16,8 +16,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, ERROR_FILE_NOT_FOUND, S_OK};
-use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT};
+use windows::Win32::Foundation::{
+    E_FAIL, E_INVALIDARG, ERROR_FILE_NOT_FOUND, ERROR_REPARSE_POINT_ENCOUNTERED, S_OK,
+};
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 use windows::Win32::Storage::ProjectedFileSystem::*;
 use windows::core::{GUID, HRESULT, PCWSTR};
 
@@ -684,12 +686,6 @@ fn prepare_args(mut args: ServeArgs) -> Result<ServeArgs, String> {
             return Err(format!("mod is not a directory: {}", path.display()));
         }
     }
-    args.view_was_reparse_point = args.view.exists()
-        && fs::symlink_metadata(&args.view)
-            .map_err(|error| format!("cannot inspect view {}: {error}", args.view.display()))?
-            .file_attributes()
-            & FILE_ATTRIBUTE_REPARSE_POINT.0
-            != 0;
     fs::create_dir_all(&args.view)
         .map_err(|error| format!("cannot create view {}: {error}", args.view.display()))?;
     fs::create_dir_all(&args.overwrite).map_err(|error| {
@@ -783,24 +779,28 @@ pub fn serve(args: ServeArgs) -> Result<(), String> {
     });
 
     let view_wide = wide(args.view.as_os_str());
-    if !args.view_was_reparse_point {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| error.to_string())?
-            .as_nanos();
-        let address = (&args as *const ServeArgs as usize) as u128;
-        let instance_id =
-            GUID::from_u128(timestamp ^ address ^ ((std::process::id() as u128) << 96));
-        unsafe {
-            PrjMarkDirectoryAsPlaceholder(
-                PCWSTR(view_wide.as_ptr()),
-                PCWSTR::null(),
-                None,
-                &instance_id,
-            )
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let address = (&args as *const ServeArgs as usize) as u128;
+    let instance_id = GUID::from_u128(timestamp ^ address ^ ((std::process::id() as u128) << 96));
+    let reused_marked_root = match unsafe {
+        PrjMarkDirectoryAsPlaceholder(
+            PCWSTR(view_wide.as_ptr()),
+            PCWSTR::null(),
+            None,
+            &instance_id,
+        )
+    } {
+        Ok(()) => false,
+        Err(error) if error.code() == HRESULT::from_win32(ERROR_REPARSE_POINT_ENCOUNTERED.0) => {
+            true
         }
-        .map_err(|error| format!("PrjMarkDirectoryAsPlaceholder failed: {error}"))?;
-    }
+        Err(error) => {
+            return Err(format!("PrjMarkDirectoryAsPlaceholder failed: {error}"));
+        }
+    };
 
     let callbacks = PRJ_CALLBACKS {
         StartDirectoryEnumerationCallback: Some(start_directory_enumeration),
@@ -835,7 +835,7 @@ pub fn serve(args: ServeArgs) -> Result<(), String> {
         )
     }
     .map_err(|error| {
-        if args.view_was_reparse_point {
+        if reused_marked_root {
             format!("existing reparse --view is not a usable ProjFS virtualization root: {error}")
         } else {
             format!("PrjStartVirtualizing failed: {error}")
