@@ -83,31 +83,60 @@ projfs-game-view probe --expect RELATIVE_PATH=VALUE [--expect ...]
 
 `serve` creates `--view` and `--overwrite` if needed, then retains absolute canonical paths for every source, the view, Overwrite, and state. It marks a new view once. A retained ProjFS root is reused; an arbitrary reparse point gets a clear `PrjStartVirtualizing` failure. An RAII guard always calls `PrjStopVirtualizing` before callback context can drop. Create the stop file to stop the provider. It removes stale control files before startup and writes the ready file only after `PrjStartVirtualizing` succeeds.
 
-## Optional real-install smoke test
+## Bounded real-install launch smoke
 
-This is manual and intentionally outside `run-scenarios.ps1`. Choose a disposable view, Overwrite directory, and state path. Do not point `--view` at the real installation.
+`run-real-smoke.ps1` is separate from the synthetic scenario. It requires a known SHA-256 for a binary named exactly `projfs-game-view.exe`; Steam and game executable names are rejected for `-Binary`. It launches one allowed root executable through a disposable view of a user-selected real installation or its verified disposable copy. `-Program` accepts only `nvse_loader.exe`, `FalloutNV.exe`, or `FalloutNVLauncher.exe`; its default is `nvse_loader.exe`.
+
+Run this script from a normal interactive PowerShell 7.4 or newer. **Never run it elevated.** Enable ProjFS separately with the elevated setup script, close that shell, then run the smoke with a normal token. The smoke intentionally does not query `Get-WindowsOptionalFeature -Online`, because that query encourages elevation. A successful provider start is its runtime ProjFS check.
+
+`-ScratchRoot` is mandatory, must not exist, must be on NTFS, and must not overlap the Game Installation. The script rejects reparse points in the provider binary, Game Installation, selected program, and scratch-parent ancestor chains before it creates scratch. Ancestor traversal starts at `FileInfo.Directory` for file inputs and `DirectoryInfo.Parent` for directory inputs.
 
 ```powershell
 $bin = (Resolve-Path .\target\release\projfs-game-view.exe).Path
-& $bin serve `
-  --base "D:\SteamLibrary\steamapps\common\Fallout New Vegas" `
-  --view "D:\ProjFS-Smoke\Fallout New Vegas" `
-  --overwrite "D:\ProjFS-Smoke\Overwrite" `
-  --state "D:\ProjFS-Smoke\state\tombstones.txt" `
-  --mod "D:\Mods\Example Mod\Data" `
-  --ready-file "D:\ProjFS-Smoke\ready" `
-  --stop-file "D:\ProjFS-Smoke\stop"
+.\run-real-smoke.ps1 `
+  -Binary $bin `
+  -ExpectedBinarySha256 "<64-hex-hash-from-the-authorized-build>" `
+  -GameInstall "D:\ProjFS-Issue20\game-copy" `
+  -Program "nvse_loader.exe" `
+  -ScratchRoot "D:\ProjFS-Issue20\smoke-run-001" `
+  -ObservationSeconds 20
 ```
 
-While that process runs, use a second PowerShell:
+For the authorized issue #20 run, the recommended plan is to make a full disposable copy of the 9.29 GiB installation under an authorized outer scratch directory, then pass that copy as `-GameInstall`. Use a separate sibling path as the script's new `-ScratchRoot`, because the two parameters must not contain one another. For example, use `D:\ProjFS-Issue20\game-copy` and `D:\ProjFS-Issue20\smoke-run-001`. Inventory the canonical installation separately before and after the run. The script's own full inventory then checks the disposable copy for observable changes. This approach tests a real installation image without claiming direct canonical-install integration or gameplay compatibility. Install/build validation was recorded out of band: Steam AppID `22380`, installdir `Fallout New Vegas`, buildid `1510068`, and manifest SHA-256 `6B47AC3C8E796219FCE7EBF3D12BA0D59B81D8ECBAC1A242DBDCEE9FB49E0DD2`. This prototype does not parse VDF manifests.
 
-```powershell
-Push-Location "D:\ProjFS-Smoke\Fallout New Vegas"
-& ".\FalloutNV.exe"
-Pop-Location
-```
+For unattended use, create a temporary Scheduled Task with `LogonType InteractiveToken` and `RunLevel Limited` in the same interactive session as Steam. Delete the task after it finishes. The script writes `$ScratchRoot\control\real-smoke-complete.json` with `PASS` or `FAILED` and prints `REAL SMOKE COMPLETE: <path>`, so an SSH orchestrator can wait for the file without running the smoke elevated.
 
-Replace `FalloutNV.exe` with a user-selected game or tool already present at the installation root. The provider only projects root-level files from the shared installation. It does not copy, patch, or manage them. Create `D:\ProjFS-Smoke\stop` when finished.
+The script requires a nonzero interactive session with a same-session `explorer.exe`, and records every Explorer PID/session/path. It records its process/session ID and every Steam PID/session/path. If Steam is running, at least one Steam process must share the smoke process's interactive session. It refuses to launch if `FalloutNV`, `nvse_loader`, or `FalloutNVLauncher` is present in either of two system-wide preflight checks.
+
+The launched root process is accepted only after the script retains its OS process handle, confirms the same session, and reads an exact projected `MainModule.FileName`. Matching descendants are owned only when the script retains their process handles while an exact retained parent is still alive. Before termination it verifies PID, name, start time, image path, and session through that same retained object, then calls `Kill` and `WaitForExit` on it. Steam-brokered or otherwise unjoinable processes are inconclusive: the script records them, does not terminate them, and refuses to print `REAL SMOKE PASS`. Steam is never a termination target.
+
+After initial cleanup, the provider stays alive while the script repeats fresh system-wide capture and proven-owned cleanup until it observes a bounded three-second quiet interval. It performs another fresh target query near the final PASS decision. Provider output drains asynchronously from startup, and the provider must still be alive immediately before the script writes its stop marker. Clean shutdown also requires provider stdout to contain the exact provider-written `provider stopped` line, which is emitted only after `PrjStopVirtualizing` returns.
+
+The provider itself never writes the Game Installation. The launched app or Steam could bypass the projected path, so the script does not claim absolute source immutability. It records a complete before/after inventory of every Game Installation file's relative path, length, and `LastWriteTimeUtc`, saves exact differences, and blocks PASS on any observable change. It also hashes the selected root executables. This check can miss a content rewrite that preserves both file length and write time outside the hashed executable set.
+
+Before launch, the script records visible projected root and `Data` entries. Afterward it records physical Overwrite and tombstone outputs. All evidence remains under `-ScratchRoot`.
+
+`REAL SMOKE PASS` means the exact projected executable was confirmed through its retained process handle, process cleanup reached the quiet interval with no inconclusive or final matching targets, the provider stopped cleanly, selected executable hashes stayed unchanged, and the full inventory had no observable differences. A spawned `FalloutNV` process is useful evidence but is not required. For example, `nvse_loader.exe` may start correctly and exit with a diagnostic failure. This smoke test does not prove Steam integration or gameplay compatibility. Delayed-target detection uses bounded polling, not a permanent system monitor. PASS means no matching target appeared during the observation, cleanup, quiet-interval, and final-query window. It cannot rule out a Steam-brokered launch after monitoring ends.
+
+The three evidence levels remain separate:
+
+- `run-scenarios.ps1` is the synthetic provider and resolver scenario.
+- Projected `NativeWhere.exe` in that scenario is extra native Windows PE/tool evidence.
+- `run-real-smoke.ps1` is a bounded launch from a real installation. It still is not a gameplay or Steam pass.
+
+## Recorded Windows evidence
+
+GitHub Actions [run 34867710415](https://github.com/Reilley64/mods/actions/runs/34867710415) at commit `de024cde262d0eabcad083d42a7ec9f7917af9e8` passed the complete synthetic scenario on Windows 11 Enterprise ARM64 build 26200 and Windows Server 2025 x64 build 26100. The same scenario passed on the target host: Windows 11 Home x64 build 26200, NTFS with Client-ProjFS enabled, under `C:\Users\prime\mods-projfs-test\home-scenario`. These runs covered all documented scenario assertions, including the 482-winner enumeration, enumeration across 90 callbacks, restart/cold reconstruction, projected probes, close-time mirroring, tombstones, and complete source path/SHA-256 equality.
+
+The bounded real smoke used a 544-file, 9,973,514,960-byte disposable copy. Its relative paths, timestamps, lengths, and SHA-256 values matched the canonical Steam installation. The provider hash was `86E95DAB9BFEEA7331222DB87DDF55A47D3F9E18E2B6CB81BE672EADA5B32B95`. The task ran as `OFFICEPC\reill`, `InteractiveToken` / `Limited`, non-elevated, in session 1 with same-session Explorer and Steam.
+
+At `2026-09-14T18:11:38Z`, retained-handle evidence confirmed projected `nvse_loader.exe` PID 13968 at the exact view path. It exited 0 and directly spawned `FalloutNV.exe` PID 12652 after 107 ms with ParentPID 13968 and an exact path inside the view. Provider logs show projected ESM, BSA, MP3, and shader asset opens during the 20-second window. The disposable-copy inventory had zero normalized differences; selected hashes were unchanged; physical Overwrite and tombstones were empty. The provider remained alive through its stop marker, printed exact `provider stopped`, and stopped cleanly. Steam and Explorer remained running.
+
+The script status was **FAILED**, not PASS. The fast-exiting loader ended before the conservative live-parent retained-handle rule attached the game child. The script therefore left `FalloutNV.exe` running. Manual cleanup re-queried the exact recorded PID/name/session/start/path identity, confirmed its recorded parent and unique-view path, terminated it through the retained `Process` object, and confirmed no target or provider remained. See `manual-exact-cleanup.json`.
+
+The canonical installation's pre-copy and post-smoke inventories are byte-for-byte identical JSON for all 544 SHA-256-bearing records. An initial 1,088-record `Compare-Object` result was a `DateTime`-versus-string type artifact; normalized comparison found zero differences. Temporary tasks were removed, the event log was restored to disabled, the temporary ACL grant was revoked, and evidence remains under approved scratch.
+
+This demonstrates an observed real loader/game launch and projected asset reads. It does not establish `REAL SMOKE PASS`, Steam integration, gameplay, or transparent write routing. Detection is bounded to the observation/cleanup/final-query window.
 
 ## Known limitations
 
@@ -118,6 +147,7 @@ Replace `FalloutNV.exe` with a user-selected game or tool already present at the
 - Mutation path checks are lexical and require a plain relative path strictly beneath `Data`. The fixture assumes trusted local directories and does not defend against hostile junctions inside Overwrite.
 - Root-level writes and patches are outside the strategy being tested. The provider neither mirrors nor manages them.
 - The provider takes a snapshot when directory enumeration begins. Changes made during one enumeration session appear on a later enumeration.
+- The ProjFS view is path/global, not process-scoped like a per-process interception layer. In the recorded real smoke, Session 0 `SearchIndexer` PID 12036 and `SearchProtocolHost` PID 7220 produced `Data` read/close notifications alongside FalloutNV PID 12652. Background indexers can therefore hydrate and read the view. No source or physical Overwrite changes resulted in that run. This distinction matters when comparing the prototype with usvfs.
 - The implementation does not use the negative path cache. It reads physical directories during lookup and enumeration.
 
 ## Primary references
