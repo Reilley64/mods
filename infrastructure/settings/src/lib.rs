@@ -407,6 +407,19 @@ mod tests {
 	use std::task::Waker;
 	use tempfile::TempDir;
 
+	#[cfg(not(windows))]
+	const MANIFEST_GAME_DIR: &str = "/games/fnv";
+	#[cfg(windows)]
+	const MANIFEST_GAME_DIR: &str = "C:/games/fnv";
+	#[cfg(not(windows))]
+	const OVERRIDE_GAME_DIR: &str = "/portable/fnv";
+	#[cfg(windows)]
+	const OVERRIDE_GAME_DIR: &str = "C:/portable/fnv";
+	#[cfg(not(windows))]
+	const STORED_GAME_DIR: &str = "/other/fnv";
+	#[cfg(windows)]
+	const STORED_GAME_DIR: &str = "C:/other/fnv";
+
 	fn empty_bsa_bytes() -> Vec<u8> {
 		let mut bytes = Vec::with_capacity(36);
 		bytes.extend_from_slice(b"BSA\0");
@@ -440,9 +453,12 @@ mod tests {
 		fs::write(temp.path().join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes())?;
 		fs::write(
 			temp.path().join("mods.toml"),
-			concat!(
-				"schema_version = 1\nname = \"Mojave\"\nsteam_app_id = 22380\n",
-				"game_dir = \"/games/fnv\"\nobserved_build_id = 42\n",
+			format!(
+				concat!(
+					"schema_version = 1\nname = \"Mojave\"\nsteam_app_id = 22380\n",
+					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n",
+				),
+				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
 			),
 		)?;
 		Ok((temp, root))
@@ -469,12 +485,12 @@ mod tests {
 		let (_temp, root) = fixture()?;
 		let adapter = SettingsAdapter::with_environment(
 			root,
-			vec![(OsString::from("mods_game_dir"), OsString::from("/portable/fnv"))],
+			vec![(OsString::from("mods_game_dir"), OsString::from(OVERRIDE_GAME_DIR))],
 		);
 		let resolved = adapter.load()?;
 		let record = &resolved.settings[3];
-		assert_eq!(record.value, SettingValue::Path("/portable/fnv".into()));
-		assert_eq!(record.manifest_value, SettingValue::Path("/games/fnv".into()));
+		assert_eq!(record.value, SettingValue::Path(OVERRIDE_GAME_DIR.into()));
+		assert_eq!(record.manifest_value, SettingValue::Path(MANIFEST_GAME_DIR.into()));
 		assert!(record.shadowed);
 		Ok(())
 	}
@@ -541,14 +557,36 @@ mod tests {
 	#[test]
 	fn invalid_flat_manifests_fail_unchanged() -> Result<()> {
 		let invalid = [
-			"steam_app_id = 22380\ngame_dir = \"/games/fnv\"\nobserved_build_id = 42\n",
-			"schema_version = 2\nsteam_app_id = 22380\ngame_dir = \"/games/fnv\"\nobserved_build_id = 42\n",
-			"schema_version = 1\nsteam_app_id = 1\ngame_dir = \"/games/fnv\"\nobserved_build_id = 42\n",
-			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = \"/games/fnv\"\nobserved_build_id = 0\n",
-			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = \"relative\"\nobserved_build_id = 42\n",
-			concat!(
-				"schema_version = 1\nsteam_app_id = 22380\n",
-				"game_dir = \"/games/fnv\"\nobserved_build_id = 42\nunknown = true\n",
+			format!("steam_app_id = 22380\ngame_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n"),
+			format!(
+				concat!(
+					"schema_version = 2\nsteam_app_id = 22380\n",
+					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n",
+				),
+				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
+			),
+			format!(
+				concat!(
+					"schema_version = 1\nsteam_app_id = 1\n",
+					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n",
+				),
+				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
+			),
+			format!(
+				concat!(
+					"schema_version = 1\nsteam_app_id = 22380\n",
+					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 0\n",
+				),
+				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
+			),
+			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = \"relative\"\nobserved_build_id = 42\n"
+				.to_owned(),
+			format!(
+				concat!(
+					"schema_version = 1\nsteam_app_id = 22380\n",
+					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\nunknown = true\n",
+				),
+				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
 			),
 		];
 		for contents in invalid {
@@ -567,7 +605,10 @@ mod tests {
 		let before = fs::read(temp.path().join("mods.toml"))?;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
-		let binding = GameBinding::new(GameInstallationPath::new("/other/fnv".into())?, SteamBuildId::new(99)?);
+		let binding = GameBinding::new(
+			GameInstallationPath::new(STORED_GAME_DIR.into())?,
+			SteamBuildId::new(99)?,
+		);
 
 		let result =
 			SettingsAdapter::with_environment(root, Vec::new()).store_game_binding(binding, cancellation);
@@ -586,14 +627,20 @@ mod tests {
 		let (temp, root) = fixture()?;
 		let adapter = SettingsAdapter::with_environment(
 			root,
-			vec![(OsString::from("MODS_GAME_DIR"), OsString::from("/portable/fnv"))],
+			vec![(OsString::from("MODS_GAME_DIR"), OsString::from(OVERRIDE_GAME_DIR))],
 		);
-		let stored = GameBinding::new(GameInstallationPath::new("/other/fnv".into())?, SteamBuildId::new(99)?);
+		let stored = GameBinding::new(
+			GameInstallationPath::new(STORED_GAME_DIR.into())?,
+			SteamBuildId::new(99)?,
+		);
 		let outcome = adapter.store_game_binding(stored, CancellationToken::new())?;
 		assert!(outcome.shadowed);
-		assert_eq!(outcome.effective.game_directory().as_path(), Path::new("/portable/fnv"));
+		assert_eq!(
+			outcome.effective.game_directory().as_path(),
+			Path::new(OVERRIDE_GAME_DIR)
+		);
 		let text = fs::read_to_string(temp.path().join("mods.toml"))?;
-		assert!(text.contains("game_dir = \"/other/fnv\""));
+		assert!(text.contains(&format!("game_dir = \"{STORED_GAME_DIR}\"")));
 		assert!(text.contains("observed_build_id = 99"));
 		Ok(())
 	}
