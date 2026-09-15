@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   release-please:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Create repository-scoped GitHub App token
         id: app-token
