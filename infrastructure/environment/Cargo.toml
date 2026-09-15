@@ -10,3 +10,22 @@ workspace = true
 [dependencies]
 application = { path = "../../application", version = "0.0.0" }
 domain = { path = "../../domain", version = "0.0.0" }
+cap-fs-ext = "3.4.6"
+cap-std = "3.4.6"
+encoding_rs = "0.8"
+rootcause = "0.13"
+same-file = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+	"Win32_Foundation",
+	"Win32_Globalization",
+	"Win32_Storage_FileSystem",
+] }
+
+[dev-dependencies]
+tempfile = "3"

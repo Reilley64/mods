@@ -77,5 +77,5 @@ The merged game namespace observed by a game or tool, formed from a Game Install
 _Avoid_: Mod Environment, VFS folder
 
 **MCP Presentation**:
-The local stdio tool adapter bound to one Environment Root at process startup. It exposes every approved CLI application use case except Environment initialization and owns no interaction or task session.
-_Avoid_: Remote service, authorization boundary, second application core
+The local stdio tool adapter started directly as `mods-mcp.exe` and bound to one Environment Root at process startup. It exposes every approved CLI application use case except Environment initialization and owns no interaction or task session.
+_Avoid_: `mods mcp start`, remote service, authorization boundary, second application core

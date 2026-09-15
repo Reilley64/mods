@@ -1,5 +1,6 @@
 const packageNames = [
   "mods",
+  "mods-mcp",
   "domain",
   "application",
   "environment",
@@ -8,17 +9,21 @@ const packageNames = [
   "archive",
   "execution",
   "infrastructure",
-  "cli",
-  "mcp",
 ] as const;
 
 type PackageName = (typeof packageNames)[number];
 type CargoMetadata = {
-  packages: Array<{ name: string; dependencies: Array<{ name: string }> }>;
+  packages: Array<{
+    name: string;
+    dependencies: Array<{ name: string }>;
+    manifest_path?: string;
+    targets?: Array<{ name: string; kind: string[] }>;
+  }>;
 };
 
 const expectedProjectDependencies: Record<PackageName, readonly PackageName[]> = {
-  mods: ["cli", "mcp", "infrastructure"],
+  mods: ["application", "domain", "infrastructure"],
+  "mods-mcp": ["application", "domain", "infrastructure"],
   domain: [],
   application: ["domain"],
   environment: ["application", "domain"],
@@ -27,8 +32,6 @@ const expectedProjectDependencies: Record<PackageName, readonly PackageName[]> =
   archive: ["application", "domain"],
   execution: ["application", "domain"],
   infrastructure: ["environment", "settings", "game-platform", "archive", "execution", "application", "domain"],
-  cli: ["application", "domain"],
-  mcp: ["application", "domain"],
 };
 
 export function validateProjectGraph(metadata: CargoMetadata): string[] {
@@ -54,6 +57,25 @@ export function validateProjectGraph(metadata: CargoMetadata): string[] {
     const expected = [...expectedProjectDependencies[name]].sort();
     if (actual.join(",") !== expected.join(",")) {
       errors.push(`${name} dependencies must be ${expected.join(", ") || "none"}`);
+    }
+  }
+
+  for (const [name, expectedPath] of [
+    ["mods", "presentation/cli/Cargo.toml"],
+    ["mods-mcp", "presentation/mcp/Cargo.toml"],
+  ] as const) {
+    const packageMetadata = packages.get(name);
+    if (!packageMetadata) continue;
+    const targets = packageMetadata.targets ?? [];
+    if (targets.some((target) => target.kind.includes("lib"))) {
+      errors.push(`${name} must be binary-only`);
+    }
+    if (!targets.some((target) => target.name === name && target.kind.includes("bin"))) {
+      errors.push(`${name} must provide the ${name} binary`);
+    }
+    const manifestPath = packageMetadata.manifest_path?.replaceAll("\\", "/");
+    if (manifestPath && !manifestPath.endsWith(expectedPath)) {
+      errors.push(`${name} must be owned by ${expectedPath}`);
     }
   }
 

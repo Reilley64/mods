@@ -9,7 +9,7 @@ bun run check
 
 Pull request titles must follow Conventional Commits. This repository validates squash pull request titles in GitHub Actions. It does not install Husky or enforce individual local commit messages.
 
-Use the pinned Rust toolchain. Run `bun run check` before opening a pull request.
+Use the pinned Rust toolchain. Follow `CODING_STYLE.md` for Rust implementation and review. Run `bun run check` before opening a pull request.
 
 ## Release Please credentials
 

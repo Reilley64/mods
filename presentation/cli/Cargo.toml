@@ -1,12 +1,29 @@
 [package]
-name = "cli"
+name = "mods"
 version = "0.0.0"
 edition = "2024"
 publish = false
+
+[[bin]]
+name = "mods"
+path = "src/main.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
 application = { path = "../../application", version = "0.0.0" }
+clap = { version = "4", features = ["derive"] }
 domain = { path = "../../domain", version = "0.0.0" }
+infrastructure = { path = "../../infrastructure/dependencies", version = "0.0.0" }
+rootcause = "0.13"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
