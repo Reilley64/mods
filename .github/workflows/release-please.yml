@@ -1,0 +1,62 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: windows-latest
+    steps:
+      - name: Create repository-scoped GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Check out the main push
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+      - name: Install repository tools
+        run: bun install --frozen-lockfile
+      - name: Create or update the combined release pull request
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      - name: Create missing internal bookkeeping tags
+        if: github.event.before != '0000000000000000000000000000000000000000'
+        shell: pwsh
+        run: |
+          $tags = bun scripts/internal-release-tags.ts ${{ github.event.before }} ${{ github.sha }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($tag in $tags) {
+            $existing = git ls-remote --tags origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($existing) {
+              $target = ($existing -split '\s+')[0]
+              if ($target -ne $env:GITHUB_SHA) {
+                throw "existing tag $tag targets $target instead of $env:GITHUB_SHA"
+              }
+              continue
+            }
+            git tag $tag $env:GITHUB_SHA
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            git push origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

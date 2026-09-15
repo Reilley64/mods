@@ -1,0 +1,11 @@
+.idea/
+.scratch/
+target/
+dist/
+node_modules/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+{
+  ".": "0.0.0",
+  "domain": "0.0.0",
+  "application": "0.0.0",
+  "infrastructure/environment": "0.0.0",
+  "infrastructure/settings": "0.0.0",
+  "infrastructure/game_platform": "0.0.0",
+  "infrastructure/archive": "0.0.0",
+  "infrastructure/execution": "0.0.0",
+  "infrastructure/dependencies": "0.0.0",
+  "presentation/cli": "0.0.0",
+  "presentation/mcp": "0.0.0"
+}
