@@ -927,6 +927,8 @@ mod tests {
 		)
 		.expect("marker must become durable");
 		stage.rename_to("mods", &root, "mods").expect("first move must succeed");
+		drop(profile_dir);
+		drop(cache);
 		drop(stage);
 		drop(operation);
 		drop(temp);
