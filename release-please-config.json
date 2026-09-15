@@ -13,14 +13,6 @@
     }
   ],
   "packages": {
-    ".": {
-      "release-type": "rust",
-      "component": "mods",
-      "package-name": "mods",
-      "changelog-path": "CHANGELOG.md",
-      "include-component-in-tag": false,
-      "skip-github-release": false
-    },
     "domain": {
       "release-type": "rust",
       "component": "domain",
@@ -79,15 +71,16 @@
     },
     "presentation/cli": {
       "release-type": "rust",
-      "component": "cli",
-      "package-name": "cli",
-      "skip-github-release": true,
-      "skip-changelog": true
+      "component": "mods",
+      "package-name": "mods",
+      "changelog-path": "../../CHANGELOG.md",
+      "include-component-in-tag": false,
+      "skip-github-release": false
     },
     "presentation/mcp": {
       "release-type": "rust",
-      "component": "mcp",
-      "package-name": "mcp",
+      "component": "mods-mcp",
+      "package-name": "mods-mcp",
       "skip-github-release": true,
       "skip-changelog": true
     }

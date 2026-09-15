@@ -40,13 +40,17 @@ jobs:
           toolchain: nightly-2026-08-21
           targets: x86_64-pc-windows-msvc
       - name: Build preview
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins
       - name: Package preview
         shell: pwsh
         run: |
           $artifact = "mods-$env:GITHUB_SHA-x86_64-pc-windows-msvc.zip"
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path target/x86_64-pc-windows-msvc/release/mods.exe -DestinationPath "dist/$artifact"
+          $binaries = @(
+            "target/x86_64-pc-windows-msvc/release/mods.exe",
+            "target/x86_64-pc-windows-msvc/release/mods-mcp.exe"
+          )
+          Compress-Archive -Path $binaries -DestinationPath "dist/$artifact"
       - name: Upload tagless preview
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

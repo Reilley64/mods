@@ -9,3 +9,9 @@ workspace = true
 
 [dependencies]
 domain = { path = "../domain", version = "0.0.0" }
+rootcause = "0.13"
+tracing = { version = "0.1", features = ["attributes"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

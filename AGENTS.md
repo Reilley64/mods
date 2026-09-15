@@ -11,3 +11,7 @@ Triage uses the five default canonical labels. See `docs/agents/triage-labels.md
 ### Domain docs
 
 Domain documentation uses the single-context layout. See `docs/agents/domain.md`.
+
+### Coding style
+
+Rust implementation and review must follow `CODING_STYLE.md`.

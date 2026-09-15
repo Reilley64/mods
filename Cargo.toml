@@ -1,9 +1,3 @@
-[package]
-name = "mods"
-version = "0.0.0"
-edition = "2024"
-publish = false
-
 [workspace]
 members = [
   "domain",
@@ -28,11 +22,3 @@ expect_used = "deny"
 panic = "deny"
 todo = "deny"
 unimplemented = "deny"
-
-[lints]
-workspace = true
-
-[dependencies]
-cli = { path = "presentation/cli", version = "0.0.0" }
-mcp = { path = "presentation/mcp", version = "0.0.0" }
-infrastructure = { path = "infrastructure/dependencies", version = "0.0.0" }

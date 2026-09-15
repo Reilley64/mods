@@ -7,8 +7,7 @@ const internalComponents = {
   "infrastructure/archive": "archive",
   "infrastructure/execution": "execution",
   "infrastructure/dependencies": "infrastructure",
-  "presentation/cli": "cli",
-  "presentation/mcp": "mcp",
+  "presentation/mcp": "mods-mcp",
 } as const;
 
 type Manifest = Record<string, string>;
