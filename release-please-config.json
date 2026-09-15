@@ -4,6 +4,7 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
   "separate-pull-requests": false,
+  "group-pull-request-title-pattern": "chore: prepare v${version} release",
   "plugins": [
     {
       "type": "cargo-workspace",
