@@ -1,6 +1,6 @@
 [package]
 name = "infrastructure"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 publish = false
 
@@ -8,10 +8,10 @@ publish = false
 workspace = true
 
 [dependencies]
-environment = { path = "../environment", version = "0.0.0" }
-settings = { path = "../settings", version = "0.0.0" }
-game-platform = { path = "../game_platform", version = "0.0.0" }
-archive = { path = "../archive", version = "0.0.0" }
-execution = { path = "../execution", version = "0.0.0" }
-application = { path = "../../application", version = "0.0.0" }
-domain = { path = "../../domain", version = "0.0.0" }
+environment = { path = "../environment", version = "0.1.0" }
+settings = { path = "../settings", version = "0.1.0" }
+game-platform = { path = "../game_platform", version = "0.1.0" }
+archive = { path = "../archive", version = "0.1.0" }
+execution = { path = "../execution", version = "0.1.0" }
+application = { path = "../../application", version = "0.1.0" }
+domain = { path = "../../domain", version = "0.1.0" }
