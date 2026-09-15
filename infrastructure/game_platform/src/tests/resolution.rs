@@ -67,12 +67,10 @@ fn libraryfolders_path_participates_in_discovery() -> Result<()> {
 		.and_then(Path::parent)
 		.and_then(Path::parent)
 		.ok_or_else(|| IoError::other("missing library"))?;
+	let library_path = library_root.to_string_lossy().replace('\\', "\\\\");
 	fs::write(
 		primary_root.join("steamapps/libraryfolders.vdf"),
-		format!(
-			"\"libraryfolders\"\n{{\n\"1\"\n{{\n\"path\" \"{}\"\n}}\n}}",
-			library_root.display()
-		),
+		format!("\"libraryfolders\"\n{{\n\"1\"\n{{\n\"path\" \"{library_path}\"\n}}\n}}"),
 	)?;
 	let root = EnvironmentRoot::new(primary_root.join("environment"))?;
 	let resolved = adapter_with_discovery(vec![primary_root], Vec::new()).resolve(
