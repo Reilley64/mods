@@ -1,0 +1,38 @@
+[package]
+name = "mods"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = [
+  "domain",
+  "application",
+  "infrastructure/environment",
+  "infrastructure/settings",
+  "infrastructure/game_platform",
+  "infrastructure/archive",
+  "infrastructure/execution",
+  "infrastructure/dependencies",
+  "presentation/cli",
+  "presentation/mcp",
+]
+resolver = "3"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[lints]
+workspace = true
+
+[dependencies]
+cli = { path = "presentation/cli", version = "0.0.0" }
+mcp = { path = "presentation/mcp", version = "0.0.0" }
+infrastructure = { path = "infrastructure/dependencies", version = "0.0.0" }

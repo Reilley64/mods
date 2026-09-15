@@ -1,0 +1,94 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "separate-pull-requests": false,
+  "plugins": [
+    {
+      "type": "cargo-workspace",
+      "merge": true,
+      "updateAllPackages": false
+    }
+  ],
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "component": "mods",
+      "package-name": "mods",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "skip-github-release": false
+    },
+    "domain": {
+      "release-type": "rust",
+      "component": "domain",
+      "package-name": "domain",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "application": {
+      "release-type": "rust",
+      "component": "application",
+      "package-name": "application",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "infrastructure/environment": {
+      "release-type": "rust",
+      "component": "environment",
+      "package-name": "environment",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "infrastructure/settings": {
+      "release-type": "rust",
+      "component": "settings",
+      "package-name": "settings",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "infrastructure/game_platform": {
+      "release-type": "rust",
+      "component": "game-platform",
+      "package-name": "game-platform",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "infrastructure/archive": {
+      "release-type": "rust",
+      "component": "archive",
+      "package-name": "archive",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "infrastructure/execution": {
+      "release-type": "rust",
+      "component": "execution",
+      "package-name": "execution",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "infrastructure/dependencies": {
+      "release-type": "rust",
+      "component": "infrastructure",
+      "package-name": "infrastructure",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "presentation/cli": {
+      "release-type": "rust",
+      "component": "cli",
+      "package-name": "cli",
+      "skip-github-release": true,
+      "skip-changelog": true
+    },
+    "presentation/mcp": {
+      "release-type": "rust",
+      "component": "mcp",
+      "package-name": "mcp",
+      "skip-github-release": true,
+      "skip-changelog": true
+    }
+  }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "mcp"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+application = { path = "../../application", version = "0.0.0" }
+domain = { path = "../../domain", version = "0.0.0" }

@@ -1,0 +1,18 @@
+{
+  "name": "mods-repository-tools",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "check": "bun run format:check && bun run lint && bun run dependency:check && bun run test",
+    "format:check": "cargo fmt --all -- --check",
+    "lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "dependency:check": "bun scripts/check-dependency-graph.ts",
+    "test": "cargo test --workspace --all-targets && bun test",
+    "check:pr-title": "bun scripts/validate-pr-title.ts"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.2",
+    "@commitlint/config-conventional": "21.2.2"
+  },
+  "packageManager": "bun@1.4.2"
+}
