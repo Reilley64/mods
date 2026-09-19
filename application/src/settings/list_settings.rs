@@ -34,12 +34,15 @@ pub async fn list_settings(dependencies: ListSettingsDependencies) -> Result<Lis
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::ListSettingsDependencies;
+	use super::ListSettingsError;
+	use super::list_settings;
 	use crate::ErrorCode;
 	use crate::errors::ErrorMarker;
 	use crate::ports::PortFuture;
 	use crate::settings::ResolvedSettings;
 	use crate::settings::SettingKey;
+	use crate::settings::SettingRecord;
 	use crate::settings::SettingSource;
 	use crate::settings::SettingValue;
 	use domain::GameBinding;

@@ -1,8 +1,10 @@
 mod get_setting;
 mod initialize_environment;
+mod install_archive;
 mod list_settings;
 mod set_game_directory;
 
+use archive::ArchiveAdapter;
 use domain::EnvironmentRoot;
 use environment::EnvironmentAdapter;
 use game_platform::GamePlatformAdapter;
@@ -14,6 +16,7 @@ pub struct Resources {
 	environment: EnvironmentAdapter,
 	settings: SettingsAdapter,
 	game_platform: GamePlatformAdapter,
+	archive: ArchiveAdapter,
 }
 
 impl Resources {
@@ -21,11 +24,13 @@ impl Resources {
 		let environment = EnvironmentAdapter;
 		let settings = SettingsAdapter::new(root.clone());
 		let game_platform = GamePlatformAdapter::system();
+		let archive = ArchiveAdapter;
 		Self {
 			root,
 			environment,
 			settings,
 			game_platform,
+			archive,
 		}
 	}
 }

@@ -14,8 +14,10 @@ pub struct StoredAndEffectiveBinding {
 	pub shadowed: bool,
 }
 
+pub type CheckSettingsReadiness = Arc<dyn Fn(CancellationToken) -> PortFuture<()> + Send + Sync>;
 pub type LoadSettings = Arc<dyn Fn() -> PortFuture<ResolvedSettings> + Send + Sync>;
+pub type PreviewGameBinding =
+	Arc<dyn Fn(GameBinding, CancellationToken) -> PortFuture<StoredAndEffectiveBinding> + Send + Sync>;
 pub type ReadInitializationGameOverride = Arc<dyn Fn() -> PortFuture<Option<GameInstallationPath>> + Send + Sync>;
-pub type RecoverSettingsMutation = Arc<dyn Fn(CancellationToken) -> PortFuture<()> + Send + Sync>;
 pub type StoreGameBinding =
 	Arc<dyn Fn(GameBinding, CancellationToken) -> PortFuture<StoredAndEffectiveBinding> + Send + Sync>;

@@ -86,7 +86,8 @@ fn scan_environment(
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::initialization_override;
+	use std::ffi::OsString;
 	#[cfg(unix)]
 	use std::os::unix::ffi::OsStringExt as _;
 

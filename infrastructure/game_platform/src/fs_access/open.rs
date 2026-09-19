@@ -2,10 +2,10 @@ use cap_std::fs::Dir;
 use cap_std::fs::File;
 use cap_std::fs::Metadata;
 #[cfg(windows)]
-use cap_std::fs::MetadataExt as _;
+use cap_std::fs::MetadataExt;
 use cap_std::fs::OpenOptions;
 #[cfg(any(unix, windows))]
-use cap_std::fs::OpenOptionsExt as _;
+use cap_std::fs::OpenOptionsExt;
 use rootcause::Result;
 use rootcause::report;
 use std::io::Error as IoError;

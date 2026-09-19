@@ -33,16 +33,12 @@ An installed mod whose files contribute only beneath the game's `Data` directory
 _Avoid_: Root patch, executable patch
 
 **FOMOD Choice**:
-One ordered group-and-option selection supplied to `mods install` through `--choice` or a Reviewed Choice File. A command carries the full choice state; the manager does not store an installation session.
+One ordered group-and-option selection supplied directly to `mods install` through `--choice`. A command carries the full choice state; the manager does not store an installation session.
 _Avoid_: Wizard step, session choice
 
-**Reviewed Choice File**:
-A versioned JSON input that binds an ordered FOMOD choice list to one exact source archive and installer configuration.
-_Avoid_: Preset session, install plan
-
 **Install Plan**:
-The validated source-to-Data-destination mapping computed before extraction or publication, including priorities, conflicts, and proposed winners.
-_Avoid_: Installed mod, staging directory
+The validated source-to-Data-destination mapping computed before extraction or publication, including destination winner decisions and overlaps on planned paths.
+_Avoid_: Installed mod, staging directory, full conflict report
 
 **Mod Name**:
 The case-insensitively unique name that identifies a Data Mod in its directory name, mod list, and conflict reports.

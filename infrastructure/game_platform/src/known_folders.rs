@@ -5,7 +5,7 @@ use rootcause::prelude::ResultExt;
 #[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
-use std::os::windows::ffi::OsStringExt as _;
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::slice::from_raw_parts;
@@ -70,7 +70,8 @@ pub(crate) fn current() -> Result<KnownFolderPaths, ErrorMarker> {
 
 #[cfg(all(test, windows))]
 mod tests {
-	use super::*;
+	use super::current;
+	use rootcause::Result;
 
 	#[test]
 	fn windows_known_folder_api_returns_absolute_profile_roots() -> Result<()> {

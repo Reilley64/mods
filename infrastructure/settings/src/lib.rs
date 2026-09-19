@@ -6,8 +6,10 @@ mod layout;
 mod manifest_writer;
 
 use application::ErrorMarker;
+use application::ports::CheckSettingsReadiness;
 use application::ports::LoadSettings;
 use application::ports::PortFuture;
+use application::ports::PreviewGameBinding;
 use application::ports::ReadInitializationGameOverride;
 use application::ports::StoreGameBinding;
 use application::ports::StoredAndEffectiveBinding;
@@ -28,7 +30,6 @@ use domain::SteamBuildId;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
-use serde::Deserialize;
 use serde::Serialize;
 use std::env;
 use std::ffi::OsString;
@@ -37,6 +38,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use toml::from_str;
 
 #[derive(Clone)]
 pub struct SettingsAdapter {
@@ -60,14 +62,24 @@ impl SettingsAdapter {
 		}
 	}
 
+	fn check_readiness(&self, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation)?;
+
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		Ok(())
+	}
+
 	fn load(&self) -> Result<ResolvedSettings, ErrorMarker> {
-		if has_pending_recovery_before_layout(&self.root)? {
-			return Err(report!(ErrorMarker::environment_invalid(Some("recovery"))));
-		}
+		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::ReadOnly)?;
 		let (root, text) = open_bound_root(&self.root)?;
-		if has_pending_recovery(&root)? {
-			return Err(report!(ErrorMarker::environment_invalid(Some("recovery"))));
-		}
+		refuse_unfinished_operation(&root, SettingsAccess::ReadOnly)?;
 		let (manifest, effective, shadowed) = config_source::read_sources(
 			&text,
 			&self.environment,
@@ -84,15 +96,14 @@ impl SettingsAdapter {
 		Ok(Some(path))
 	}
 
-	fn store_game_binding(
-		&self,
-		binding: GameBinding,
-		cancellation: CancellationToken,
-	) -> Result<StoredAndEffectiveBinding, ErrorMarker> {
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
+	fn preview_game_binding(&self, binding: GameBinding) -> Result<StoredAndEffectiveBinding, ErrorMarker> {
+		Ok(self.prepare_game_binding(binding)?.outcome)
+	}
+
+	fn prepare_game_binding(&self, binding: GameBinding) -> Result<PreparedGameBinding, ErrorMarker> {
+		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation)?;
 		let (root, text) = open_bound_root(&self.root)?;
+		refuse_unfinished_operation(&root, SettingsAccess::Mutation)?;
 		let (manifest, _, _) = config_source::read_sources(
 			&text,
 			&self.environment,
@@ -118,28 +129,58 @@ impl SettingsAdapter {
 			ErrorMarker::settings_environment_invalid(),
 		)?;
 		let resolved = resolved_settings(replacement_manifest, replacement_effective, shadowed)?;
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
 		let game_record = resolved
 			.settings
 			.iter()
 			.find(|record| record.key == SettingKey::GameDir)
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-		let source = game_record.source.clone();
-		let shadowed = game_record.shadowed;
-		let effective = resolved.effective_binding;
-		manifest_writer::replace_validated(&root, &replacement, &cancellation, |candidate| {
-			toml::from_str::<RawManifest>(candidate)
-				.ok()
-				.and_then(|raw| validate_manifest(&raw).ok())
-				.is_some()
-		})?;
-		Ok(StoredAndEffectiveBinding {
+		let outcome = StoredAndEffectiveBinding {
 			stored: binding,
-			effective,
-			source,
-			shadowed,
+			effective: resolved.effective_binding,
+			source: game_record.source.clone(),
+			shadowed: game_record.shadowed,
+		};
+		Ok(PreparedGameBinding {
+			root,
+			replacement,
+			outcome,
+		})
+	}
+
+	fn store_game_binding(
+		&self,
+		binding: GameBinding,
+		cancellation: CancellationToken,
+	) -> Result<StoredAndEffectiveBinding, ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		let prepared = self.prepare_game_binding(binding)?;
+
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		manifest_writer::replace_validated(
+			&prepared.root,
+			&prepared.replacement,
+			&cancellation,
+			|candidate| {
+				from_str::<RawManifest>(candidate)
+					.ok()
+					.and_then(|raw| validate_manifest(&raw).ok())
+					.is_some()
+			},
+		)?;
+		Ok(prepared.outcome)
+	}
+
+	pub fn readiness_port(&self) -> CheckSettingsReadiness {
+		let adapter = self.clone();
+		Arc::new(move |cancellation| {
+			let result = adapter.check_readiness(&cancellation);
+			Box::pin(async move { result }) as PortFuture<_>
 		})
 	}
 
@@ -147,6 +188,26 @@ impl SettingsAdapter {
 		let adapter = self.clone();
 		Arc::new(move || {
 			let result = adapter.load();
+			Box::pin(async move { result }) as PortFuture<_>
+		})
+	}
+
+	pub fn preview_port(&self) -> PreviewGameBinding {
+		let adapter = self.clone();
+		Arc::new(move |binding, cancellation| {
+			let result = (|| {
+				if cancellation.is_cancelled() {
+					return Err(report!(ErrorMarker::operation_cancelled()));
+				}
+
+				let outcome = adapter.preview_game_binding(binding)?;
+
+				if cancellation.is_cancelled() {
+					return Err(report!(ErrorMarker::operation_cancelled()));
+				}
+
+				Ok(outcome)
+			})();
 			Box::pin(async move { result }) as PortFuture<_>
 		})
 	}
@@ -168,6 +229,12 @@ impl SettingsAdapter {
 	}
 }
 
+struct PreparedGameBinding {
+	root: Dir,
+	replacement: String,
+	outcome: StoredAndEffectiveBinding,
+}
+
 #[derive(Serialize)]
 struct WritableManifest<'a> {
 	schema_version: u32,
@@ -176,27 +243,6 @@ struct WritableManifest<'a> {
 	steam_app_id: u32,
 	game_dir: &'a str,
 	observed_build_id: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DurableOperationRecord {
-	schema_version: u32,
-	operation: DurableOperationKind,
-	operation_id: String,
-	phase: DurableOperationPhase,
-}
-
-#[derive(Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum DurableOperationKind {
-	Initialize,
-}
-
-#[derive(Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum DurableOperationPhase {
-	Publishing,
 }
 
 fn open_bound_root(root: &EnvironmentRoot) -> Result<(Dir, String), ErrorMarker> {
@@ -247,83 +293,57 @@ fn open_bound_root(root: &EnvironmentRoot) -> Result<(Dir, String), ErrorMarker>
 	Ok((directory, text))
 }
 
-fn has_pending_recovery_before_layout(root: &EnvironmentRoot) -> Result<bool, ErrorMarker> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsAccess {
+	ReadOnly,
+	Mutation,
+}
+
+fn refuse_unfinished_operation_before_layout(
+	root: &EnvironmentRoot,
+	access: SettingsAccess,
+) -> Result<(), ErrorMarker> {
 	let directory = match fs_access::open_ambient_dir(root.as_path()) {
 		Ok(directory) => directory,
-		Err(error) if error.current_context().kind() == ErrorKind::NotFound => return Ok(false),
+		Err(error) if error.current_context().kind() == ErrorKind::NotFound => return Ok(()),
 		Err(error) => return Err(error.context(ErrorMarker::environment_root_unsafe())),
 	};
 	let temp_metadata = match directory.symlink_metadata("temp") {
 		Ok(metadata) => metadata,
-		Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+		Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
 		Err(error) => return Err(report!(error).context(ErrorMarker::environment_root_unsafe())),
 	};
 	if fs_access::is_reparse(&temp_metadata) {
 		return Err(report!(ErrorMarker::environment_root_unsafe()));
 	}
 	if !temp_metadata.is_dir() {
-		return Ok(false);
+		return Ok(());
 	}
 	let temp = fs_access::open_dir(&directory, Path::new("temp")).context(ErrorMarker::environment_root_unsafe())?;
-	has_pending_recovery_in_temp(&temp)
+	refuse_unfinished_operation_in_temp(&temp, access)
 }
 
-fn has_pending_recovery(root: &Dir) -> Result<bool, ErrorMarker> {
-	let temp = fs_access::open_dir(root, Path::new("temp"))
-		.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-	has_pending_recovery_in_temp(&temp)
+fn refuse_unfinished_operation(root: &Dir, access: SettingsAccess) -> Result<(), ErrorMarker> {
+	let temp = fs_access::open_dir(root, Path::new("temp")).context(ErrorMarker::environment_root_unsafe())?;
+	refuse_unfinished_operation_in_temp(&temp, access)
 }
 
-fn has_pending_recovery_in_temp(temp: &Dir) -> Result<bool, ErrorMarker> {
-	let entries = temp
-		.entries()
-		.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-	for entry in entries {
-		let entry = entry.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-		let name = entry.file_name();
-		let name_text = name
-			.to_str()
-			.ok_or_else(|| report!(ErrorMarker::environment_invalid(Some("recovery"))))?;
-		let operation_id = uuid::Uuid::parse_str(name_text)
-			.map_err(|error| report!(error).context(ErrorMarker::environment_invalid(Some("recovery"))))?;
-		let metadata = temp
-			.symlink_metadata(&name)
-			.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-		if !metadata.is_dir() || fs_access::is_reparse(&metadata) {
-			return Err(report!(ErrorMarker::environment_invalid(Some("recovery"))));
-		}
-		let operation_dir = fs_access::open_dir(temp, Path::new(&name))
-			.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-		match operation_dir.symlink_metadata("operation.toml") {
-			Ok(metadata) => {
-				if !metadata.is_file() || fs_access::is_reparse(&metadata) {
-					return Err(report!(ErrorMarker::environment_invalid(Some("recovery"))));
-				}
-				let mut marker = fs_access::open_regular(&operation_dir, Path::new("operation.toml"))
-					.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-				let mut contents = String::new();
-				marker.read_to_string(&mut contents)
-					.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-				let record = toml::from_str::<DurableOperationRecord>(&contents)
-					.context(ErrorMarker::environment_invalid(Some("recovery")))?;
-				if record.schema_version != 1
-					|| record.operation != DurableOperationKind::Initialize
-					|| uuid::Uuid::parse_str(&record.operation_id).ok() != Some(operation_id)
-					|| record.phase != DurableOperationPhase::Publishing
-				{
-					return Err(report!(ErrorMarker::environment_invalid(Some("recovery"))));
-				}
-				return Ok(true);
-			}
-			Err(error) if error.kind() == ErrorKind::NotFound => {}
-			Err(error) => {
-				return Err(report!(error).context(ErrorMarker::environment_invalid(Some("recovery"))));
-			}
-		}
+fn refuse_unfinished_operation_in_temp(temp: &Dir, access: SettingsAccess) -> Result<(), ErrorMarker> {
+	let mut entries = temp.entries().context(ErrorMarker::environment_root_unsafe())?;
+	if entries
+		.next()
+		.transpose()
+		.context(ErrorMarker::environment_root_unsafe())?
+		.is_some()
+	{
+		let marker = match access {
+			SettingsAccess::ReadOnly => ErrorMarker::environment_invalid(None),
+			SettingsAccess::Mutation => ErrorMarker::manual_cleanup_required(),
+		};
+		return Err(report!(marker));
 	}
-	Ok(false)
+	Ok(())
 }
-
 fn validate_manifest(raw: &RawManifest) -> Result<(GameBinding, Option<EnvironmentName>), ErrorMarker> {
 	EnvironmentSchemaVersion::new(raw.schema_version).context(ErrorMarker::environment_schema_unsupported())?;
 	SteamAppId::new(raw.steam_app_id).context(ErrorMarker::environment_invalid(None))?;
@@ -391,8 +411,21 @@ fn resolved_settings(
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::SettingsAdapter;
+	use super::fs_access;
+	use super::manifest_writer;
 	use application::ErrorCode;
+	use application::ErrorMarker;
+	use application::settings::SettingKey;
+	use application::settings::SettingSource;
+	use application::settings::SettingValue;
+	use domain::EnvironmentRoot;
+	use domain::GameBinding;
+	use domain::GameInstallationPath;
+	use domain::SteamBuildId;
+	use rootcause::Result;
+	use rootcause::report;
+	use std::ffi::OsString;
 	use std::fs;
 	use std::io::Error as IoError;
 	use std::io::Result as IoResult;
@@ -402,10 +435,12 @@ mod tests {
 	use std::os::windows::fs::symlink_dir as windows_symlink_dir;
 	#[cfg(windows)]
 	use std::os::windows::fs::symlink_file as windows_symlink_file;
+	use std::path::Path;
 	use std::task::Context;
 	use std::task::Poll;
 	use std::task::Waker;
 	use tempfile::TempDir;
+	use tokio_util::sync::CancellationToken;
 
 	#[cfg(not(windows))]
 	const MANIFEST_GAME_DIR: &str = "/games/fnv";
@@ -496,25 +531,13 @@ mod tests {
 	}
 
 	#[test]
-	fn load_port_blocks_pre_manifest_initialization_with_a_durable_operation_marker() -> Result<()> {
+	fn load_port_refuses_unfinished_pre_manifest_work_without_mutating() -> Result<()> {
 		let temp = TempDir::new()?;
 		let root = EnvironmentRoot::new(fs::canonicalize(temp.path())?)?;
-		let operation_id = uuid::Uuid::new_v4();
-		let operation = temp.path().join("temp").join(operation_id.to_string());
+		let operation = temp.path().join("temp/operation");
 		fs::create_dir_all(&operation)?;
-		let marker = operation.join("operation.toml");
-		fs::write(
-			&marker,
-			format!(
-				concat!(
-					"schema_version = 1\n",
-					"operation = \"initialize\"\n",
-					"operation_id = \"{operation_id}\"\n",
-					"phase = \"publishing\"\n",
-				),
-				operation_id = operation_id,
-			),
-		)?;
+		let marker = operation.join("mods.toml");
+		fs::write(&marker, "pending")?;
 		let before = fs::read(&marker)?;
 
 		let load = SettingsAdapter::with_environment(root, Vec::new()).load_port();
@@ -529,7 +552,6 @@ mod tests {
 			result,
 			Err(report)
 				if report.current_context().code() == ErrorCode::EnvironmentInvalid
-					&& report.current_context().phase() == Some("recovery")
 		));
 		assert_eq!(fs::read(marker)?, before);
 		assert!(!temp.path().join("mods.toml").exists());
@@ -537,9 +559,9 @@ mod tests {
 	}
 
 	#[test]
-	fn pending_recovery_blocks_read_without_mutating() -> Result<()> {
+	fn unfinished_work_blocks_read_without_mutating() -> Result<()> {
 		let (temp, root) = fixture()?;
-		let operation = temp.path().join("temp").join(uuid::Uuid::new_v4().to_string());
+		let operation = temp.path().join("temp/operation");
 		fs::create_dir(&operation)?;
 		fs::write(operation.join("operation.toml"), "schema_version = 1")?;
 		let before = fs::read(temp.path().join("mods.toml"))?;
@@ -548,7 +570,6 @@ mod tests {
 			error,
 			Err(report)
 				if report.current_context().code() == ErrorCode::EnvironmentInvalid
-					&& report.current_context().phase() == Some("recovery")
 		));
 		assert_eq!(fs::read(temp.path().join("mods.toml")).ok(), Some(before));
 		Ok(())
@@ -600,6 +621,42 @@ mod tests {
 	}
 
 	#[test]
+	fn failed_manifest_stage_blocks_a_later_store_and_preserves_all_artifacts() -> Result<()> {
+		let (temp, root) = fixture()?;
+		let directory = fs_access::open_ambient_dir(root.as_path())?;
+		let first =
+			manifest_writer::replace_validated(&directory, "candidate", &CancellationToken::new(), |_| {
+				false
+			});
+		assert!(first.is_err());
+
+		let manifest_before = fs::read(temp.path().join("mods.toml"))?;
+		let operations_before = fs::read_dir(temp.path().join("temp"))?.collect::<IoResult<Vec<_>>>()?;
+		assert_eq!(operations_before.len(), 1);
+		let operation_path = operations_before[0].path();
+		let staged_path = operation_path.join("mods.toml");
+		let staged_before = fs::read(&staged_path)?;
+		let binding = GameBinding::new(
+			GameInstallationPath::new(STORED_GAME_DIR.into())?,
+			SteamBuildId::new(99)?,
+		);
+
+		let second = SettingsAdapter::with_environment(root, Vec::new())
+			.store_game_binding(binding, CancellationToken::new());
+
+		assert!(matches!(
+			second,
+			Err(report) if report.current_context().code() == ErrorCode::ManualCleanupRequired
+		));
+		assert_eq!(fs::read(temp.path().join("mods.toml"))?, manifest_before);
+		assert_eq!(fs::read(&staged_path)?, staged_before);
+		let operations_after = fs::read_dir(temp.path().join("temp"))?.collect::<IoResult<Vec<_>>>()?;
+		assert_eq!(operations_after.len(), 1);
+		assert_eq!(operations_after[0].file_name(), operations_before[0].file_name());
+		Ok(())
+	}
+
+	#[test]
 	fn cancelled_store_preserves_manifest_and_starts_no_operation() -> Result<()> {
 		let (temp, root) = fixture()?;
 		let before = fs::read(temp.path().join("mods.toml"))?;
@@ -617,6 +674,33 @@ mod tests {
 			result,
 			Err(report) if report.current_context().code() == ErrorCode::OperationCancelled
 		));
+		assert_eq!(fs::read(temp.path().join("mods.toml"))?, before);
+		assert!(fs::read_dir(temp.path().join("temp"))?.next().is_none());
+		Ok(())
+	}
+
+	#[test]
+	fn preview_resolves_shadowing_without_mutating_the_manifest() -> Result<()> {
+		let (temp, root) = fixture()?;
+		let adapter = SettingsAdapter::with_environment(
+			root,
+			vec![(OsString::from("MODS_GAME_DIR"), OsString::from(OVERRIDE_GAME_DIR))],
+		);
+		let stored = GameBinding::new(
+			GameInstallationPath::new(STORED_GAME_DIR.into())?,
+			SteamBuildId::new(99)?,
+		);
+		let before = fs::read(temp.path().join("mods.toml"))?;
+
+		let outcome = adapter.preview_game_binding(stored.clone())?;
+
+		assert_eq!(outcome.stored, stored);
+		assert_eq!(
+			outcome.effective.game_directory().as_path(),
+			Path::new(OVERRIDE_GAME_DIR)
+		);
+		assert_eq!(outcome.effective.observed_build_id(), SteamBuildId::new(99)?);
+		assert!(outcome.shadowed);
 		assert_eq!(fs::read(temp.path().join("mods.toml"))?, before);
 		assert!(fs::read_dir(temp.path().join("temp"))?.next().is_none());
 		Ok(())
@@ -679,6 +763,16 @@ mod tests {
 	}
 
 	#[test]
+	fn canonical_esl_plugin_state_is_accepted() -> Result<()> {
+		let (temp, root) = fixture()?;
+		fs::write(temp.path().join("profile/plugins.txt"), "Example.EsL\r\n")?;
+		fs::write(temp.path().join("profile/loadorder.txt"), "Example.eSL\r\n")?;
+
+		SettingsAdapter::with_environment(root, Vec::new()).load()?;
+		Ok(())
+	}
+
+	#[test]
 	fn installed_mods_overwrite_saves_and_rebuildable_cache_are_accepted() -> Result<()> {
 		let (temp, root) = fixture()?;
 		fs::create_dir_all(temp.path().join("mods/Example Mod/meshes"))?;
@@ -699,6 +793,17 @@ mod tests {
 		SettingsAdapter::with_environment(root.clone(), Vec::new()).load()?;
 
 		fs::create_dir(temp.path().join("cache"))?;
+		SettingsAdapter::with_environment(root, Vec::new()).load()?;
+		Ok(())
+	}
+
+	#[test]
+	fn installed_mod_and_modlist_names_use_simple_unicode_case_folded_keys() -> Result<()> {
+		let (temp, root) = fixture()?;
+		fs::create_dir(temp.path().join("mods/ÉΣ Mod"))?;
+		fs::write(temp.path().join("mods/ÉΣ Mod/meta.toml"), "schema_version = 1\n")?;
+		fs::write(temp.path().join("profile/modlist.txt"), "+éς mod\r\n")?;
+
 		SettingsAdapter::with_environment(root, Vec::new()).load()?;
 		Ok(())
 	}

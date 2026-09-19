@@ -11,6 +11,7 @@ workspace = true
 application = { path = "../../application", version = "0.0.0" }
 cap-std = "=3.4.6"
 domain = { path = "../../domain", version = "0.0.0" }
+pelite = { version = "0.10", default-features = false, features = ["std"] }
 rootcause = "0.13"
 tokio-util = { version = "0.7", features = ["rt"] }
 

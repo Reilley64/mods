@@ -94,10 +94,8 @@ pub(crate) struct InstallArgs {
 	pub(crate) name: Option<String>,
 	#[arg(long)]
 	pub(crate) replace: bool,
-	#[arg(long, action = ArgAction::Append, conflicts_with = "choices")]
+	#[arg(long, action = ArgAction::Append)]
 	pub(crate) choice: Vec<String>,
-	#[arg(long, conflicts_with = "choice")]
-	pub(crate) choices: Option<PathBuf>,
 	#[arg(long)]
 	pub(crate) dry_run: bool,
 }
@@ -152,7 +150,13 @@ where
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::Cli;
+	use super::Command;
+	use super::ConfigCommand;
+	use super::LogLevel;
+	use super::SettingKeyArgument;
+	use super::parse_from;
+	use std::error::Error;
 
 	#[test]
 	fn parses_environment_log_level_and_issue_twenty_seven_commands() {
@@ -178,6 +182,28 @@ mod tests {
 				}
 			})
 		));
+	}
+
+	#[test]
+	fn install_preserves_choice_occurrence_order() -> Result<(), Box<dyn Error>> {
+		let parsed = parse_from([
+			"mods",
+			"install",
+			"archive.zip",
+			"--choice",
+			" group = option ",
+			"--choice",
+			"second=two",
+		]);
+		let Ok(Cli {
+			command: Command::Install(arguments),
+			..
+		}) = parsed
+		else {
+			return Err("install command must parse".into());
+		};
+		assert_eq!(arguments.choice, [" group = option ", "second=two"]);
+		Ok(())
 	}
 
 	#[test]

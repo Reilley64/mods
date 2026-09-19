@@ -8,7 +8,5 @@ mod tokenizer;
 mod validation;
 
 pub(crate) use discovery::discover;
+pub(crate) use validation::reopen;
 pub(crate) use validation::validate;
-
-#[cfg(test)]
-mod tests;

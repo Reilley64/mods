@@ -2,6 +2,14 @@
 
 This document is the repository authority for handwritten Rust. Apply it during implementation and review.
 
+## Comments and documentation
+
+Readability is the project's first implementation and review priority. When code is difficult to read, improve its readability before secondary cleanup or optimization.
+
+Readable code explains itself through clear top-to-bottom flow, precise names, expressive types, cohesive responsibilities, guard clauses, and deliberate spacing. Comments do not make unclear code acceptable. Rewrite unclear code first.
+
+Add comments for external constraints, safety proofs, compatibility workarounds, and intentionally surprising decisions. Explain why the constraint exists rather than narrating the code.
+
 ## Authority
 
 Resolve conflicts in this order:
@@ -15,7 +23,7 @@ Resolve conflicts in this order:
 
 ## Formatting and imports
 
-Use the pinned nightly toolchain and run `cargo fmt --all`. The workspace `rustfmt.toml` uses hard tabs at eight-column stops and a 120-column maximum width. It also enforces one imported item per `use` line and one contiguous import group.
+Format handwritten Rust with the workspace `rustfmt.toml`: hard tabs at eight-column stops, a 120-column maximum width, one imported item per `use` line, and one contiguous import group.
 
 Keep imports at module scope. Import a normal item once and use its local name in the module. Use a qualified path at the call site only when it is required for disambiguation or macro syntax. Put conditional imports at module scope with `#[cfg(...)]`.
 
@@ -26,6 +34,12 @@ Use blank lines to separate logical phases, such as validation, recovery, stagin
 Preserve the dependency direction `presentation -> application -> domain`. Infrastructure implements application-owned ports. Framework, transport, filesystem, Windows API, and provider types stay outside domain and application code. The repository root is a virtual workspace. Each binary-only presentation package owns its executable and composition root: `mods.exe` for the CLI and `mods-mcp.exe` for MCP.
 
 Organize each layer by capability. Keep leaf modules private by default and re-export a deliberate public API from the parent module.
+
+## Dependencies
+
+Prefer popular, actively maintained crates with clear ownership and documentation when they satisfy the requirement. Reuse their established abstractions instead of building a project-owned equivalent.
+
+Write custom code only for a concrete domain, safety, compatibility, or platform gap that available crates do not close cleanly. Keep that code narrow and document why the established crate solution is insufficient.
 
 ## Application use cases and ports
 
@@ -39,6 +53,8 @@ Each use-case file declares these primary items in order:
 Pass the narrow dependency bundle by value first. Keep business arguments as separate typed values. Pass `tokio_util::sync::CancellationToken` last when the use case supports cancellation.
 
 Application-owned callable ports use the approved nightly `fn_traits` feature. Invoke them explicitly with `.call(())`, `.call((argument,))`, or `.call((argument_one, argument_two))`.
+
+Keep a use-case file focused on its types and top-to-bottom orchestration. When a production function exists to serve repeated callers, move it to a private sibling module named for the responsibility it owns. Prefer a precise capability name over a generic `utils` module; use a generic utility module only for a genuinely cross-capability primitive with no clearer home.
 
 ## Errors
 
@@ -68,25 +84,25 @@ Choose runtime, asynchronous, synchronization, signaling, and cancellation primi
 
 Build a project-owned primitive only when the first two options have a concrete capability or correctness gap. Document that gap and the invariants the custom implementation maintains. Continue to use ordinary standard-library data types when no Tokio runtime behavior is involved.
 
-Pass `CancellationToken` directly through application-owned ports to infrastructure operations that support cancellation. Infrastructure owns cooperative cancellation checks. When a check observes cancellation, return the typed cancellation error immediately and preserve the partial filesystem state without cleanup, settlement, or rollback. If the final irreversible mutation already completed, return success. Add a separate narrow progress-reporting port if a presentation needs progress; do not bundle progress with cancellation.
+Pass `CancellationToken` directly through application-owned ports to infrastructure operations that support cancellation. Infrastructure owns cooperative cancellation checks. Write each cancellation checkpoint inline with `cancellation.is_cancelled()` and return the typed cancellation error immediately. A cancellation-check helper does not earn a separate interface. Preserve partial filesystem state without cleanup, settlement, or rollback. If the final irreversible mutation already completed, return success. Add a separate narrow progress-reporting port if a presentation needs progress; do not bundle progress with cancellation.
 
 ## Control flow
 
-Prefer `let ... else` when one required pattern has a failure path that returns, continues, or otherwise exits the current flow. Prefer `if let` when behavior depends on one relevant pattern and the remaining cases need no distinct handling.
+Prefer `if`, `if let`, or `let ... else` whenever they express the logic clearly. Use an ordinary `if` for boolean conditions, `let ... else` when one required pattern has an exiting failure path, and `if let` when behavior depends on one relevant pattern.
 
-Use `match` when multiple arms have distinct meaning, exhaustive handling protects correctness, the expression maps values, or `match` is clearer than nested conditions. Do not replace a meaningful exhaustive match only to satisfy this preference.
+Prefer guard clauses that return, continue, or break early. Keep the successful path unnested. Use an `else` branch only when both branches have distinct continuing behavior and a guard clause would not make the function clearer.
+
+Reserve `match` for genuinely multi-way logic, meaningful exhaustive handling, or value mapping that is clearer than the equivalent conditional form. Replace a one-pattern or simple two-arm `match` with `if`, `if let`, or `let ... else` when possible.
 
 ## Functions and tests
 
-Prefer readable control flow and precise names. Keep single-use logic inline when practical. Extract code for reuse or a real boundary, not only to make a unit test easier.
+Prefer cohesive orchestration functions that read from start to finish, with blank lines separating their phases. Use `initialize_environment` as the reference shape. Function length alone is not a reason to extract code. Keep one-use validation, transformation, and control flow inline when that preserves the operation's narrative.
 
-Test behavior through public seams. Unit tests focus on project-owned business behavior and integration seams. Trust dependency contracts. Add dependency-detail tests only for project policy, an unstable adapter edge, or a focused regression for a real interaction failure. Prefer small wiring tests over recreating dependency suites.
+Extract a helper when it represents reused logic, a separately meaningful algorithm, a safety or FFI boundary, or a real adapter seam. Each helper should hide nontrivial complexity. A helper that only renames one expression, one condition, or one call does not earn a separate interface.
 
-Use focused red-green cycles, then run the complete repository checks once before completion.
+Before MVP, write only unit tests. Put each test in a `#[cfg(test)]` module in the same source file as the behavior it tests. Do not add separate `tests/` targets, end-to-end tests, or cross-file test modules. Keep fixture helpers inside the colocated test module; this is the test-specific exception to reusable-helper placement.
 
-## Comments and documentation
-
-Express behavior through names, types, and control flow first. Add comments for external constraints, safety proofs, compatibility workarounds, and intentionally surprising decisions. Explain why the constraint exists rather than narrating the code.
+Test behavior through public seams where practical. Unit tests focus on project-owned business behavior and owned boundaries. Trust dependency contracts. Add dependency-detail coverage only for project policy, an unstable adapter edge, or a focused regression for a real interaction failure. Prefer small wiring tests over recreating dependency suites.
 
 ## Unsafe Rust
 
@@ -108,12 +124,3 @@ Retain these language-neutral principles:
 - recovery from expected failures.
 
 Rustfmt applies the retained eight-column tab stops and 120-column width. Rust conventions replace the remaining Linux C implementation conventions. Do not transfer K&R braces, cleanup `goto`, integer error codes, kernel-doc, preprocessor patterns, allocator spelling, or GNU C assembly syntax.
-
-## Verification
-
-During implementation, run focused tests and checks for the affected crates. Before completion, run:
-
-```text
-bun run check
-cargo check --workspace --target x86_64-pc-windows-msvc
-```

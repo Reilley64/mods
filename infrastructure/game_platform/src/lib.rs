@@ -1,5 +1,8 @@
+#![cfg_attr(test, feature(fn_traits))]
+
 mod adapter;
-mod cancellation;
+mod bound_game;
+mod file_version;
 mod fs_access;
 mod known_folders;
 mod ports;
@@ -8,8 +11,6 @@ mod registry;
 mod resolution;
 mod separation;
 mod steam;
+mod version;
 
 pub use adapter::GamePlatformAdapter;
-
-#[cfg(test)]
-mod tests;

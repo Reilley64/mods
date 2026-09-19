@@ -5,9 +5,9 @@ use rootcause::Result;
 use rootcause::report;
 use std::io::Error as IoError;
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
-use std::os::windows::io::AsRawHandle as _;
+use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
 #[cfg(windows)]

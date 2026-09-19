@@ -1,5 +1,15 @@
+use crate::output::quote;
+use application::ErrorCode;
 use application::ErrorMarker;
 use rootcause::Report;
+
+pub(crate) fn exit_status(code: ErrorCode) -> u32 {
+	match code {
+		ErrorCode::OperationCancelled => 0xC000_013A,
+		ErrorCode::InvalidSelection => 2,
+		_ => 1,
+	}
+}
 
 pub(crate) fn application_error<C>(report: &Report<C>) -> String {
 	application_marker(report).map_or_else(|| "error: operation failed\n".to_owned(), marker)
@@ -15,6 +25,18 @@ pub(crate) fn marker(marker: &ErrorMarker) -> String {
 	if let Some(phase) = marker.phase() {
 		text.push_str(&format!("\nphase = {phase}"));
 	}
+	if let Some(field) = marker.field() {
+		text.push_str(&format!("\nfield = {}", quote(field)));
+	}
+	if let Some(group_id) = marker.group_id() {
+		text.push_str(&format!("\ngroup_id = {}", quote(group_id)));
+	}
+	if let Some(option_id) = marker.option_id() {
+		text.push_str(&format!("\noption_id = {}", quote(option_id)));
+	}
+	if let Some(sequence) = marker.supplied_sequence() {
+		text.push_str(&format!("\nsequence = {sequence}"));
+	}
 	if let Some((expected, actual)) = marker.build_ids() {
 		text.push_str(&format!("\nexpected-build-id = {expected}\nactual-build-id = {actual}"));
 	}
@@ -24,8 +46,11 @@ pub(crate) fn marker(marker: &ErrorMarker) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::application_error;
+	use super::application_marker;
+	use super::marker;
 	use application::ErrorCode;
+	use application::ErrorMarker;
 	use application::settings::ListSettingsError;
 	use rootcause::report;
 
@@ -40,6 +65,38 @@ mod tests {
 		assert_eq!(
 			application_error(&report),
 			"error [environment_invalid]: environment is invalid\nphase = read\n"
+		);
+	}
+
+	#[test]
+	fn invalid_selection_renders_only_allowlisted_choice_details() {
+		let report = report!(ErrorMarker::invalid_selection(
+			"choices",
+			Some("group\nvalue".to_owned()),
+			Some("option".to_owned()),
+			Some(3),
+		))
+		.context(ListSettingsError);
+
+		assert_eq!(
+			application_error(&report),
+			concat!(
+				"error [invalid_selection]: FOMOD selection is invalid\n",
+				"field = \"choices\"\n",
+				"group_id = \"group\\nvalue\"\n",
+				"option_id = \"option\"\n",
+				"sequence = 3\n"
+			)
+		);
+	}
+
+	#[test]
+	fn manual_cleanup_required_renders_only_the_safe_code_and_message() {
+		let error_marker = ErrorMarker::manual_cleanup_required();
+
+		assert_eq!(
+			marker(&error_marker),
+			"error [manual_cleanup_required]: unfinished operation requires manual cleanup\n"
 		);
 	}
 }

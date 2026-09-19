@@ -1,33 +1,26 @@
-use crate::check_cancelled;
+use crate::active_code_page::decode as decode_active_code_page;
+use crate::active_code_page::encode as encode_active_code_page;
+use crate::safe_fs::EntryBudget;
+use crate::safe_fs::MAX_TRAVERSAL_DEPTH;
 use crate::safe_fs::SafeDir;
 use crate::safe_fs::is_reparse;
+use crate::safe_fs::read_bounded;
+use crate::snapshot::visible_plugins;
 use application::ErrorMarker;
 use application::ports::InitializationProfileSources;
 use application::ports::ProfileFileDisposition;
 use application::ports::ProfileFileRecord;
+use domain::ModName;
+use domain::case_fold_key;
+use encoding_rs::WINDOWS_1252;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io;
 use std::str::from_utf8;
 use tokio_util::sync::CancellationToken;
-#[cfg(windows)]
-use windows::Win32::Globalization::GetACP;
-#[cfg(windows)]
-use windows::Win32::Globalization::MULTI_BYTE_TO_WIDE_CHAR_FLAGS;
-#[cfg(windows)]
-use windows::Win32::Globalization::MultiByteToWideChar;
-#[cfg(windows)]
-use windows::Win32::Globalization::WC_NO_BEST_FIT_CHARS;
-#[cfg(windows)]
-use windows::Win32::Globalization::WideCharToMultiByte;
-#[cfg(windows)]
-use windows::core::BOOL;
-#[cfg(windows)]
-use windows::core::Error as WindowsError;
-#[cfg(windows)]
-use windows::core::PCSTR;
 
 pub(crate) const PROFILE_FILES: [&str; 8] = [
 	"Fallout.ini",
@@ -41,16 +34,24 @@ pub(crate) const PROFILE_FILES: [&str; 8] = [
 ];
 const MANAGED_ARCHIVE_KEYS: [&str; 3] = ["bInvalidateOlderFiles", "SInvalidationFile", "sArchiveList"];
 const MANAGED_GENERAL_KEYS: [&str; 2] = ["bUseMyGamesDirectory", "SLocalSavePath"];
+pub(crate) const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_SAVE_ENTRIES: usize = 100_000;
 
 pub(crate) fn stage_profile(
 	profile: &SafeDir,
 	sources: &InitializationProfileSources,
 	cancellation: &CancellationToken,
 ) -> Result<Vec<ProfileFileRecord>, ErrorMarker> {
-	check_cancelled(cancellation)?;
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+
 	profile.create_dir("saves")
 		.context(ErrorMarker::environment_root_unsafe())?;
-	check_cancelled(cancellation)?;
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+
 	let source_map: HashMap<_, _> = sources
 		.files
 		.iter()
@@ -70,7 +71,10 @@ pub(crate) fn stage_profile(
 
 	let mut records = Vec::with_capacity(PROFILE_FILES.len());
 	for name in PROFILE_FILES {
-		check_cancelled(cancellation)?;
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
 		let contents = source_map.get(name).copied().flatten();
 		let (output, disposition) = match (name, contents) {
 			("Fallout.ini", Some(contents)) => (
@@ -98,21 +102,59 @@ pub(crate) fn stage_profile(
 		if let Some(output) = output {
 			profile.write_new(name, &output)
 				.context(ErrorMarker::environment_root_unsafe())?;
-			check_cancelled(cancellation)?;
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
+			}
 		}
 		records.push(ProfileFileRecord { name, disposition });
 	}
 	profile.write_new("modlist.txt", b"")
 		.context(ErrorMarker::environment_root_unsafe())?;
-	check_cancelled(cancellation)?;
-	validate_profile(profile)?;
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+
+	validate_profile(profile, cancellation)?;
 	Ok(records)
 }
 
-pub(crate) fn validate_profile(profile: &SafeDir) -> Result<(), ErrorMarker> {
+pub(crate) fn validate_profile(profile: &SafeDir, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+	validate_profile_files(profile, true, cancellation)
+}
+
+pub(crate) fn validate_profile_files(
+	profile: &SafeDir,
+	require_empty: bool,
+	cancellation: &CancellationToken,
+) -> Result<(), ErrorMarker> {
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
 	let allowed = PROFILE_FILES.iter().copied().chain(["modlist.txt", "saves"]);
 	let mut expected = allowed.collect::<HashSet<_>>();
-	for name in profile.entries().context(ErrorMarker::environment_invalid(None))? {
+	let allowed_count = expected.len();
+	let opened = profile.entries();
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+	let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
+	let mut observed = 0_usize;
+	loop {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let Some(entry) = entries.next() else {
+			break;
+		};
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
+		observed = observed.saturating_add(1);
+		if observed > allowed_count {
+			return Err(report!(ErrorMarker::environment_invalid(None)));
+		}
+		let name = entry.file_name();
 		let name = name
 			.to_str()
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
@@ -137,14 +179,19 @@ pub(crate) fn validate_profile(profile: &SafeDir) -> Result<(), ErrorMarker> {
 	let saves = profile
 		.open_dir("saves")
 		.context(ErrorMarker::environment_invalid(None))?;
-	if !saves
-		.entries()
-		.context(ErrorMarker::environment_invalid(None))?
-		.is_empty()
-	{
-		return Err(report!(ErrorMarker::environment_invalid(None)));
+	if require_empty {
+		let opened = saves.entries();
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
+		if let Some(entry) = entries.next() {
+			entry.into_report().context(ErrorMarker::environment_invalid(None))?;
+			return Err(report!(ErrorMarker::environment_invalid(None)));
+		}
 	}
-	let fallout = read_regular_file(profile, "Fallout.ini")?;
+	validate_saves(&saves, cancellation)?;
+	let fallout = read_regular_file(profile, "Fallout.ini", cancellation)?;
 	let text = decode(&fallout)?.0;
 	let keys = archive_values(&text);
 	if keys.get("binvalidateolderfiles")
@@ -162,7 +209,7 @@ pub(crate) fn validate_profile(profile: &SafeDir) -> Result<(), ErrorMarker> {
 	}
 	for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
 		if profile.exists(name).context(ErrorMarker::environment_invalid(None))? {
-			let bytes = read_regular_file(profile, name)?;
+			let bytes = read_regular_file(profile, name, cancellation)?;
 			let text = decode(&bytes)?.0;
 			if contains_keys(&text, &MANAGED_GENERAL_KEYS)
 				|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
@@ -171,17 +218,184 @@ pub(crate) fn validate_profile(profile: &SafeDir) -> Result<(), ErrorMarker> {
 			}
 		}
 	}
-	validate_plugin_list(profile, "plugins.txt", false)?;
-	validate_plugin_list(profile, "loadorder.txt", true)?;
-	let modlist = read_regular_file(profile, "modlist.txt")?;
-	if !modlist.is_empty() {
+	validate_plugin_list(profile, "plugins.txt", false, cancellation)?;
+	validate_plugin_list(profile, "loadorder.txt", true, cancellation)?;
+	let modlist = read_regular_file(profile, "modlist.txt", cancellation)?;
+	if require_empty && !modlist.is_empty() {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	Ok(())
 }
 
-fn validate_plugin_list(profile: &SafeDir, name: &str, utf8: bool) -> Result<(), ErrorMarker> {
-	let bytes = read_regular_file(profile, name)?;
+fn validate_saves(directory: &SafeDir, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+	let mut budget = EntryBudget::new(MAX_SAVE_ENTRIES);
+	validate_saves_inner(directory, cancellation, &mut budget, MAX_TRAVERSAL_DEPTH)
+}
+
+fn validate_saves_inner(
+	directory: &SafeDir,
+	cancellation: &CancellationToken,
+	budget: &mut EntryBudget,
+	remaining_depth: usize,
+) -> Result<(), ErrorMarker> {
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+	let opened = directory.entries();
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+	let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
+	let mut directory_entries = 0_usize;
+	loop {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let Some(entry) = entries.next() else {
+			break;
+		};
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
+		budget.consume(&mut directory_entries)
+			.context(ErrorMarker::environment_invalid(None))?;
+		if remaining_depth == 0 {
+			return Err(report!(io::Error::new(
+				io::ErrorKind::InvalidData,
+				"directory traversal depth limit exceeded",
+			))
+			.context(ErrorMarker::environment_invalid(None)));
+		}
+		let name = entry.file_name();
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let metadata = directory.symlink_metadata(&name);
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let metadata = metadata.context(ErrorMarker::environment_invalid(None))?;
+		if metadata.is_dir() {
+			let child = directory.open_dir(&name);
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
+			}
+			validate_saves_inner(
+				&child.context(ErrorMarker::environment_invalid(None))?,
+				cancellation,
+				budget,
+				remaining_depth - 1,
+			)?;
+		} else if metadata.is_file() {
+			let opened = directory.open_regular(&name);
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
+			}
+			opened.context(ErrorMarker::environment_invalid(None))?;
+		} else {
+			return Err(report!(ErrorMarker::environment_invalid(None)));
+		}
+	}
+	Ok(())
+}
+
+pub(crate) fn stage_plugin_maintenance(
+	root: &SafeDir,
+	staged_mod: &SafeDir,
+	staged_profile: &SafeDir,
+	mod_name: &ModName,
+	mut profile_files: Vec<String>,
+	cancellation: &CancellationToken,
+) -> Result<Vec<String>, ErrorMarker> {
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+	let before = visible_plugins(root, None, cancellation)?;
+	let after = visible_plugins(root, Some((mod_name, staged_mod)), cancellation)?;
+	let unavailable = before
+		.keys()
+		.filter(|name| !after.contains_key(*name))
+		.cloned()
+		.collect::<HashSet<_>>();
+	let mut newly_visible = after
+		.iter()
+		.filter(|(name, _)| !before.contains_key(*name))
+		.map(|(name, spelling)| (name.clone(), spelling.clone()))
+		.collect::<Vec<_>>();
+	newly_visible.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+	let profile = root
+		.open_dir("profile")
+		.context(ErrorMarker::environment_invalid(None))?;
+
+	let plugins_bytes = read_bounded(
+		&profile,
+		"plugins.txt",
+		MAX_PROFILE_BYTES,
+		ErrorMarker::environment_invalid(None),
+		cancellation,
+	)?;
+	let plugins_text = decode_active_code_page(&plugins_bytes)?;
+	let plugins_output = remove_unavailable_lines(&plugins_text, &unavailable);
+	if plugins_output != plugins_text {
+		let bytes = encode_active_code_page(&plugins_output)?;
+		staged_profile
+			.write_new("plugins.txt", &bytes)
+			.context(ErrorMarker::transaction_failure())?;
+		profile_files.push("plugins.txt".to_owned());
+	}
+
+	let loadorder_bytes = read_bounded(
+		&profile,
+		"loadorder.txt",
+		MAX_PROFILE_BYTES,
+		ErrorMarker::environment_invalid(None),
+		cancellation,
+	)?;
+	let loadorder_text = from_utf8(&loadorder_bytes).context(ErrorMarker::environment_invalid(None))?;
+	let mut loadorder_output = remove_unavailable_lines(loadorder_text, &unavailable);
+	let existing = loadorder_output
+		.split_terminator("\r\n")
+		.filter(|line| !line.is_empty() && !line.starts_with('#'))
+		.map(case_fold_key)
+		.collect::<HashSet<_>>();
+	for (key, spelling) in newly_visible {
+		if !existing.contains(&key) {
+			if !loadorder_output.is_empty() && !loadorder_output.ends_with("\r\n") {
+				loadorder_output.push_str("\r\n");
+			}
+			loadorder_output.push_str(&spelling);
+			loadorder_output.push_str("\r\n");
+		}
+	}
+	if loadorder_output != loadorder_text {
+		staged_profile
+			.write_new("loadorder.txt", loadorder_output.as_bytes())
+			.context(ErrorMarker::transaction_failure())?;
+		profile_files.push("loadorder.txt".to_owned());
+	}
+	Ok(profile_files)
+}
+
+fn remove_unavailable_lines(text: &str, unavailable: &HashSet<String>) -> String {
+	let mut output = String::with_capacity(text.len());
+	for line_with_separator in text.split_inclusive("\r\n") {
+		let line = line_with_separator.strip_suffix("\r\n").unwrap_or(line_with_separator);
+		if !line.is_empty() && !line.starts_with('#') && unavailable.contains(&case_fold_key(line)) {
+			continue;
+		}
+		output.push_str(line_with_separator);
+	}
+	output
+}
+
+fn validate_plugin_list(
+	profile: &SafeDir,
+	name: &str,
+	utf8: bool,
+	cancellation: &CancellationToken,
+) -> Result<(), ErrorMarker> {
+	let bytes = read_regular_file(profile, name, cancellation)?;
 	let text = if utf8 {
 		from_utf8(&bytes)
 			.context(ErrorMarker::environment_invalid(None))?
@@ -203,93 +417,19 @@ fn validate_plugin_list(profile: &SafeDir, name: &str, utf8: bool) -> Result<(),
 			|| line.chars().any(|character| {
 				matches!(character, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*')
 			}) || is_reserved_name(line)
-			|| !(line.get(line.len().saturating_sub(4)..).is_some_and(|extension| {
-				extension.eq_ignore_ascii_case(".esm") || extension.eq_ignore_ascii_case(".esp")
-			})) {
+			|| !is_activatable_plugin_name(line)
+		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
 	Ok(())
 }
 
-#[cfg(windows)]
-fn decode_active_code_page(bytes: &[u8]) -> Result<String, ErrorMarker> {
-	if bytes.is_empty() {
-		return Ok(String::new());
-	}
-	// SAFETY: GetACP takes no arguments, accesses no caller-owned memory, and retains no pointers.
-	let code_page = unsafe { GetACP() };
-	if code_page == 65_001 {
-		return String::from_utf8(bytes.to_vec()).context(ErrorMarker::environment_invalid(None));
-	}
-	// SAFETY: `bytes` is initialized and remains live for the call. `code_page` came from GetACP,
-	// zero is a valid flag set, and None is the documented size query. The API retains no pointers.
-	let length = unsafe { MultiByteToWideChar(code_page, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, None) };
-	if length <= 0 {
-		return Err(report!(WindowsError::from_thread()).context(ErrorMarker::environment_invalid(None)));
-	}
-	let mut wide = vec![0_u16; usize::try_from(length).context(ErrorMarker::environment_invalid(None))?];
-	let written = {
-		// SAFETY: `wide` has the exact queried length and is exclusively borrowed. Both slices remain live,
-		// the binding supplies their bounds to Windows, and the API retains no pointers.
-		unsafe { MultiByteToWideChar(code_page, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut wide)) }
-	};
-	if written <= 0 {
-		return Err(report!(WindowsError::from_thread()).context(ErrorMarker::environment_invalid(None)));
-	}
-	if written != length {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
-	let text = String::from_utf16(&wide).context(ErrorMarker::environment_invalid(None))?;
-	let mut used_default = BOOL(0);
-	// SAFETY: `wide` contains initialized UTF-16 validated above and remains live. None is the documented
-	// size query, `used_default` is exclusively borrowed, and a null default character is allowed. The API
-	// retains no pointers.
-	let encoded_length = unsafe {
-		WideCharToMultiByte(
-			code_page,
-			WC_NO_BEST_FIT_CHARS,
-			&wide,
-			None,
-			PCSTR::null(),
-			Some(&mut used_default),
-		)
-	};
-	if encoded_length <= 0 {
-		return Err(report!(WindowsError::from_thread()).context(ErrorMarker::environment_invalid(None)));
-	}
-	if used_default.as_bool() {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
-	let mut encoded = vec![0_u8; usize::try_from(encoded_length).context(ErrorMarker::environment_invalid(None))?];
-	used_default = BOOL(0);
-	// SAFETY: `encoded` has the exact queried length and is exclusively borrowed. `wide` and `used_default`
-	// remain live and disjoint, a null default character is allowed, and the API retains no pointers.
-	let encoded_written = unsafe {
-		WideCharToMultiByte(
-			code_page,
-			WC_NO_BEST_FIT_CHARS,
-			&wide,
-			Some(&mut encoded),
-			PCSTR::null(),
-			Some(&mut used_default),
-		)
-	};
-	if encoded_written <= 0 {
-		return Err(report!(WindowsError::from_thread()).context(ErrorMarker::environment_invalid(None)));
-	}
-	if encoded_written != encoded_length || used_default.as_bool() || encoded != bytes {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
-	Ok(text)
-}
-
-#[cfg(not(windows))]
-fn decode_active_code_page(bytes: &[u8]) -> Result<String, ErrorMarker> {
-	if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
-	Ok(encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned())
+pub(crate) fn is_activatable_plugin_name(name: &str) -> bool {
+	let folded = case_fold_key(name);
+	[".esp", ".esm", ".esl"]
+		.iter()
+		.any(|extension| folded.ends_with(extension))
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -304,10 +444,18 @@ fn is_reserved_name(name: &str) -> bool {
 		&& base.as_bytes()[3] != b'0')
 }
 
-fn read_regular_file(directory: &SafeDir, name: &str) -> Result<Vec<u8>, ErrorMarker> {
-	directory
-		.read_regular(name)
-		.context(ErrorMarker::environment_invalid(None))
+fn read_regular_file(
+	directory: &SafeDir,
+	name: &str,
+	cancellation: &CancellationToken,
+) -> Result<Vec<u8>, ErrorMarker> {
+	read_bounded(
+		directory,
+		name,
+		MAX_PROFILE_BYTES,
+		ErrorMarker::environment_invalid(None),
+		cancellation,
+	)
 }
 
 fn patch_fallout_ini(bytes: &[u8], archive_list: &str) -> Result<Vec<u8>, ErrorMarker> {
@@ -417,7 +565,7 @@ fn normalized_archive_list(source: &str) -> String {
 	values.extend(source
 		.split(',')
 		.map(str::trim)
-		.filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("Fallout - Invalidation.bsa"))
+		.filter(|value| !value.is_empty() && !is_invalidation_archive(value))
 		.map(ToOwned::to_owned));
 	values.join(", ")
 }
@@ -428,12 +576,12 @@ fn archive_list_valid(value: &str) -> bool {
 		.map(str::trim)
 		.filter(|item| !item.is_empty())
 		.collect();
-	values.first()
-		.is_some_and(|first| first.eq_ignore_ascii_case("Fallout - Invalidation.bsa"))
-		&& values
-			.iter()
-			.filter(|item| item.eq_ignore_ascii_case("Fallout - Invalidation.bsa"))
-			.count() == 1
+	values.first().is_some_and(|first| is_invalidation_archive(first))
+		&& values.iter().filter(|item| is_invalidation_archive(item)).count() == 1
+}
+
+fn is_invalidation_archive(value: &str) -> bool {
+	case_fold_key(value) == "fallout - invalidation.bsa"
 }
 
 fn archive_values(text: &str) -> HashMap<String, Vec<&str>> {
@@ -528,7 +676,7 @@ fn decode(bytes: &[u8]) -> Result<(String, Encoding), ErrorMarker> {
 	match String::from_utf8(bytes.to_vec()) {
 		Ok(text) => Ok((text, Encoding::Utf8)),
 		Err(_) => {
-			let (text, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+			let (text, _, _) = WINDOWS_1252.decode(bytes);
 			Ok((text.into_owned(), Encoding::Windows1252))
 		}
 	}
@@ -546,7 +694,7 @@ fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, ErrorMarker> {
 			Ok(output)
 		}
 		Encoding::Windows1252 => {
-			let (bytes, _, had_errors) = encoding_rs::WINDOWS_1252.encode(text);
+			let (bytes, _, had_errors) = WINDOWS_1252.encode(text);
 			if had_errors {
 				Err(report!(ErrorMarker::game_install_invalid()))
 			} else {
@@ -558,12 +706,107 @@ fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, ErrorMarker> {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::MAX_PROFILE_BYTES;
+	use super::MAX_SAVE_ENTRIES;
+	use super::PROFILE_FILES;
+	use super::general_values;
+	use super::is_activatable_plugin_name;
+	use super::remove_unavailable_lines;
+	use super::stage_profile;
+	use super::validate_saves;
+	use super::validate_saves_inner;
+	use crate::safe_fs::EntryBudget;
+	use crate::safe_fs::MAX_TRAVERSAL_DEPTH;
+	use crate::safe_fs::SafeDir;
+	use application::ErrorCode;
+	use application::ports::InitializationProfileSources;
+	use application::ports::ProfileFileDisposition;
 	use application::ports::ProfileSource;
+	use domain::case_fold_key;
+	use std::collections::HashSet;
 	use std::error::Error;
 	use std::fs;
+	use std::io;
 	use std::result::Result as StdResult;
 	use tempfile::TempDir;
+	use tokio_util::sync::CancellationToken;
+
+	#[test]
+	fn profile_resource_caps_are_deliberate() {
+		assert_eq!(MAX_PROFILE_BYTES, 16 * 1024 * 1024);
+		assert_eq!(MAX_SAVE_ENTRIES, 100_000);
+		assert_eq!(MAX_TRAVERSAL_DEPTH, 64);
+	}
+
+	#[test]
+	fn save_validation_rejects_total_entry_cap() -> StdResult<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		fs::write(temp.path().join("one.fos"), b"one")?;
+		fs::write(temp.path().join("two.fos"), b"two")?;
+		let saves = SafeDir::open_absolute(&temp.path().canonicalize()?)
+			.map_err(|_| "safe saves directory open failed")?;
+		let mut budget = EntryBudget::new(1);
+		let result = validate_saves_inner(&saves, &CancellationToken::new(), &mut budget, MAX_TRAVERSAL_DEPTH);
+
+		assert!(matches!(
+			result,
+			Err(report) if report.current_context().code() == ErrorCode::EnvironmentInvalid
+		));
+		Ok(())
+	}
+
+	#[test]
+	fn save_validation_rejects_exhausted_depth_with_io_cause() -> StdResult<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		fs::write(temp.path().join("save.fos"), b"contents")?;
+		let saves = SafeDir::open_absolute(&temp.path().canonicalize()?)
+			.map_err(|_| "safe saves directory open failed")?;
+		let mut budget = EntryBudget::new(MAX_SAVE_ENTRIES);
+
+		let Err(error) = validate_saves_inner(&saves, &CancellationToken::new(), &mut budget, 0) else {
+			return Err("exhausted depth must reject a save entry".into());
+		};
+
+		assert!(error.iter_reports().any(|report| {
+			report.downcast_current_context::<io::Error>()
+				.is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
+		}));
+		Ok(())
+	}
+
+	#[test]
+	fn large_save_validation_opens_without_buffering_contents() -> StdResult<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let save = fs::File::create(temp.path().join("large.fos"))?;
+		save.set_len(256 * 1024 * 1024)?;
+		let saves = SafeDir::open_absolute(&temp.path().canonicalize()?)
+			.map_err(|_| "safe saves directory open failed")?;
+
+		validate_saves(&saves, &CancellationToken::new()).map_err(|_| "large save validation failed")?;
+		assert_eq!(fs::metadata(temp.path().join("large.fos"))?.len(), 256 * 1024 * 1024);
+		Ok(())
+	}
+
+	#[test]
+	fn cancelled_save_validation_is_typed_and_non_mutating() -> StdResult<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		fs::create_dir_all(temp.path().join("nested/deeper"))?;
+		let save_path = temp.path().join("nested/deeper/save.fos");
+		fs::write(&save_path, b"unchanged save")?;
+		let saves = SafeDir::open_absolute(&temp.path().canonicalize()?)
+			.map_err(|_| "safe saves directory open failed")?;
+		let cancellation = CancellationToken::new();
+		cancellation.cancel();
+
+		let result = validate_saves(&saves, &cancellation);
+
+		assert!(matches!(
+			result,
+			Err(report) if report.current_context().code() == ErrorCode::OperationCancelled
+		));
+		assert_eq!(fs::read(save_path)?, b"unchanged save");
+		Ok(())
+	}
 
 	#[test]
 	fn stages_import_seed_empty_absent_and_never_saves() -> StdResult<(), Box<dyn Error>> {
@@ -576,7 +819,7 @@ mod tests {
 					match name {
 						"FalloutCustom.ini" => Some(concat!(
 							"[Archive]\r\nsArchiveList=Custom.bsa, ",
-							"Fallout - Invalidation.bsa\r\n",
+							"Fallout - Invalidation.bſa\r\n",
 						)
 						.as_bytes()
 						.to_vec()),
@@ -744,19 +987,38 @@ mod tests {
 	}
 
 	#[test]
+	fn unavailable_plugin_names_use_simple_unicode_case_folded_keys() {
+		let unavailable = HashSet::from([case_fold_key("ÉΣ.ESP")]);
+
+		assert_eq!(
+			remove_unavailable_lines("éς.esp\r\nKeep.esm\r\n", &unavailable),
+			"Keep.esm\r\n"
+		);
+	}
+
+	#[test]
+	fn plugin_extensions_are_activatable_case_insensitively() {
+		for name in ["Example.esp", "Example.ESM", "Example.EsL", "Example.eſp"] {
+			assert!(is_activatable_plugin_name(name));
+		}
+	}
+
+	#[test]
 	fn invalid_plugin_entries_block_publication() -> StdResult<(), Box<dyn Error>> {
-		for value in [b"*Active.esm\r\n".as_slice(), b"folder\\Bad.esp\r\n", b"CON.esm\r\n"] {
+		for (list, value) in [
+			("plugins.txt", b"*Active.esm\r\n".as_slice()),
+			("plugins.txt", b"folder\\Bad.esp\r\n"),
+			("plugins.txt", b"CON.esm\r\n"),
+			("plugins.txt", b"Unsupported.esx\r\n"),
+			("loadorder.txt", b"Unsupported.esx\r\n"),
+		] {
 			let temp = TempDir::new()?;
 			let files = PROFILE_FILES
 				.into_iter()
 				.map(|name| {
 					ProfileSourceFixture::source(
 						name,
-						if name == "plugins.txt" {
-							Some(value.to_vec())
-						} else {
-							None
-						},
+						if name == list { Some(value.to_vec()) } else { None },
 					)
 				})
 				.collect();

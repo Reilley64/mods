@@ -3,6 +3,7 @@
 
 pub mod environment;
 mod errors;
+pub mod installation;
 pub mod ports;
 pub mod settings;
 

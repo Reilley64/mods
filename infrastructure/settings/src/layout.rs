@@ -1,6 +1,7 @@
 use crate::fs_access;
 use application::ErrorMarker;
 use cap_std::fs::Dir;
+use domain::case_fold_key;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -9,6 +10,8 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 use std::str;
+#[cfg(windows)]
+use windows::Win32::Globalization::CP_UTF8;
 #[cfg(windows)]
 use windows::Win32::Globalization::GetACP;
 #[cfg(windows)]
@@ -126,7 +129,7 @@ fn validate_mods(mods: &Dir, listed_mods: &HashSet<String>) -> Result<(), ErrorM
 		validate_safe_tree(&directory)?;
 		open_real_file(&directory, "meta.toml")?;
 		validate_meta(&read_regular(&directory, "meta.toml")?)?;
-		if !installed.insert(name.to_lowercase()) {
+		if !installed.insert(case_fold_key(&name)) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
@@ -156,7 +159,7 @@ fn parse_modlist(bytes: &[u8]) -> Result<HashSet<String>, ErrorMarker> {
 		let Some((state, name)) = line.split_at_checked(1) else {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		};
-		if !matches!(state, "+" | "-") || !valid_windows_component(name) || !listed.insert(name.to_lowercase())
+		if !matches!(state, "+" | "-") || !valid_windows_component(name) || !listed.insert(case_fold_key(name))
 		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
@@ -287,15 +290,17 @@ fn validate_plugin_list(bytes: &[u8], utf8: bool) -> Result<(), ErrorMarker> {
 		if line.starts_with('#') {
 			continue;
 		}
+		let folded = case_fold_key(line);
 		if line.trim() != line
 			|| line.starts_with('*')
 			|| line.chars().any(char::is_control)
 			|| line.chars().any(|character| {
 				matches!(character, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*')
 			}) || is_reserved_name(line)
-			|| !line.get(line.len().saturating_sub(4)..).is_some_and(|extension| {
-				extension.eq_ignore_ascii_case(".esm") || extension.eq_ignore_ascii_case(".esp")
-			}) {
+			|| ![".esm", ".esp", ".esl"]
+				.iter()
+				.any(|extension| folded.ends_with(extension))
+		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
@@ -310,7 +315,7 @@ fn decode_active_code_page(bytes: &[u8]) -> Result<String, ErrorMarker> {
 
 	// SAFETY: GetACP has no preconditions and returns the current process ANSI code page.
 	let code_page = unsafe { GetACP() };
-	if code_page == 65_001 {
+	if code_page == CP_UTF8 {
 		return String::from_utf8(bytes.to_vec()).context(ErrorMarker::environment_invalid(None));
 	}
 
@@ -397,12 +402,12 @@ fn archive_list_valid(value: &str) -> bool {
 		.map(str::trim)
 		.filter(|item| !item.is_empty())
 		.collect::<Vec<_>>();
-	values.first()
-		.is_some_and(|first| first.eq_ignore_ascii_case("Fallout - Invalidation.bsa"))
-		&& values
-			.iter()
-			.filter(|item| item.eq_ignore_ascii_case("Fallout - Invalidation.bsa"))
-			.count() == 1
+	values.first().is_some_and(|first| is_invalidation_archive(first))
+		&& values.iter().filter(|item| is_invalidation_archive(item)).count() == 1
+}
+
+fn is_invalidation_archive(value: &str) -> bool {
+	case_fold_key(value) == "fallout - invalidation.bsa"
 }
 
 fn archive_values(text: &str) -> HashMap<String, Vec<&str>> {
@@ -465,4 +470,14 @@ fn section_values<'a>(text: &'a str, wanted_section: &str, wanted_keys: &[&str])
 		}
 	}
 	result
+}
+
+#[cfg(test)]
+mod tests {
+	use super::archive_list_valid;
+
+	#[test]
+	fn invalidation_archive_identity_uses_simple_unicode_case_fold() {
+		assert!(archive_list_valid("Fallout - Invalidation.bſa"));
+	}
 }
