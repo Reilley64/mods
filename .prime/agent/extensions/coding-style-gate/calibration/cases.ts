@@ -173,6 +173,27 @@ export const calibrationCases: CalibrationCase[] = [
 		after: "pub(super) fn evaluate(installer: &FomodInstaller) -> Evaluation {\n\tlet ordered_groups = order_groups(&installer.groups);\n\tlet required_options = collect_required_options(&ordered_groups);\n\tEvaluation::new(ordered_groups, required_options)\n}\n",
 	},
 	{
+		name: "use-case-local-placeholder-logic-bad",
+		expectedViolation: true,
+		ruleId: "application-use-cases-and-ports-use-case-local-implementation-modules",
+		path: "src/application/src/execution/planning.rs",
+		referencingFiles: [
+			"src/application/src/execution/execute_program.rs",
+			"src/application/src/execution/mod.rs",
+		],
+		before: "",
+		after: "pub(super) fn build_plan(input: &ExecutionInput) -> ExecutionPlan {\n\tExecutionPlan::from(input)\n}\n",
+	},
+	{
+		name: "use-case-local-empty-placeholder-good",
+		expectedViolation: false,
+		ruleId: "application-use-cases-and-ports-use-case-local-implementation-modules",
+		path: "src/application/src/execution/planning.rs",
+		referencingFiles: [],
+		before: "",
+		after: "",
+	},
+	{
 		name: "use-case-entrypoint-helper-bad",
 		expectedViolation: true,
 		ruleId: "application-use-cases-and-ports-use-case-local-implementation-modules",
