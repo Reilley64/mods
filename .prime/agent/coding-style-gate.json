@@ -14,5 +14,7 @@
   "maxFollowUps": 2,
   "ruleThresholds": {
     "application-use-cases-and-ports-use-case-local-implementation-modules": 0.45
-  }
+  },
+  "worktreeScope": "registered",
+  "additionalRoots": []
 }

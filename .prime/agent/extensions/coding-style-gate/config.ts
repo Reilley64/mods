@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, join, normalize } from "node:path";
 
 export type GateMode = "advisory" | "enforce";
+export type WorktreeScope = "session" | "registered";
 
 export interface GateConfig {
 	enabled: boolean;
@@ -14,6 +15,8 @@ export interface GateConfig {
 	timeoutMs: number;
 	maxConcurrency: number;
 	maxFollowUps: number;
+	worktreeScope: WorktreeScope;
+	additionalRoots: string[];
 }
 
 export const DEFAULT_CONFIG: GateConfig = {
@@ -29,6 +32,8 @@ export const DEFAULT_CONFIG: GateConfig = {
 	timeoutMs: 10_000,
 	maxConcurrency: 4,
 	maxFollowUps: 2,
+	worktreeScope: "registered",
+	additionalRoots: [],
 };
 
 export async function loadConfig(root: string): Promise<GateConfig> {
@@ -82,6 +87,16 @@ export async function loadConfig(root: string): Promise<GateConfig> {
 	}
 	if (!Number.isInteger(config.maxFollowUps) || config.maxFollowUps < 0 || config.maxFollowUps > 10) {
 		throw new Error("coding-style-gate: maxFollowUps must be an integer from 0 to 10");
+	}
+	if (config.worktreeScope !== "session" && config.worktreeScope !== "registered") {
+		throw new Error(`coding-style-gate: invalid worktreeScope ${String(config.worktreeScope)}`);
+	}
+	if (
+		!Array.isArray(config.additionalRoots) ||
+		config.additionalRoots.length > 16 ||
+		config.additionalRoots.some((root) => typeof root !== "string" || !isAbsolute(root))
+	) {
+		throw new Error("coding-style-gate: additionalRoots must contain at most 16 absolute paths");
 	}
 	if (!Array.isArray(config.tools) || config.tools.some((tool) => typeof tool !== "string" || !tool)) {
 		throw new Error("coding-style-gate: tools must be a list of tool names");
