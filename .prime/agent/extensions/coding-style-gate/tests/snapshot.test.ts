@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { captureRustSnapshot, declaresFileNamedEntryPoint, diffRustSnapshots, findModuleReferencingFiles } from "../snapshot";
+import {
+	captureRustSnapshot,
+	declaresFileNamedEntryPoint,
+	diffRustSnapshots,
+	discoverRegisteredWorktrees,
+	discoverWatchedRoots,
+	findModuleReferencingFiles,
+} from "../snapshot";
 
 const temporaryDirectories: string[] = [];
 
@@ -12,6 +19,68 @@ afterEach(async () => {
 });
 
 describe("Rust filesystem snapshots", () => {
+	test("canonicalizes and deduplicates additional roots", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const alias = join(container, "root-alias");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await symlink(root, alias);
+
+		expect(
+			await discoverWatchedRoots(root, {
+				includeRegisteredWorktrees: false,
+				additionalRoots: [root, alias],
+			}),
+		).toEqual([await realpath(root)]);
+	});
+
+	test("can limit watched roots to the session worktree", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const worktree = join(container, "other-worktree");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${root} add example.rs`;
+		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+		await Bun.$`git -C ${root} worktree add -q -b other-test ${worktree}`;
+
+		expect(await discoverWatchedRoots(root, { includeRegisteredWorktrees: false, additionalRoots: [] })).toEqual([
+			await realpath(root),
+		]);
+	});
+
+	test("ignores a registered worktree whose directory no longer exists", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const missingWorktree = join(container, "missing-worktree");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${root} add example.rs`;
+		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+		await Bun.$`git -C ${root} worktree add -q -b missing-test ${missingWorktree}`;
+		await rm(join(missingWorktree, ".git"));
+
+		expect(await discoverRegisteredWorktrees(root)).toEqual([await realpath(root)]);
+	});
+
+	test("rejects an additional path that is not a Git worktree root", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		const nested = join(root, "nested");
+		await mkdir(nested);
+
+		await expect(
+			discoverWatchedRoots(root, { includeRegisteredWorktrees: false, additionalRoots: [nested] }),
+		).rejects.toThrow("not a Git worktree root");
+	});
+
 	test("reports only Rust files changed between two snapshots", async () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);

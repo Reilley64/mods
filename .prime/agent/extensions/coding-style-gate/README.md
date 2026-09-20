@@ -6,6 +6,8 @@
 
 The extension takes a snapshot of tracked and untracked, non-ignored Rust files before `ipython`, `edit`, or `bash` runs. It takes another snapshot after the tool completes and reviews only the resulting task-local changes. Existing dirty files that the tool does not change are not included.
 
+By default, each snapshot covers every worktree returned by `git worktree list` for the session repository. This includes edits made through absolute paths after an agent changes its process directory without changing Prime's session root. Each watched worktree uses its own review settings and style file; the session root still controls which roots are watched and whether findings are advisory or enforced. Explicit `additionalRoots` can include unrelated Git repositories. Every additional root must be an absolute path to the repository root; nested directories and arbitrary filesystem paths are rejected.
+
 Likely violations are appended to the tool result, so the agent sees them before its next action. In both modes, `agent_end` reviews the complete task-baseline-to-current diff. Advisory mode reports the final result without blocking. Enforce mode retains earlier violations after later clean edits and catches changes that are present when the final snapshot is taken.
 
 Enforcement queues a task-bounded number of correction turns. If the code still fails, the extension asks the user to intervene instead of starting an infinite loop. A user can accept the exact current policy-and-code fingerprint with `/coding-style-gate override <reason>`. Any relevant code, policy, model, or threshold change invalidates that override.
@@ -57,6 +59,8 @@ The gate submits every item to Jev. Independent rubric questions that share a pa
 - `timeoutMs`: timeout for each TypeSafe attempt;
 - `maxConcurrency`: maximum number of file reviews in flight;
 - `maxFollowUps`: maximum automatic correction turns before the gate asks the user to intervene.
+- `worktreeScope`: `registered` watches every registered worktree; `session` watches only the session root.
+- `additionalRoots`: up to 16 absolute Git repository roots to watch in addition to the selected worktree scope.
 
 Start in `advisory` mode. Calibrate rules and thresholds with representative good, bad, and exception cases before switching to `enforce`.
 
@@ -82,7 +86,7 @@ Each request contains:
 
 The extension does not upload the complete resulting file. It rejects patches larger than 100,000 characters rather than silently truncating them. It skips Rust symlinks and rejects a policy file that resolves outside the project.
 
-Tracked Rust files and untracked, non-ignored Rust files are eligible. Non-Rust files, unchanged dirty files, and untracked ignored files are not sent. A new or deleted Rust file is necessarily represented in full by its patch. Redaction is not a substitute for keeping secrets out of source code.
+Tracked Rust files and untracked, non-ignored Rust files in watched roots are eligible. Non-Rust files, unchanged dirty files, and untracked ignored files are not sent. A new or deleted Rust file is necessarily represented in full by its patch. Redaction is not a substitute for keeping secrets out of source code.
 
 
 ## Calibration

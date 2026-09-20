@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HttpResponse, http } from "msw";
@@ -42,13 +42,16 @@ run();
 run();
 \`\`\`
 `;
+const reviewedFiles: string[] = [];
+
 const server = setupServer(
 	http.post("https://api.typesafe.ai/v1/systemone", async ({ request }) => {
 		const body = (await request.clone().json()) as {
 			model: string;
 			questions: Record<string, unknown>;
-			state: { patch: string };
+			state: { file?: string; patch: string };
 		};
+		reviewedFiles.push(body.state.file ?? "");
 		const narrativeComment = body.state.patch.includes("Run the function");
 		return HttpResponse.json({
 			model: body.model,
@@ -69,6 +72,7 @@ beforeAll(() => {
 });
 afterEach(async () => {
 	server.resetHandlers();
+	reviewedFiles.length = 0;
 	await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })));
 });
 afterAll(() => {
@@ -107,6 +111,252 @@ function fakePrime() {
 }
 
 describe("Prime coding style gate", () => {
+	test("reviews a worktree created and edited during one tool call", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const worktree = join(container, "created-worktree");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+
+		await prime.handlers.get("tool_call")?.(
+			{ toolName: "ipython", toolCallId: "call-create", input: { code: "create and edit worktree" } },
+			context,
+		);
+		await Bun.$`git -C ${root} worktree add -q -b created-test ${worktree}`;
+		await writeFile(join(worktree, "example.rs"), "// Run the function.\nfn run() {}\n");
+		const result = await prime.handlers.get("tool_result")?.(
+			{
+				toolName: "ipython",
+				toolCallId: "call-create",
+				input: { code: "create and edit worktree" },
+				content: [{ type: "text", text: "written" }],
+				isError: false,
+			},
+			context,
+		);
+
+		expect(result.content[1]?.text).toContain("created-worktree");
+		expect(result.content[1]?.text).toContain("likely violation");
+	});
+
+	test("does not load review configuration for an unchanged worktree", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const worktree = join(container, "unchanged-worktree");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+		await Bun.$`git -C ${root} worktree add -q -b unchanged-test ${worktree}`;
+		await Bun.$`mkdir -p ${join(worktree, ".prime", "agent")}`;
+		await writeFile(join(worktree, ".prime", "agent", "coding-style-gate.json"), "not JSON");
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+
+		await prime.handlers.get("tool_call")?.(
+			{ toolName: "ipython", toolCallId: "call-unchanged", input: { code: "write session code" } },
+			context,
+		);
+		await writeFile(join(root, "example.rs"), "// Run the function.\nfn run() {}\n");
+		const result = await prime.handlers.get("tool_result")?.(
+			{
+				toolName: "ipython",
+				toolCallId: "call-unchanged",
+				input: { code: "write session code" },
+				content: [{ type: "text", text: "written" }],
+				isError: false,
+			},
+			context,
+		);
+
+		expect(result.content[1]?.text).toContain("likely violation");
+		expect(result.content[1]?.text).not.toContain("could not review");
+	});
+
+	test("reviews Rust edits in a registered worktree outside the session root", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const worktree = join(container, "external-worktree");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+		await Bun.$`git -C ${root} worktree add -q -b external-test ${worktree}`;
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+
+		await prime.handlers.get("tool_call")?.(
+			{ toolName: "ipython", toolCallId: "call-external", input: { code: "write external code" } },
+			context,
+		);
+		await writeFile(join(worktree, "example.rs"), "// Run the function.\nfn run() {}\n");
+		const result = await prime.handlers.get("tool_result")?.(
+			{
+				toolName: "ipython",
+				toolCallId: "call-external",
+				input: { code: "write external code" },
+				content: [{ type: "text", text: "written" }],
+				isError: false,
+			},
+			context,
+		);
+
+		expect(result.content).toHaveLength(2);
+		expect(result.content[1]?.text).toContain("external-worktree");
+		expect(result.content[1]?.text).toContain("coding-style-gate found 1 likely violation");
+		expect(reviewedFiles).toEqual(["example.rs"]);
+		expect(reviewedFiles.join("\n")).not.toContain(container);
+	});
+
+	test("honors a watched worktree's tool allowlist", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const worktree = join(container, "edit-only-worktree");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+		await Bun.$`git -C ${root} worktree add -q -b edit-only-test ${worktree}`;
+		await Bun.$`mkdir -p ${join(worktree, ".prime", "agent")}`;
+		await writeFile(
+			join(worktree, ".prime", "agent", "coding-style-gate.json"),
+			JSON.stringify({ tools: ["edit"] }),
+		);
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+
+		await prime.handlers.get("tool_call")?.(
+			{ toolName: "ipython", toolCallId: "call-disallowed", input: { code: "write disallowed code" } },
+			context,
+		);
+		await writeFile(join(worktree, "example.rs"), "// Run the function.\nfn run() {}\n");
+		const result = await prime.handlers.get("tool_result")?.(
+			{
+				toolName: "ipython",
+				toolCallId: "call-disallowed",
+				input: { code: "write disallowed code" },
+				content: [{ type: "text", text: "written" }],
+				isError: false,
+			},
+			context,
+		);
+
+		expect(result).toBeUndefined();
+	});
+
+	test("uses the watched worktree's own style configuration", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const worktree = join(container, "configured-worktree");
+		await mkdir(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+		await Bun.$`git -C ${root} worktree add -q -b configured-test ${worktree}`;
+		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
+		await writeFile(
+			join(root, ".prime", "agent", "coding-style-gate.json"),
+			JSON.stringify({ tools: ["edit"] }),
+		);
+		await rm(join(worktree, "CODING_STYLE.md"));
+		await Bun.$`mkdir -p ${join(worktree, ".prime", "agent")}`;
+		await writeFile(join(worktree, "WORKTREE_STYLE.md"), style);
+		await writeFile(
+			join(worktree, ".prime", "agent", "coding-style-gate.json"),
+			JSON.stringify({ styleFile: "WORKTREE_STYLE.md" }),
+		);
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+
+		await prime.handlers.get("tool_call")?.(
+			{ toolName: "ipython", toolCallId: "call-configured", input: { code: "write configured code" } },
+			context,
+		);
+		await writeFile(join(worktree, "example.rs"), "// Run the function.\nfn run() {}\n");
+		const result = await prime.handlers.get("tool_result")?.(
+			{
+				toolName: "ipython",
+				toolCallId: "call-configured",
+				input: { code: "write configured code" },
+				content: [{ type: "text", text: "written" }],
+				isError: false,
+			},
+			context,
+		);
+
+		expect(result.content[1]?.text).toContain("configured-worktree");
+		expect(result.content[1]?.text).toContain("likely violation");
+		expect(result.content[1]?.text).not.toContain("could not review");
+	});
+
+	test("reviews Rust edits in an explicitly configured unrelated repository", async () => {
+		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(container);
+		const root = join(container, "root");
+		const additionalRoot = join(container, "additional-root");
+		await mkdir(root);
+		await mkdir(additionalRoot);
+		await Bun.$`git init -q ${root}`;
+		await Bun.$`git init -q ${additionalRoot}`;
+		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
+		await writeFile(
+			join(root, ".prime", "agent", "coding-style-gate.json"),
+			JSON.stringify({ additionalRoots: [additionalRoot] }),
+		);
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "session.rs"), "fn session() {}\n");
+		await Bun.$`git -C ${root} add CODING_STYLE.md session.rs`;
+		await writeFile(join(additionalRoot, "CODING_STYLE.md"), style);
+		await writeFile(join(additionalRoot, "example.rs"), "fn run() {}\n");
+		await Bun.$`git -C ${additionalRoot} add CODING_STYLE.md example.rs`;
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+
+		await prime.handlers.get("tool_call")?.(
+			{ toolName: "ipython", toolCallId: "call-additional", input: { code: "write additional code" } },
+			context,
+		);
+		await writeFile(join(additionalRoot, "example.rs"), "// Run the function.\nfn run() {}\n");
+		const result = await prime.handlers.get("tool_result")?.(
+			{
+				toolName: "ipython",
+				toolCallId: "call-additional",
+				input: { code: "write additional code" },
+				content: [{ type: "text", text: "written" }],
+				isError: false,
+			},
+			context,
+		);
+
+		expect(result.content).toHaveLength(2);
+		expect(result.content[1]?.text).toContain("additional-root");
+	});
+
 	test("attaches Jev findings to the ipython result that wrote the code", async () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);

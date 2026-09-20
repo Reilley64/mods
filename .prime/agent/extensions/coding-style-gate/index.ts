@@ -1,5 +1,6 @@
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 
 import { type GateConfig, loadConfig } from "./config";
 import { reviewFingerprint, snapshotFingerprint } from "./fingerprint";
@@ -7,14 +8,22 @@ import { formatReview } from "./format";
 import { reviewChanges, type StyleReviewReport } from "./reviewer";
 import { loadStyleRules } from "./policy";
 import type { StyleRule } from "./rules";
-import { captureRustSnapshot, diffRustSnapshots, findModuleReferencingFiles, type RustChange, type RustSnapshot } from "./snapshot";
+import {
+	captureRustIndexSnapshot,
+	captureRustWorkspaceSnapshot,
+	diffRustSnapshots,
+	findModuleReferencingFiles,
+	type RustChange,
+	type RustSnapshot,
+	type RustWorkspaceSnapshot,
+} from "./snapshot";
 
 const MESSAGE_TYPE = "coding-style-gate";
 const REVIEW_FAILED = "coding-style-gate could not review the Rust changes. Use /coding-style-gate status for details.";
 
 interface PendingSnapshot {
 	config: GateConfig;
-	snapshot: RustSnapshot;
+	snapshot: RustWorkspaceSnapshot;
 }
 
 interface PreparedReview {
@@ -47,7 +56,7 @@ interface GateState {
 	lastError?: string;
 	lastReport?: StyleReviewReport;
 	override?: OverrideState;
-	taskBaseline?: RustSnapshot;
+	taskBaseline?: RustWorkspaceSnapshot;
 }
 
 class ReviewFailure extends Error {
@@ -156,16 +165,125 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 		}
 	}
 
+	interface ChangedRoot {
+		root: string;
+		before: RustSnapshot;
+		after: RustSnapshot;
+		config: GateConfig;
+	}
+
+	async function changedRoots(
+		before: RustWorkspaceSnapshot,
+		after: RustWorkspaceSnapshot,
+		config: GateConfig,
+		toolName?: string,
+	): Promise<ChangedRoot[]> {
+		const roots = new Set([...before.snapshots.keys(), ...after.snapshots.keys()]);
+		const changed: ChangedRoot[] = [];
+		for (const root of roots) {
+			const afterSnapshot = after.snapshots.get(root);
+			if (afterSnapshot === undefined) {
+				continue;
+			}
+			const beforeSnapshot = before.snapshots.get(root) ?? (await captureRustIndexSnapshot(root));
+			if (diffRustSnapshots(beforeSnapshot, afterSnapshot).length === 0) {
+				continue;
+			}
+			const rootConfig = root === after.primaryRoot ? config : await loadConfig(root);
+			if (!rootConfig.enabled || (toolName !== undefined && !rootConfig.tools.includes(toolName))) {
+				continue;
+			}
+			changed.push({ root, before: beforeSnapshot, after: afterSnapshot, config: rootConfig });
+		}
+		return changed;
+	}
+
+	async function prepareWorkspaceFingerprint(
+		before: RustWorkspaceSnapshot,
+		after: RustWorkspaceSnapshot,
+		config: GateConfig,
+	): Promise<string | undefined> {
+		const fingerprints: Array<readonly [string, string]> = [];
+		for (const changed of await changedRoots(before, after, config)) {
+			const prepared = await prepareReview(changed.root, changed.before, changed.after, changed.config);
+			if (prepared !== undefined) {
+				fingerprints.push([changed.root, prepared.fingerprint]);
+			}
+		}
+		return fingerprints.length === 0 ? undefined : snapshotFingerprint(new Map(fingerprints));
+	}
+
+	async function inspectWorkspace(
+		before: RustWorkspaceSnapshot,
+		after: RustWorkspaceSnapshot,
+		config: GateConfig,
+		signal?: AbortSignal,
+		toolName?: string,
+	): Promise<CompletedReview | undefined> {
+		const completed: Array<{ root: string; review: CompletedReview }> = [];
+		for (const changed of await changedRoots(before, after, config, toolName)) {
+			let review: CompletedReview | undefined;
+			try {
+				review = await inspect(changed.root, changed.before, changed.after, changed.config, signal);
+			} catch (error) {
+				if (error instanceof ReviewFailure) {
+					const fingerprint = await prepareWorkspaceFingerprint(before, after, config);
+					throw new ReviewFailure(error.message, fingerprint ?? error.fingerprint);
+				}
+				throw error;
+			}
+			if (review !== undefined) {
+				completed.push({ root: changed.root, review });
+			}
+		}
+		if (completed.length === 0) {
+			return undefined;
+		}
+
+		return {
+			fingerprint: snapshotFingerprint(new Map(completed.map(({ root, review }) => [root, review.fingerprint]))),
+			report: {
+				model: [...new Set(completed.map(({ review }) => review.report.model))].join(", "),
+				filesReviewed: completed.reduce((total, { review }) => total + review.report.filesReviewed, 0),
+				findings: completed.flatMap(({ root, review }) =>
+					review.report.findings.map((finding) => ({
+						...finding,
+						file: root === after.primaryRoot ? finding.file : join(root, finding.file),
+					})),
+				),
+				inputTokens: completed.reduce((total, { review }) => total + review.report.inputTokens, 0),
+				outputTokens: completed.reduce((total, { review }) => total + review.report.outputTokens, 0),
+			},
+		};
+	}
+
+	function workspaceSnapshotFingerprint(snapshot: RustWorkspaceSnapshot): string {
+		return snapshotFingerprint(
+			new Map(
+				[...snapshot.snapshots.entries()].flatMap(([root, files]) =>
+					[...files.entries()].map(([path, content]) => [`${root}\0${path}`, content] as const),
+				),
+			),
+		);
+	}
+
+	function workspaceOptions(config: GateConfig) {
+		return {
+			includeRegisteredWorktrees: config.worktreeScope === "registered",
+			additionalRoots: config.additionalRoots,
+		};
+	}
+
 	async function activeConfig(root: string): Promise<GateConfig> {
 		const config = await loadConfig(root);
 		state.activeConfig = config;
 		return config;
 	}
 
-	function fallbackFailureFingerprint(current: RustSnapshot | undefined, config: GateConfig | undefined): string {
+	function fallbackFailureFingerprint(current: RustWorkspaceSnapshot | undefined, config: GateConfig | undefined): string {
 		return `error:${snapshotFingerprint(
 			new Map([
-				["snapshot", current === undefined ? "unavailable" : snapshotFingerprint(current)],
+				["snapshot", current === undefined ? "unavailable" : workspaceSnapshotFingerprint(current)],
 				["config", config === undefined ? "unavailable" : JSON.stringify(config)],
 				["baseline", state.baselineCaptureFailed ? "unavailable" : "available"],
 			]),
@@ -220,8 +338,9 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 		state.followUps = 0;
 		state.exhaustedNoticeSent = false;
 		try {
-			state.activeConfig = await loadConfig(ctx.cwd);
-			state.taskBaseline = await captureRustSnapshot(ctx.cwd);
+			const config = await loadConfig(ctx.cwd);
+			state.activeConfig = config;
+			state.taskBaseline = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
 		} catch (error) {
 			state.baselineCaptureFailed = true;
 			state.lastError = errorText(error);
@@ -231,10 +350,13 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 	pi.on("tool_call", async (event, ctx) => {
 		try {
 			const config = await activeConfig(ctx.cwd);
-			if (!config.enabled || !config.tools.includes(event.toolName)) {
+			if (!config.enabled) {
 				return;
 			}
-			pendingSnapshots.set(event.toolCallId, { config, snapshot: await captureRustSnapshot(ctx.cwd) });
+			pendingSnapshots.set(event.toolCallId, {
+				config,
+				snapshot: await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config)),
+			});
 		} catch (error) {
 			state.lastError = errorText(error);
 		}
@@ -249,8 +371,15 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 
 		return serial(async () => {
 			try {
-				const after = await captureRustSnapshot(ctx.cwd);
-				const completed = await inspect(ctx.cwd, pending.snapshot, after, pending.config, ctx.signal);
+				const config = await activeConfig(ctx.cwd);
+				const after = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
+				const completed = await inspectWorkspace(
+					pending.snapshot,
+					after,
+					config,
+					ctx.signal,
+					event.toolName,
+				);
 				if (completed === undefined) {
 					return;
 				}
@@ -273,17 +402,17 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 		}
 		await serial(async () => {
 			let config: GateConfig | undefined;
-			let current: RustSnapshot | undefined;
+			let current: RustWorkspaceSnapshot | undefined;
 			try {
 				config = await activeConfig(ctx.cwd);
 				if (!config.enabled) {
 					return;
 				}
-				current = await captureRustSnapshot(ctx.cwd);
+				current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
 				if (state.taskBaseline === undefined) {
 					throw new Error("coding-style-gate: task baseline is unavailable");
 				}
-				const completed = await inspect(ctx.cwd, state.taskBaseline, current, config, ctx.signal);
+				const completed = await inspectWorkspace(state.taskBaseline, current, config, ctx.signal);
 				if (completed === undefined) {
 					clearBlock();
 					return;
@@ -329,7 +458,8 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 			if (action === "reset") {
 				await ctx.waitForIdle();
 				await serial(async () => {
-					const current = await captureRustSnapshot(ctx.cwd);
+					const config = await activeConfig(ctx.cwd);
+					const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
 					pendingSnapshots.clear();
 					state.taskBaseline = current;
 					state.baselineCaptureFailed = false;
@@ -347,11 +477,11 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				await ctx.waitForIdle();
 				await serial(async () => {
 					const config = await activeConfig(ctx.cwd);
-					const current = await captureRustSnapshot(ctx.cwd);
+					const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
 					if (state.taskBaseline === undefined) {
 						throw new Error("coding-style-gate: task baseline is unavailable; use /coding-style-gate reset");
 					}
-					const completed = await inspect(ctx.cwd, state.taskBaseline, current, config, ctx.signal);
+					const completed = await inspectWorkspace(state.taskBaseline, current, config, ctx.signal);
 					if (completed === undefined) {
 						reportToUser(ctx, "coding-style-gate found no task-local Rust changes.");
 						return;
@@ -372,16 +502,15 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				await ctx.waitForIdle();
 				await serial(async () => {
 					const config = await activeConfig(ctx.cwd);
-					const current = await captureRustSnapshot(ctx.cwd);
-					const prepared =
+					const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
+					const normalFingerprint =
 						state.taskBaseline === undefined
 							? undefined
-							: await prepareReview(ctx.cwd, state.taskBaseline, current, config);
-					const normalFingerprint = prepared?.fingerprint;
+							: await prepareWorkspaceFingerprint(state.taskBaseline, current, config);
 					const errorFingerprint =
-						prepared === undefined
+						normalFingerprint === undefined
 							? fallbackFailureFingerprint(current, config)
-							: `error:${prepared.fingerprint}`;
+							: `error:${normalFingerprint}`;
 					const fingerprint =
 						state.blocked?.fingerprint === errorFingerprint
 							? errorFingerprint
