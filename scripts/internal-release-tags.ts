@@ -1,14 +1,14 @@
 const internalComponents = {
-  domain: "domain",
-  application: "application",
-  "infrastructure/environment": "environment",
-  "infrastructure/settings": "settings",
-  "infrastructure/game_platform": "game-platform",
-  "infrastructure/archive": "archive",
-  "infrastructure/execution": "execution",
-  "infrastructure/dependencies": "infrastructure",
-  "presentation/cli": "mods-cli",
-  "presentation/mcp": "mods-mcp",
+  "src/domain": "domain",
+  "src/application": "application",
+  "src/infrastructure/environment": "environment",
+  "src/infrastructure/settings": "settings",
+  "src/infrastructure/game_platform": "game-platform",
+  "src/infrastructure/archive": "archive",
+  "src/infrastructure/execution": "execution",
+  "src/infrastructure/dependencies": "infrastructure",
+  "src/presentation/cli": "mods-cli",
+  "src/presentation/mcp": "mods-mcp",
 } as const;
 
 type Manifest = Record<string, string>;

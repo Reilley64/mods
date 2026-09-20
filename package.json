@@ -3,11 +3,15 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "check": "bun run format:check && bun run lint && bun run dependency:check && bun run test",
+    "check": "bun run check:rust && bun run check:tools",
+    "check:rust": "bun run format:check && bun run lint && bun run dependency:check && bun run test:rust",
+    "check:tools": "bun run test:tools",
     "format:check": "cargo fmt --all -- --check",
     "lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "dependency:check": "bun scripts/check-dependency-graph.ts",
-    "test": "cargo nextest run --workspace --all-targets && bun test tests ./.prime/agent/extensions/coding-style-gate/tests",
+    "test": "bun run test:rust && bun run test:tools",
+    "test:rust": "cargo nextest run --workspace --all-targets",
+    "test:tools": "bun test tests ./.prime/agent/extensions/coding-style-gate/tests",
     "check:pr-title": "bun scripts/validate-pr-title.ts"
   },
   "dependencies": {

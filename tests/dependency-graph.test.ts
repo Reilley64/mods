@@ -5,13 +5,13 @@ const validPackages = [
   {
     name: "mods",
     dependencies: [{ name: "application" }, { name: "domain" }, { name: "infrastructure" }],
-    manifest_path: "/repo/presentation/cli/Cargo.toml",
+    manifest_path: "/repo/src/presentation/cli/Cargo.toml",
     targets: [{ name: "mods", kind: ["bin"] }],
   },
   {
     name: "mods-mcp",
     dependencies: [{ name: "application" }, { name: "domain" }, { name: "infrastructure" }],
-    manifest_path: "/repo/presentation/mcp/Cargo.toml",
+    manifest_path: "/repo/src/presentation/mcp/Cargo.toml",
     targets: [{ name: "mods-mcp", kind: ["bin"] }],
   },
   { name: "domain", dependencies: [] },

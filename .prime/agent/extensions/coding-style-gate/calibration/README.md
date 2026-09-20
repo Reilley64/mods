@@ -38,10 +38,10 @@ Observed results:
 
 PR #46 is a violation holdout, not a compliant calibration target. Against the exact PR range, the targeted rule reports:
 
-- `application/src/installation/fomod.rs`: `0.84` (violation);
-- `application/src/installation/planning.rs`: `0.83` (violation).
+- `src/application/src/installation/fomod.rs`: `0.84` (violation);
+- `src/application/src/installation/planning.rs`: `0.83` (violation).
 
-The expected compliant locations are private children under `application/src/installation/install_archive/`. The authoritative corrected full-range review from `b08bed9aeec17c796205ed66fce2ffbbf388372c` through `63c6b7404e7ed24e872c319f2589b105e15a3703` reviewed 95 Rust files against all 35 rules with zero findings.
+The expected compliant locations are private children under `src/application/src/installation/install_archive/`. The authoritative corrected full-range review from `b08bed9aeec17c796205ed66fce2ffbbf388372c` through `63c6b7404e7ed24e872c319f2589b105e15a3703` reviewed 95 Rust files against all 35 rules with zero findings.
 
 The corpus is deliberately small. Keep the gate in advisory mode while collecting representative repository patches. Add every confirmed miss or false positive as a paired regression fixture before changing the threshold.
 
