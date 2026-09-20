@@ -113,7 +113,10 @@ impl GameBinding {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::GameInstallationPath;
+	use super::SteamAppId;
+	use super::SteamBuildId;
+	use std::path::PathBuf;
 
 	#[test]
 	fn game_path_must_be_absolute() {

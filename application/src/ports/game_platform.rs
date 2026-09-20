@@ -36,4 +36,9 @@ pub type ValidateGameDirectory =
 	Arc<dyn Fn(GameInstallationPath, CancellationToken) -> PortFuture<GameBinding> + Send + Sync>;
 pub type LoadProfileSources =
 	Arc<dyn Fn(GameBinding, CancellationToken) -> PortFuture<InitializationProfileSources> + Send + Sync>;
-pub type ValidateEffectiveBinding = Arc<dyn Fn(GameBinding) -> PortFuture<GameBinding> + Send + Sync>;
+pub type ValidateEffectiveBinding =
+	Arc<dyn Fn(GameBinding, CancellationToken) -> PortFuture<GameBinding> + Send + Sync>;
+
+pub type ReadXnvseVersion = Arc<dyn Fn(GameBinding, CancellationToken) -> PortFuture<Option<Vec<u32>>> + Send + Sync>;
+
+pub type ReadGameVersion = Arc<dyn Fn(GameBinding, CancellationToken) -> PortFuture<Vec<u32>> + Send + Sync>;

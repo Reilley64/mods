@@ -176,9 +176,19 @@ pub(crate) fn is_reparse(metadata: &Metadata) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	#[cfg(windows)]
+	use super::attributes_are_reparse;
+	use super::open_regular;
+	use super::sync_dir;
+	use cap_std::ambient_authority;
+	use cap_std::fs::Dir;
+	use rootcause::Result;
 	use std::fs;
+	use std::io::Error as IoError;
+	use std::path::Path;
 	use tempfile::TempDir;
+	#[cfg(windows)]
+	use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 	#[test]
 	fn directory_sync_keeps_the_original_capability_usable() -> Result<(), IoError> {

@@ -7,7 +7,6 @@ use crate::ports::LoadProfileSources;
 use crate::ports::ProfileFileRecord;
 use crate::ports::PublishEnvironment;
 use crate::ports::ReadInitializationGameOverride;
-use crate::ports::RecoverEnvironment;
 use crate::ports::ResolveGameInstallation;
 use domain::EnvironmentRoot;
 use domain::GameBinding;
@@ -20,7 +19,6 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct InitializeEnvironmentDependencies {
-	pub recover_environment: RecoverEnvironment,
 	pub assess_target: AssessInitializationTarget,
 	pub read_game_override: ReadInitializationGameOverride,
 	pub resolve_game_installation: ResolveGameInstallation,
@@ -51,16 +49,6 @@ pub async fn initialize_environment(
 	game_installation: Option<GameInstallationPath>,
 	cancellation: CancellationToken,
 ) -> Result<InitializeEnvironmentOutput, InitializeEnvironmentError> {
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InitializeEnvironmentError));
-	}
-
-	dependencies
-		.recover_environment
-		.call((environment_root.clone(), cancellation.clone()))
-		.await
-		.context(InitializeEnvironmentError)?;
-
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()).context(InitializeEnvironmentError));
 	}
@@ -136,21 +124,31 @@ pub async fn initialize_environment(
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::InitializeEnvironmentDependencies;
+	use super::InitializeEnvironmentError;
+	use super::InitializeEnvironmentWarning;
+	use super::initialize_environment;
 	use crate::ErrorCode;
+	use crate::ErrorMarker;
+	use crate::ports::GameInstallationSource;
 	use crate::ports::InitializationProfileSources;
 	use crate::ports::InitializationTargetAssessment;
 	use crate::ports::PortFuture;
 	use crate::ports::ProfileFileDisposition;
-	use crate::ports::RecoveryOutcome;
+	use crate::ports::ProfileFileRecord;
 	use crate::ports::ResolvedGameInstallation;
+	use domain::EnvironmentRoot;
+	use domain::GameBinding;
+	use domain::GameInstallationPath;
 	use domain::SteamBuildId;
+	use rootcause::report;
 	use std::env::temp_dir;
 	use std::error::Error;
 	use std::result::Result as StdResult;
 	use std::sync::Arc;
 	use std::sync::atomic::AtomicUsize;
 	use std::sync::atomic::Ordering;
+	use tokio_util::sync::CancellationToken;
 
 	#[tokio::test]
 	async fn use_case_returns_fixed_output_and_fallback_warning_through_ports() -> StdResult<(), Box<dyn Error>> {
@@ -159,9 +157,6 @@ mod tests {
 		let game = GameInstallationPath::new(temp_dir().join("fnv")).map_err(|_| "invalid test game path")?;
 		let binding = GameBinding::new(game, SteamBuildId::new(4).map_err(|_| "invalid test build ID")?);
 		let dependencies = InitializeEnvironmentDependencies {
-			recover_environment: Arc::new(|_, _| {
-				Box::pin(async { Ok(RecoveryOutcome::NothingToRecover) }) as PortFuture<_>
-			}),
 			assess_target: Arc::new(|_, _| {
 				Box::pin(async { Ok(InitializationTargetAssessment::Available) }) as PortFuture<_>
 			}),
@@ -211,24 +206,23 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn cancellation_after_recovery_is_typed_and_stops_before_assessment() -> StdResult<(), Box<dyn Error>> {
+	async fn cancellation_after_assessment_is_typed_and_stops_before_reading_override()
+	-> StdResult<(), Box<dyn Error>> {
 		let root = EnvironmentRoot::new(temp_dir().join("cancelled-application-init-test"))
 			.map_err(|_| "invalid test environment root")?;
-		let assessment_calls = Arc::new(AtomicUsize::new(0));
+		let override_calls = Arc::new(AtomicUsize::new(0));
 		let dependencies = InitializeEnvironmentDependencies {
-			recover_environment: Arc::new(|_, cancellation| {
+			assess_target: Arc::new(|_, cancellation| {
 				cancellation.cancel();
-				Box::pin(async { Ok(RecoveryOutcome::NothingToRecover) }) as PortFuture<_>
+				Box::pin(async { Ok(InitializationTargetAssessment::Available) }) as PortFuture<_>
 			}),
-			assess_target: Arc::new({
-				let assessment_calls = assessment_calls.clone();
-				move |_, _| {
-					assessment_calls.fetch_add(1, Ordering::SeqCst);
-					Box::pin(async { Ok(InitializationTargetAssessment::Available) })
-						as PortFuture<_>
+			read_game_override: Arc::new({
+				let override_calls = override_calls.clone();
+				move || {
+					override_calls.fetch_add(1, Ordering::SeqCst);
+					Box::pin(async { Ok(None) }) as PortFuture<_>
 				}
 			}),
-			read_game_override: Arc::new(|| Box::pin(async { Ok(None) }) as PortFuture<_>),
 			resolve_game_installation: Arc::new(|_, _, _, _| {
 				Box::pin(async { Err(report!(ErrorMarker::game_install_not_found())) }) as PortFuture<_>
 			}),
@@ -254,7 +248,7 @@ mod tests {
 			report.downcast_current_context::<ErrorMarker>()
 				.is_some_and(|marker| marker.code() == ErrorCode::OperationCancelled)
 		}));
-		assert_eq!(assessment_calls.load(Ordering::SeqCst), 0);
+		assert_eq!(override_calls.load(Ordering::SeqCst), 0);
 		Ok(())
 	}
 }

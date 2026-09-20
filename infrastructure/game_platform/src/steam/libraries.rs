@@ -3,7 +3,6 @@ use super::model::Value;
 use super::model::exactly_one_object;
 use super::model::exactly_one_text;
 use super::parser::parse_key_values;
-use crate::cancellation::check_cancelled;
 use crate::fs_access;
 use application::ErrorMarker;
 use rootcause::Result;
@@ -15,7 +14,10 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 pub(super) fn libraries(steam_root: &Path, cancellation: &CancellationToken) -> Result<Vec<PathBuf>, ErrorMarker> {
-	check_cancelled(cancellation)?;
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+
 	let mut paths = vec![steam_root.to_path_buf()];
 	let (root, _) = match fs_access::open_ambient_dir(steam_root) {
 		Ok(opened) => opened,
@@ -34,7 +36,10 @@ pub(super) fn libraries(steam_root: &Path, cancellation: &CancellationToken) -> 
 	let folders = exactly_one_object(&parsed, "libraryfolders")
 		.ok_or_else(|| report!(ErrorMarker::game_install_invalid()))?;
 	for entry in folders {
-		check_cancelled(cancellation)?;
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
 		let Value::Object(properties) = &entry.value else {
 			continue;
 		};

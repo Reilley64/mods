@@ -1,4 +1,9 @@
+use crate::installation::ApprovedInstallation;
+use crate::installation::InstallPlan;
+use crate::installation::InstallationAssessment;
+use crate::installation::InstallationState;
 use crate::ports::PortFuture;
+use domain::DataRelativePath;
 use domain::EnvironmentRoot;
 use domain::GameBinding;
 use std::sync::Arc;
@@ -7,13 +12,6 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitializationTargetAssessment {
 	Available,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecoveryOutcome {
-	NothingToRecover,
-	Committed,
-	RolledBack,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,8 +46,6 @@ pub struct InitializationPlan {
 	pub profile_sources: InitializationProfileSources,
 }
 
-pub type RecoverEnvironment =
-	Arc<dyn Fn(EnvironmentRoot, CancellationToken) -> PortFuture<RecoveryOutcome> + Send + Sync>;
 pub type AssessInitializationTarget =
 	Arc<dyn Fn(EnvironmentRoot, CancellationToken) -> PortFuture<InitializationTargetAssessment> + Send + Sync>;
 pub type PublishEnvironment = Arc<
@@ -57,3 +53,35 @@ pub type PublishEnvironment = Arc<
 		+ Send
 		+ Sync,
 >;
+
+pub type WriteInstallationChunk = Arc<dyn Fn(Vec<u8>, CancellationToken) -> PortFuture<()> + Send + Sync>;
+pub type FinishInstallationFile = Arc<dyn Fn(CancellationToken) -> PortFuture<()> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct InstallationFile {
+	pub write_chunk: WriteInstallationChunk,
+	pub finish: FinishInstallationFile,
+}
+
+pub type BeginInstallationFile =
+	Arc<dyn Fn(DataRelativePath, CancellationToken) -> PortFuture<InstallationFile> + Send + Sync>;
+pub type FinishInstallationChange = Arc<dyn Fn(CancellationToken) -> PortFuture<()> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct InstallationChange {
+	pub begin_file: BeginInstallationFile,
+	pub finish: FinishInstallationChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallationStateAccess {
+	Preview,
+	Mutation,
+}
+
+pub type LoadInstallationState =
+	Arc<dyn Fn(InstallationStateAccess, CancellationToken) -> PortFuture<InstallationState> + Send + Sync>;
+pub type AssessInstallation =
+	Arc<dyn Fn(InstallPlan, CancellationToken) -> PortFuture<InstallationAssessment> + Send + Sync>;
+pub type BeginInstallation =
+	Arc<dyn Fn(ApprovedInstallation, CancellationToken) -> PortFuture<InstallationChange> + Send + Sync>;

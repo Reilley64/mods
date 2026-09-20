@@ -9,3 +9,4 @@ workspace = true
 
 [dependencies]
 rootcause = "0.13"
+unicode-case-mapping = "=1.0.0"

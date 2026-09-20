@@ -9,4 +9,24 @@ workspace = true
 
 [dependencies]
 application = { path = "../../application", version = "0.0.0" }
+crc32fast = "=1.5.2"
 domain = { path = "../../domain", version = "0.0.0" }
+lzma-rust2 = { version = "=0.20.1", default-features = false, features = ["std"] }
+quick-xml = { version = "=0.42.0", default-features = false, features = ["encoding"] }
+rars = "=0.9.4"
+rootcause = "0.13"
+sevenz-rust2 = { version = "=0.22.2", default-features = false, features = ["aes256", "bzip2", "deflate", "ppmd", "brotli", "lz4", "zstd"] }
+sha2 = { version = "=0.11.0", default-features = false }
+tempfile = "=3.27.0"
+tokio = { version = "1", features = ["rt", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+unicode-normalization = "=0.1.24"
+zip = { version = "=8.6.0", default-features = false, features = ["bzip2", "deflate64", "deflate-flate2-zlib-rs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+sevenz-rust2 = { version = "=0.22.2", default-features = false, features = ["compress"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+zip = { version = "=8.6.0", default-features = false, features = ["bzip2", "deflate64", "deflate-flate2-zlib-rs"] }

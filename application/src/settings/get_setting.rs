@@ -45,9 +45,12 @@ pub async fn get_setting(
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::GetSettingDependencies;
+	use super::get_setting;
 	use crate::ports::PortFuture;
 	use crate::settings::ResolvedSettings;
+	use crate::settings::SettingKey;
+	use crate::settings::SettingRecord;
 	use crate::settings::SettingSource;
 	use crate::settings::SettingValue;
 	use domain::GameBinding;

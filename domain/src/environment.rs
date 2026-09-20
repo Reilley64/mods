@@ -123,7 +123,12 @@ pub(crate) fn is_absolute_external(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+	use super::EnvironmentName;
+	use super::EnvironmentRoot;
+	use super::EnvironmentSchemaVersion;
+	use super::InvalidEnvironmentName;
+	use rootcause::Result;
+	use std::path::PathBuf;
 
 	#[test]
 	fn environment_root_requires_an_absolute_path() {

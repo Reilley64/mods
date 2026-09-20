@@ -1,15 +1,20 @@
 # Contributing
 
-Use Bun for repository checks:
+Use the pinned Rust toolchain. Follow `CODING_STYLE.md` for Rust implementation and review. Install the pinned Rust test runner and repository tools once:
 
 ```text
+cargo install cargo-nextest --locked --version 0.9.145
 bun install --frozen-lockfile
+```
+
+Use focused red-green cycles during implementation. Run Rust tests through `cargo nextest run` so `.config/nextest.toml` enforces the repository-wide per-test timeout. Run focused checks for the affected crates, then run the complete checks once before opening a pull request:
+
+```text
 bun run check
+cargo check --workspace --target x86_64-pc-windows-msvc
 ```
 
 Pull request titles must follow Conventional Commits. This repository validates squash pull request titles in GitHub Actions. It does not install Husky or enforce individual local commit messages.
-
-Use the pinned Rust toolchain. Follow `CODING_STYLE.md` for Rust implementation and review. Run `bun run check` before opening a pull request.
 
 ## Release Please credentials
 

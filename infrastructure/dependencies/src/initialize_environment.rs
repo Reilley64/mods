@@ -4,7 +4,6 @@ use application::environment::InitializeEnvironmentDependencies;
 impl Resources {
 	pub fn initialize_environment_dependencies(&self) -> InitializeEnvironmentDependencies {
 		InitializeEnvironmentDependencies {
-			recover_environment: self.environment.recover_port(),
 			assess_target: self.environment.assess_port(),
 			read_game_override: self.settings.initialization_override_port(),
 			resolve_game_installation: self.game_platform.resolve_port(),
