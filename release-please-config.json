@@ -4,15 +4,25 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
   "separate-pull-requests": false,
-  "pull-request-header": ":robot: I have created a release *beep* *boop*\n\nThe version-only release entry is the public `mods` package.",
+  "group-pull-request-title-pattern": "chore: prepare v${version} release",
   "plugins": [
     {
       "type": "cargo-workspace",
-      "merge": true,
+      "merge": false,
       "updateAllPackages": false
     }
   ],
   "packages": {
+    ".": {
+      "release-type": "simple",
+      "component": "mods",
+      "package-name": "mods",
+      "initial-version": "0.1.0",
+      "version-file": "version.txt",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "skip-github-release": false
+    },
     "domain": {
       "release-type": "rust",
       "component": "domain",
@@ -71,16 +81,17 @@
     },
     "presentation/cli": {
       "release-type": "rust",
-      "component": "mods",
+      "component": "mods-cli",
       "package-name": "mods",
-      "changelog-path": "/CHANGELOG.md",
-      "include-component-in-tag": false,
-      "skip-github-release": false
+      "include-component-in-tag": true,
+      "skip-github-release": true,
+      "skip-changelog": true
     },
     "presentation/mcp": {
       "release-type": "rust",
       "component": "mods-mcp",
       "package-name": "mods-mcp",
+      "include-component-in-tag": true,
       "skip-github-release": true,
       "skip-changelog": true
     }

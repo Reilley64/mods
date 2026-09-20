@@ -7,6 +7,7 @@ const internalComponents = {
   "infrastructure/archive": "archive",
   "infrastructure/execution": "execution",
   "infrastructure/dependencies": "infrastructure",
+  "presentation/cli": "mods-cli",
   "presentation/mcp": "mods-mcp",
 } as const;
 
