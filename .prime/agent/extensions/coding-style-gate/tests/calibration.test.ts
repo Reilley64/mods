@@ -12,8 +12,8 @@ describe("coding style calibration corpus", () => {
 
 		expect(names.size).toBe(calibrationCases.length);
 		expect(calibrationCases.every((calibrationCase) => ruleIds.has(calibrationCase.ruleId))).toBeTrue();
-		expect(calibrationCases.filter((calibrationCase) => calibrationCase.expectedViolation)).toHaveLength(15);
-		expect(calibrationCases.filter((calibrationCase) => !calibrationCase.expectedViolation)).toHaveLength(15);
+		expect(calibrationCases.filter((calibrationCase) => calibrationCase.expectedViolation)).toHaveLength(16);
+		expect(calibrationCases.filter((calibrationCase) => !calibrationCase.expectedViolation)).toHaveLength(16);
 		for (const ruleId of new Set(calibrationCases.map((calibrationCase) => calibrationCase.ruleId))) {
 			const labels = calibrationCases.filter((calibrationCase) => calibrationCase.ruleId === ruleId);
 			expect(labels.some((calibrationCase) => calibrationCase.expectedViolation)).toBeTrue();

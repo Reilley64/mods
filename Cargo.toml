@@ -1,15 +1,15 @@
 [workspace]
 members = [
-  "domain",
-  "application",
-  "infrastructure/environment",
-  "infrastructure/settings",
-  "infrastructure/game_platform",
-  "infrastructure/archive",
-  "infrastructure/execution",
-  "infrastructure/dependencies",
-  "presentation/cli",
-  "presentation/mcp",
+  "src/domain",
+  "src/application",
+  "src/infrastructure/environment",
+  "src/infrastructure/settings",
+  "src/infrastructure/game_platform",
+  "src/infrastructure/archive",
+  "src/infrastructure/execution",
+  "src/infrastructure/dependencies",
+  "src/presentation/cli",
+  "src/presentation/mcp",
 ]
 resolver = "3"
 

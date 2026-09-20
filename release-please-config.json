@@ -23,63 +23,63 @@
       "include-component-in-tag": false,
       "skip-github-release": false
     },
-    "domain": {
+    "src/domain": {
       "release-type": "rust",
       "component": "domain",
       "package-name": "domain",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "application": {
+    "src/application": {
       "release-type": "rust",
       "component": "application",
       "package-name": "application",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "infrastructure/environment": {
+    "src/infrastructure/environment": {
       "release-type": "rust",
       "component": "environment",
       "package-name": "environment",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "infrastructure/settings": {
+    "src/infrastructure/settings": {
       "release-type": "rust",
       "component": "settings",
       "package-name": "settings",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "infrastructure/game_platform": {
+    "src/infrastructure/game_platform": {
       "release-type": "rust",
       "component": "game-platform",
       "package-name": "game-platform",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "infrastructure/archive": {
+    "src/infrastructure/archive": {
       "release-type": "rust",
       "component": "archive",
       "package-name": "archive",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "infrastructure/execution": {
+    "src/infrastructure/execution": {
       "release-type": "rust",
       "component": "execution",
       "package-name": "execution",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "infrastructure/dependencies": {
+    "src/infrastructure/dependencies": {
       "release-type": "rust",
       "component": "infrastructure",
       "package-name": "infrastructure",
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "presentation/cli": {
+    "src/presentation/cli": {
       "release-type": "rust",
       "component": "mods-cli",
       "package-name": "mods",
@@ -87,7 +87,7 @@
       "skip-github-release": true,
       "skip-changelog": true
     },
-    "presentation/mcp": {
+    "src/presentation/mcp": {
       "release-type": "rust",
       "component": "mods-mcp",
       "package-name": "mods-mcp",

@@ -43,7 +43,7 @@ afterAll(() => {
 
 const changes: RustChange[] = [
 	{
-		path: "application/src/example.rs",
+		path: "src/application/src/example.rs",
 		before: "fn run() {}\n",
 		after: "// Run the function.\nfn run() {}\n",
 		patch: "@@ -1 +1,2 @@\n+// Run the function.\n fn run() {}\n",
@@ -84,17 +84,17 @@ describe("Jev coding style review", () => {
 		const report = await reviewChanges(client, changes, rules, {
 			model: "jev-test",
 			threshold: 0.8,
-			moduleReferences: new Map([["application/src/example.rs", ["application/src/caller.rs"]]]),
+			moduleReferences: new Map([["src/application/src/example.rs", ["src/application/src/caller.rs"]]]),
 		});
 
 		expect(requests).toHaveLength(1);
 		expect(requests[0]).toMatchObject({
 			state: {
-				file: "application/src/example.rs",
+				file: "src/application/src/example.rs",
 				patch: changes[0]?.patch,
 				change_kind: "modified",
 				declares_file_named_entry_point: false,
-				module_referencing_files: ["application/src/caller.rs"],
+				module_referencing_files: ["src/application/src/caller.rs"],
 			},
 		});
 		expect((requests[0] as { state: Record<string, unknown> }).state).not.toHaveProperty("current_source");
@@ -120,7 +120,7 @@ describe("Jev coding style review", () => {
 			filesReviewed: 1,
 			findings: [
 				{
-					file: "application/src/example.rs",
+					file: "src/application/src/example.rs",
 					probability: 0.91,
 					rule: rules[0],
 				},

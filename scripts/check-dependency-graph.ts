@@ -61,8 +61,8 @@ export function validateProjectGraph(metadata: CargoMetadata): string[] {
   }
 
   for (const [name, expectedPath] of [
-    ["mods", "presentation/cli/Cargo.toml"],
-    ["mods-mcp", "presentation/mcp/Cargo.toml"],
+    ["mods", "src/presentation/cli/Cargo.toml"],
+    ["mods-mcp", "src/presentation/mcp/Cargo.toml"],
   ] as const) {
     const packageMetadata = packages.get(name);
     if (!packageMetadata) continue;

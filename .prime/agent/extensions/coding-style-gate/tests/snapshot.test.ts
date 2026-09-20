@@ -65,34 +65,34 @@ describe("Rust filesystem snapshots", () => {
 
 	test("finds repository files that reference a changed module name", () => {
 		const snapshot = new Map([
-			["application/src/installation/mod.rs", "mod fomod;\nmod install_archive;\n"],
-			["application/src/installation/install_archive.rs", "use super::fomod;\nfn run() { fomod::evaluate(); }\n"],
-			["application/src/installation/fomod.rs", "pub(super) fn evaluate() {}\n"],
-			["application/src/settings/mod.rs", "mod types;\nstruct FomodInstaller;\n"],
-			["infrastructure/archive/src/lib.rs", "mod fomod;\n"],
+			["src/application/src/installation/mod.rs", "mod fomod;\nmod install_archive;\n"],
+			["src/application/src/installation/install_archive.rs", "use super::fomod;\nfn run() { fomod::evaluate(); }\n"],
+			["src/application/src/installation/fomod.rs", "pub(super) fn evaluate() {}\n"],
+			["src/application/src/settings/mod.rs", "mod types;\nstruct FomodInstaller;\n"],
+			["src/infrastructure/archive/src/lib.rs", "mod fomod;\n"],
 		]);
 
-		expect(findModuleReferencingFiles(snapshot, "application/src/installation/fomod.rs")).toEqual([
-			"application/src/installation/install_archive.rs",
-			"application/src/installation/mod.rs",
+		expect(findModuleReferencingFiles(snapshot, "src/application/src/installation/fomod.rs")).toEqual([
+			"src/application/src/installation/install_archive.rs",
+			"src/application/src/installation/mod.rs",
 		]);
 	});
 
 
 	test("does not infer current module references for a deleted path", () => {
 		const snapshot = new Map([
-			["application/src/installation/install_archive.rs", "mod fomod;\n"],
-			["application/src/installation/install_archive/fomod.rs", "pub(super) fn evaluate() {}\n"],
+			["src/application/src/installation/install_archive.rs", "mod fomod;\n"],
+			["src/application/src/installation/install_archive/fomod.rs", "pub(super) fn evaluate() {}\n"],
 		]);
 
-		expect(findModuleReferencingFiles(snapshot, "application/src/installation/fomod.rs")).toEqual([]);
+		expect(findModuleReferencingFiles(snapshot, "src/application/src/installation/fomod.rs")).toEqual([]);
 	});
 
 
 	test("recognizes a public function matching its use-case file name", () => {
 		expect(
 			declaresFileNamedEntryPoint({
-				path: "application/src/settings/get_setting.rs",
+				path: "src/application/src/settings/get_setting.rs",
 				before: "",
 				after: "pub async fn get_setting() {}\n",
 				patch: "",
@@ -100,7 +100,7 @@ describe("Rust filesystem snapshots", () => {
 		).toBeTrue();
 		expect(
 			declaresFileNamedEntryPoint({
-				path: "application/src/installation/fomod.rs",
+				path: "src/application/src/installation/fomod.rs",
 				before: "",
 				after: "pub(super) fn evaluate() {}\n",
 				patch: "",

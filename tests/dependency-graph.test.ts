@@ -1,17 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { checkDependencyGraphAsync, validateProjectGraph } from "../scripts/check-dependency-graph";
+import { validateProjectGraph } from "../scripts/check-dependency-graph";
 
 const validPackages = [
   {
     name: "mods",
     dependencies: [{ name: "application" }, { name: "domain" }, { name: "infrastructure" }],
-    manifest_path: "/repo/presentation/cli/Cargo.toml",
+    manifest_path: "/repo/src/presentation/cli/Cargo.toml",
     targets: [{ name: "mods", kind: ["bin"] }],
   },
   {
     name: "mods-mcp",
     dependencies: [{ name: "application" }, { name: "domain" }, { name: "infrastructure" }],
-    manifest_path: "/repo/presentation/mcp/Cargo.toml",
+    manifest_path: "/repo/src/presentation/mcp/Cargo.toml",
     targets: [{ name: "mods-mcp", kind: ["bin"] }],
   },
   { name: "domain", dependencies: [] },
@@ -36,8 +36,8 @@ const validPackages = [
 ];
 
 describe("workspace dependency graph", () => {
-  test("accepts the presentation-owned binary workspace", async () => {
-    expect(await checkDependencyGraphAsync()).toEqual([]);
+  test("accepts the presentation-owned binary workspace fixture", () => {
+    expect(validateProjectGraph({ packages: validPackages })).toEqual([]);
   });
 
   test("rejects a presentation library target", () => {

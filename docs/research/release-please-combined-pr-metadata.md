@@ -6,7 +6,7 @@ This note evaluates whether `googleapis/release-please` 17.6.0 can produce one C
 
 1. one combined manifest release PR;
 2. the PR title contains the version of the public `mods` crate;
-3. the PR body labels the `presentation/cli` entry as `mods`;
+3. the PR body labels the `src/presentation/cli` entry as `mods`;
 4. the public tag is `vX.Y.Z`, not `mods-vX.Y.Z`;
 5. internal crates retain independent versions and component-prefixed bookkeeping tags; and
 6. only `mods` creates a public GitHub Release and the root `CHANGELOG.md`.
@@ -27,7 +27,7 @@ The relevant v17.6.0 source commit is [`712fcf01effd08d7b0e7b1fd3861f2cb388bc8d1
 The accepted repository model changes the release ownership rather than extending release-please:
 
 - `.` is a `simple` aggregate product package with its own version in `version.txt`. It owns the root `CHANGELOG.md`, public `vX.Y.Z` tag, and GitHub Release.
-- `presentation/cli` and `presentation/mcp` are equal internal presentation packages. Their components are `mods-cli` and `mods-mcp`; both skip changelogs and GitHub Releases and receive component-prefixed bookkeeping tags.
+- `src/presentation/cli` and `src/presentation/mcp` are equal internal presentation packages. Their components are `mods-cli` and `mods-mcp`; both skip changelogs and GitHub Releases and receive component-prefixed bookkeeping tags.
 - The aggregate product version is intentionally independent from both presentation-package versions and is calculated from repository-wide release-worthy commits.
 - `cargo-workspace` uses `merge: false`. It still computes Cargo dependency updates, while the final manifest merge produces the one combined release PR. This avoids a Cargo-generated root candidate shadowing the real aggregate root candidate.
 
@@ -42,7 +42,7 @@ The pre-change repository config used:
 - `separate-pull-requests: false`, which requests one manifest PR;
 - `cargo-workspace` with `updateAllPackages: false`, which preserves independent package versions while still patch-bumping affected dependents and updating the lockfile. This is the officially recommended manifest setup for a Cargo monorepo ([Cargo workspace plugin docs](https://github.com/googleapis/release-please/blob/v17.6.0/docs/manifest-releaser.md#cargo-workspace));
 - `skip-github-release: true` and `skip-changelog: true` for internal crates;
-- `presentation/cli` as package/component `mods`, with the root changelog and `include-component-in-tag: false`; and
+- `src/presentation/cli` as package/component `mods`, with the root changelog and `include-component-in-tag: false`; and
 - repository workflow code that creates the component-prefixed internal bookkeeping tags which release-please still expects when GitHub Releases are skipped. The schema explicitly warns that `skip-github-release` still requires another system to create tags ([schema lines 57-63](https://github.com/googleapis/release-please/blob/v17.6.0/schemas/config.json#L57-L63); [manifest docs lines 223-231](https://github.com/googleapis/release-please/blob/v17.6.0/docs/manifest-releaser.md#L223-L231)).
 
 Those settings were sufficient for constraints 1, 5, and 6, and for the public tag shape in constraint 4. They were not sufficient for constraints 2 and 3.
@@ -53,7 +53,7 @@ Those settings were sufficient for constraints 1, 5, and 6, and for the public t
 
 When `separate-pull-requests` is false, `Manifest.buildPullRequests()` appends its internal `Merge` plugin after all configured plugins ([source](https://github.com/googleapis/release-please/blob/v17.6.0/src/manifest.ts#L798-L840)). `Merge` unions each candidate's updates, release data, and labels, but records a candidate as the metadata source only when `candidate.path === '.'`. It then renders the group title from that root candidate's component and version; without one, both values are `undefined` ([source](https://github.com/googleapis/release-please/blob/v17.6.0/src/plugins/merge.ts#L90-L143)).
 
-The official docs say the same thing: `${scope}`, `${component}`, and `${version}` in `group-pull-request-title-pattern` are inherited from the `.` package, if present ([docs lines 253-259](https://github.com/googleapis/release-please/blob/v17.6.0/docs/manifest-releaser.md#L253-L259)). `presentation/cli` is not `.`. Therefore changing only the group title template can change the surrounding text, but it cannot supply the public version. `${version}` renders as an empty string because missing title fields are converted to empty strings during rendering ([source](https://github.com/googleapis/release-please/blob/v17.6.0/src/util/pull-request-title.ts#L194-L220)).
+The official docs say the same thing: `${scope}`, `${component}`, and `${version}` in `group-pull-request-title-pattern` are inherited from the `.` package, if present ([docs lines 253-259](https://github.com/googleapis/release-please/blob/v17.6.0/docs/manifest-releaser.md#L253-L259)). `src/presentation/cli` is not `.`. Therefore changing only the group title template can change the surrounding text, but it cannot supply the public version. `${version}` renders as an empty string because missing title fields are converted to empty strings during rendering ([source](https://github.com/googleapis/release-please/blob/v17.6.0/src/util/pull-request-title.ts#L194-L220)).
 
 Adding a synthetic `.` package is not a good configuration-only escape hatch. The special root path is a real release package, not an alias for another package ([docs lines 455-466](https://github.com/googleapis/release-please/blob/v17.6.0/docs/manifest-releaser.md#L455-L466)). It would introduce its own version/release semantics, and this workspace root has no Rust `[package]` version to act as the `mods` crate version. Linking a synthetic root version to `mods` adds bookkeeping and still does not solve the component/tag coupling below.
 
@@ -127,7 +127,7 @@ If the CLI crate itself must again own the public release while retaining the or
 
 ### 1. A `public-rust` release type
 
-Derive from the v17.6.0 Rust strategy (the published package includes `build/src`, so a version-pinned internal subpath import is possible). Keep the inherited `getComponent()` behavior unchanged so public tag/release discovery continues to map componentless `vX.Y.Z` tags to `presentation/cli`.
+Derive from the v17.6.0 Rust strategy (the published package includes `build/src`, so a version-pinned internal subpath import is possible). Keep the inherited `getComponent()` behavior unchanged so public tag/release discovery continues to map componentless `vX.Y.Z` tags to `src/presentation/cli`.
 
 Override only the PR/release boundary:
 
@@ -136,7 +136,7 @@ Override only the PR/release boundary:
 
 The first override provides the desired human metadata. The second presents the stock base release parser with the componentless datum it expects, after which the stock code still constructs `vX.Y.Z` because `include-component-in-tag` remains false. Keep this adapter narrow and cover both methods with fixtures using a realistic combined body.
 
-Register it with `registerReleaseType('public-rust', ...)`, and use that release type only for `presentation/cli`. Internal packages remain ordinary `rust` strategies.
+Register it with `registerReleaseType('public-rust', ...)`, and use that release type only for `src/presentation/cli`. Internal packages remain ordinary `rust` strategies.
 
 ### 2. A `public-manifest-metadata` plugin
 
@@ -172,10 +172,10 @@ The resulting combined PR should have a title such as `chore(main): release mods
 Pin fixture tests to 17.6.0 and assert all of the following:
 
 1. a multi-crate change builds exactly one PR;
-2. its rendered title contains the `presentation/cli` manifest version;
+2. its rendered title contains the `src/presentation/cli` manifest version;
 3. its body contains exactly one `mods: VERSION` summary;
 4. every internal body summary still maps to its own version;
-5. feeding the rendered PR back through `Manifest.buildReleases()` yields exactly one candidate release, at path `presentation/cli`, with tag `vVERSION` and the `mods` notes;
+5. feeding the rendered PR back through `Manifest.buildReleases()` yields exactly one candidate release, at path `src/presentation/cli`, with tag `vVERSION` and the `mods` notes;
 6. no internal candidate release is created because its strategy is skipped;
 7. the root changelog is the only changelog update;
 8. previous public `vVERSION` and internal component tags are found on the next run; and

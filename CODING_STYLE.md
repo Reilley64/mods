@@ -241,14 +241,14 @@ The workspace dependency graph and package inventory match the approved directio
 #### Bad example
 
 ```rust
-// domain/src/path.rs
+// src/domain/src/path.rs
 use windows::Win32::Storage::FileSystem::WIN32_FILE_ATTRIBUTE_DATA;
 ```
 
 #### Good example
 
 ```rust
-// infrastructure/environment/src/path.rs
+// src/infrastructure/environment/src/path.rs
 use windows::Win32::Storage::FileSystem::WIN32_FILE_ATTRIBUTE_DATA;
 ```
 
@@ -477,36 +477,36 @@ When nontrivial production logic serves exactly one use case and earns extractio
 
 #### Violation
 
-`state.change_kind` is `added` or `modified`, `state.file` is under `application/src/`, `state.declares_file_named_entry_point` is false, the file is a helper or implementation module rather than the owning use-case entry point or a capability interface module such as `mod.rs`, `types.rs`, or `ports.rs`, the file sits directly in a capability directory, and `state.module_referencing_files` shows only the capability's module declaration plus one owning use-case file. A generic `lib`, `utils`, or `common` path or exposure outside the use-case parent is also a violation.
+`state.change_kind` is `added` or `modified`, `state.file` is under `src/application/src/`, the file contains nontrivial production logic, `state.declares_file_named_entry_point` is false, the file is a helper or implementation module rather than the owning use-case entry point or a capability interface module such as `mod.rs`, `types.rs`, or `ports.rs`, the file sits directly in a capability directory, and `state.module_referencing_files` shows only the capability's module declaration plus one owning use-case file. A generic `lib`, `utils`, or `common` path or exposure outside the use-case parent is also a violation.
 
 #### Compliant
 
-The owning use-case entry-point file itself remains directly in the capability directory. It normally declares a public function matching the file name, which makes `state.declares_file_named_entry_point` true. Its single-use helpers are nested under its same-named directory. A precise private capability sibling is also compliant when `state.module_referencing_files` shows repeated use-case callers. Deleting an old capability-level helper while moving it under its owning use case is compliant. The rule does not apply outside `application/src/`. Capability interface modules such as `mod.rs`, `types.rs`, and `ports.rs` remain at capability level; shared public types remain there.
+The owning use-case entry-point file itself remains directly in the capability directory. It normally declares a public function matching the file name, which makes `state.declares_file_named_entry_point` true. Its single-use helpers are nested under its same-named directory. A precise private capability sibling is also compliant when `state.module_referencing_files` shows repeated use-case callers. Deleting an old capability-level helper while moving it under its owning use case is compliant. Empty placeholder files contain no production logic and are outside this rule. The rule does not apply outside `src/application/src/`. Capability interface modules such as `mod.rs`, `types.rs`, and `ports.rs` remain at capability level; shared public types remain there.
 
 #### Bad example
 
 ```text
-file: application/src/installation/fomod.rs
+file: src/application/src/installation/fomod.rs
 module_referencing_files:
-  - application/src/installation/mod.rs
-  - application/src/installation/install_archive.rs
+  - src/application/src/installation/mod.rs
+  - src/application/src/installation/install_archive.rs
 ```
 
 #### Good example
 
 ```text
-file: application/src/installation/install_archive/fomod.rs
+file: src/application/src/installation/install_archive/fomod.rs
 module_referencing_files:
-  - application/src/installation/install_archive.rs
+  - src/application/src/installation/install_archive.rs
 
 or the owning use-case entry point:
 
-file: application/src/installation/install_archive.rs
+file: src/application/src/installation/install_archive.rs
 patch: pub async fn install_archive(dependencies: InstallArchiveDependencies, input: InstallArchiveInput) -> Result<InstallArchiveOutput, InstallArchiveError>
 
 or a capability interface module:
 
-file: application/src/installation/types.rs
+file: src/application/src/installation/types.rs
 patch: pub struct InstallArchiveInput; pub struct InstallArchiveOutput;
 ```
 
@@ -967,7 +967,7 @@ New tests and their fixtures are colocated with the owned behavior.
 #### Bad example
 
 ```text
-application/tests/install_archive.rs
+src/application/tests/install_archive.rs
 ```
 
 #### Good example
@@ -1028,14 +1028,14 @@ Unsafe operations are confined to a dedicated allowed module with a safe outward
 #### Bad example
 
 ```rust
-// domain/src/path.rs
+// src/domain/src/path.rs
 let value = unsafe { external_value() };
 ```
 
 #### Good example
 
 ```rust
-// infrastructure/windows/src/file_version.rs
+// src/infrastructure/windows/src/file_version.rs
 pub fn file_version(path: &Path) -> Result<FileVersion> {
 	let value = unsafe { read_version_resource(path)? };
 	Ok(value)
