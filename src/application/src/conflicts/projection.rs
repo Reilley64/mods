@@ -76,8 +76,10 @@ pub(super) async fn project_inspection(
 	}) else {
 		return Err(report!(ErrorMarker::mod_not_found()));
 	};
+
 	let enabled = provider.enabled;
 	let identity = provider.identity.clone();
+
 	let ProviderIdentity::DataMod {
 		mod_name: canonical_mod_name,
 		..
@@ -86,6 +88,7 @@ pub(super) async fn project_inspection(
 		return Err(report!(ErrorMarker::mod_not_found()));
 	};
 	let canonical_mod_name = canonical_mod_name.clone();
+
 	let projection = if enabled {
 		Projection::actual(scan)
 	} else {
@@ -96,6 +99,7 @@ pub(super) async fn project_inspection(
 	} else {
 		Participation::Hypothetical
 	};
+
 	let rows = projection
 		.rows(compare_content, &read_content, &cancellation, Some(&identity))
 		.await?;
@@ -251,6 +255,7 @@ impl Projection {
 		} else {
 			Participation::Active
 		};
+
 		let mut providers = Vec::new();
 		for mut provider in scan.providers {
 			let selected = hypothetical.is_some_and(|identity| identity == &provider.identity);
@@ -275,11 +280,14 @@ impl Projection {
 			}
 			providers.push(provider);
 		}
+
 		providers.sort_by_key(|provider| provider.identity.rank());
+
 		let mut problems = scan.problems;
 		for provider in &providers {
 			problems.extend(provider.problems.iter().cloned());
 		}
+
 		let files = providers
 			.iter()
 			.flat_map(|provider| provider.files.iter().cloned())
@@ -301,9 +309,11 @@ impl Projection {
 				})
 				.then_with(|| compare_utf16(left.path().as_str(), right.path().as_str()))
 		});
+
 		append_structural_problems(&files, &directories, &mut problems);
 		problems.sort_by(compare_problems);
 		problems.dedup();
+
 		Self {
 			files,
 			directories,

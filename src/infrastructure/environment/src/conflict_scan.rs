@@ -44,6 +44,10 @@ use toml::Value;
 use toml::from_str;
 
 const UTF8_BOM: &[u8] = &[0xef, 0xbb, 0xbf];
+#[cfg(windows)]
+const WINDOWS_ERROR_SHARING_VIOLATION: i32 = 32;
+#[cfg(windows)]
+const WINDOWS_ERROR_LOCK_VIOLATION: i32 = 33;
 
 pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result<EnvironmentConflictScan, ErrorMarker> {
 	if cancellation.is_cancelled() {
@@ -189,7 +193,7 @@ pub(crate) fn read_content(
 		if components.peek().is_none() {
 			let metadata = match current.symlink_metadata(component) {
 				Ok(metadata) => metadata,
-				Err(error) if error.current_context().kind() == io::ErrorKind::PermissionDenied => {
+				Err(error) if content_access_is_unavailable(error.current_context()) => {
 					return Ok(ConflictContentRead::Unavailable);
 				}
 				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
@@ -199,7 +203,7 @@ pub(crate) fn read_content(
 			}
 			let file = match current.open_regular(component) {
 				Ok(file) => file,
-				Err(error) if error.current_context().kind() == io::ErrorKind::PermissionDenied => {
+				Err(error) if content_access_is_unavailable(error.current_context()) => {
 					return Ok(ConflictContentRead::Unavailable);
 				}
 				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
@@ -209,6 +213,24 @@ pub(crate) fn read_content(
 		current = current.open_dir(component).context(ErrorMarker::io_failure())?;
 	}
 	Err(report!(ErrorMarker::io_failure()))
+}
+
+fn content_access_is_unavailable(error: &io::Error) -> bool {
+	if error.kind() == io::ErrorKind::PermissionDenied {
+		return true;
+	}
+
+	#[cfg(windows)]
+	{
+		matches!(
+			error.raw_os_error(),
+			Some(WINDOWS_ERROR_SHARING_VIOLATION | WINDOWS_ERROR_LOCK_VIOLATION)
+		)
+	}
+	#[cfg(not(windows))]
+	{
+		false
+	}
 }
 
 fn empty_provider(identity: ProviderIdentity, enabled: bool) -> ScannedConflictProvider {
@@ -284,6 +306,10 @@ fn parse_modlist(bytes: &[u8]) -> (Vec<InstalledMod>, Vec<ConflictProblem>) {
 				continue;
 			}
 		};
+		if name.trim() != name {
+			problems.push(modlist_problem());
+			continue;
+		}
 		let Ok(name) = ModName::new(name.to_owned()) else {
 			problems.push(modlist_problem());
 			continue;
@@ -711,6 +737,9 @@ fn path_problem(kind: ConflictProblemKind, path: &DataRelativePath) -> ConflictP
 	reason = "fixture construction and output assertions require known-success values"
 )]
 mod tests {
+	#[cfg(windows)]
+	use super::content_access_is_unavailable;
+	use super::parse_modlist;
 	use super::read_content;
 	use super::scan;
 	use crate::EnvironmentAdapter;
@@ -731,6 +760,8 @@ mod tests {
 	use std::env::current_dir;
 	use std::error::Error;
 	use std::fs;
+	#[cfg(windows)]
+	use std::io::Error as IoError;
 	use std::io::ErrorKind;
 	#[cfg(unix)]
 	use std::os::unix::fs::symlink;
@@ -842,6 +873,28 @@ mod tests {
 			4
 		);
 		Ok(())
+	}
+
+	#[test]
+	fn modlist_rejects_surrounding_name_whitespace() {
+		let (installed, problems) = parse_modlist(b"+ Visuals\n-Trailing \n");
+
+		assert!(installed.is_empty());
+		assert_eq!(problems.len(), 2);
+		assert!(problems
+			.iter()
+			.all(|problem| problem.kind == ConflictProblemKind::ModlistInvalid));
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn windows_sharing_and_lock_violations_are_content_unavailability() {
+		assert!(content_access_is_unavailable(&IoError::from_raw_os_error(
+			super::WINDOWS_ERROR_SHARING_VIOLATION
+		)));
+		assert!(content_access_is_unavailable(&IoError::from_raw_os_error(
+			super::WINDOWS_ERROR_LOCK_VIOLATION
+		)));
 	}
 
 	#[test]
