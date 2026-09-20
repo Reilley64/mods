@@ -89,7 +89,7 @@ pub(super) async fn project_inspection(
 	let projection = if enabled {
 		Projection::actual(scan)
 	} else {
-		Projection::hypothetical(scan, &identity)
+		Projection::from_scan(scan, Some(&identity))
 	};
 	let participation = if enabled {
 		Participation::Active
@@ -121,6 +121,7 @@ pub(super) async fn project_path(
 	let projection = Projection::actual(scan);
 	let resolution_status = projection.resolution_status();
 	let resolved = projection.resolve(path.comparison_key());
+
 	let provider_stack = {
 		let mut providers = resolved
 			.unsuppressed
@@ -128,15 +129,22 @@ pub(super) async fn project_path(
 			.chain(resolved.suppressed.iter().map(|(file, _)| file))
 			.map(|file| file.provider.clone())
 			.collect::<Vec<_>>();
+		providers.extend(projection
+			.directories
+			.iter()
+			.filter(|directory| directory.original_path().comparison_key() == path.comparison_key())
+			.cloned());
 		sort_provider_references(&mut providers);
 		providers
 	};
+
 	let controlling_tombstone = projection
 		.tombstones
 		.iter()
 		.filter(|tombstone| tombstone_applies(tombstone, path.comparison_key()))
 		.max_by_key(|tombstone| tombstone.owner.rank())
 		.cloned();
+
 	let effective_result = if resolution_status == ResolutionStatus::Exact {
 		Some(if let Some(winner) = resolved.unsuppressed.first() {
 			EffectiveResult::File(winner.provider.clone())
@@ -148,6 +156,7 @@ pub(super) async fn project_path(
 	} else {
 		None
 	};
+
 	let display_path = match &effective_result {
 		Some(EffectiveResult::File(provider)) => provider.original_path().clone(),
 		Some(EffectiveResult::Absent {
@@ -157,12 +166,14 @@ pub(super) async fn project_path(
 			.first()
 			.map_or_else(|| path.clone(), |provider| provider.original_path().clone()),
 	};
+
 	let losing = resolved.unsuppressed.iter().skip(1).cloned().collect::<Vec<_>>();
 	let content_comparisons = if let Some(winner) = resolved.unsuppressed.first() {
 		compare_files(winner, &losing, compare_content, &read_content, &cancellation).await?
 	} else {
 		Vec::new()
 	};
+
 	let mut reasons = Vec::new();
 	if resolution_status == ResolutionStatus::Invalid {
 		reasons.push(ResolutionReason::NamespaceInvalid);
@@ -183,6 +194,7 @@ pub(super) async fn project_path(
 	} else {
 		reasons.push(ResolutionReason::AbsentNoEntry);
 	}
+
 	let tombstone_effects = projection.tombstone_effects(path.comparison_key(), &resolved);
 	for effect in &tombstone_effects {
 		match effect {
@@ -231,10 +243,6 @@ pub(super) async fn project_path(
 impl Projection {
 	fn actual(scan: EnvironmentConflictScan) -> Self {
 		Self::from_scan(scan, None)
-	}
-
-	fn hypothetical(scan: EnvironmentConflictScan, selected: &ProviderIdentity) -> Self {
-		Self::from_scan(scan, Some(selected))
 	}
 
 	fn from_scan(scan: EnvironmentConflictScan, hypothetical: Option<&ProviderIdentity>) -> Self {
@@ -345,6 +353,7 @@ impl Projection {
 		if self.resolution_status() == ResolutionStatus::Invalid {
 			return Ok(Vec::new());
 		}
+
 		let mut keys = self
 			.files
 			.iter()
@@ -352,11 +361,9 @@ impl Projection {
 			.collect::<Vec<_>>();
 		keys.sort_by(|left, right| compare_utf16(left, right));
 		keys.dedup();
+
 		let mut rows = Vec::new();
 		for key in keys {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
 			let resolved = self.resolve(&key);
 			let non_base = resolved
 				.unsuppressed
@@ -364,29 +371,30 @@ impl Projection {
 				.filter(|file| file.provider.class() != ProviderClass::SteamData)
 				.cloned()
 				.collect::<Vec<_>>();
-			if non_base.len() >= 2 {
-				let winner = &non_base[0];
-				let losers = non_base.iter().skip(1).cloned().collect::<Vec<_>>();
-				let selected_participates = selected.is_none_or(|identity| {
-					&winner.provider.identity() == identity
-						|| losers.iter().any(|loser| &loser.provider.identity() == identity)
-				});
-				if !selected_participates {
-					continue;
-				}
-				let content_comparisons =
-					compare_files(winner, &losers, compare_content, read_content, cancellation)
-						.await?;
-				rows.push(ConflictRow::OrdinaryConflict {
-					normalized_key: key,
-					display_path: winner.provider.original_path().clone(),
-					participation: self.participation,
-					effective_file: winner.provider.clone(),
-					losing_files: losers.into_iter().map(|file| file.provider).collect(),
-					content_comparisons,
-				});
+			if non_base.len() < 2 {
+				continue;
 			}
+			let winner = &non_base[0];
+			let losers = non_base.iter().skip(1).cloned().collect::<Vec<_>>();
+			let selected_participates = selected.is_none_or(|identity| {
+				&winner.provider.identity() == identity
+					|| losers.iter().any(|loser| &loser.provider.identity() == identity)
+			});
+			if !selected_participates {
+				continue;
+			}
+			let content_comparisons =
+				compare_files(winner, &losers, compare_content, read_content, cancellation).await?;
+			rows.push(ConflictRow::OrdinaryConflict {
+				normalized_key: key,
+				display_path: winner.provider.original_path().clone(),
+				participation: self.participation,
+				effective_file: winner.provider.clone(),
+				losing_files: losers.into_iter().map(|file| file.provider).collect(),
+				content_comparisons,
+			});
 		}
+
 		for tombstone in &self.tombstones {
 			let mut suppressed_entries = self
 				.files
@@ -418,7 +426,9 @@ impl Projection {
 				suppressed_entries,
 			});
 		}
+
 		rows.sort_by(compare_rows);
+
 		Ok(rows)
 	}
 
@@ -711,13 +721,9 @@ fn sort_provider_references(values: &mut [ProviderReference]) {
 }
 
 fn compare_problems(left: &ConflictProblem, right: &ConflictProblem) -> Ordering {
-	problem_kind_order(left.kind)
-		.cmp(&problem_kind_order(right.kind))
+	(left.kind as u8)
+		.cmp(&(right.kind as u8))
 		.then_with(|| compare_problem_scopes(&left.scope, &right.scope))
-}
-
-fn problem_kind_order(kind: ConflictProblemKind) -> u8 {
-	kind as u8
 }
 
 fn compare_problem_scopes(left: &ProblemScope, right: &ProblemScope) -> Ordering {
@@ -818,8 +824,10 @@ mod tests {
 	use crate::conflicts::EnvironmentConflictScan;
 	use crate::conflicts::IndexedConflictFile;
 	use crate::conflicts::IndexedConflictFileId;
+	use crate::conflicts::InspectModConflictsOutput;
 	use crate::conflicts::ScannedConflictProvider;
 	use crate::ports::PortFuture;
+	use crate::ports::ReadConflictContent;
 	use domain::ConflictProblem;
 	use domain::ConflictProblemKind;
 	use domain::ConflictRow;
@@ -929,7 +937,7 @@ mod tests {
 		}
 	}
 
-	fn content_port(calls: Arc<AtomicUsize>) -> crate::ports::ReadConflictContent {
+	fn content_port(calls: Arc<AtomicUsize>) -> ReadConflictContent {
 		Arc::new(move |_, _| {
 			calls.fetch_add(1, Ordering::SeqCst);
 			Box::pin(async {
@@ -957,7 +965,7 @@ mod tests {
 		name: &str,
 		compare_content: bool,
 		calls: Arc<AtomicUsize>,
-	) -> Result<crate::conflicts::InspectModConflictsOutput, ErrorMarker> {
+	) -> Result<InspectModConflictsOutput, ErrorMarker> {
 		project_inspection(
 			scan,
 			mod_name(name),
@@ -1335,7 +1343,7 @@ mod tests {
 			],
 			problems: Vec::new(),
 		};
-		let unavailable: crate::ports::ReadConflictContent = Arc::new(|id, _| {
+		let unavailable: ReadConflictContent = Arc::new(|id, _| {
 			Box::pin(async move {
 				if id.identity().rank() == ProviderRank::Regular(ModPriority::new(0)) {
 					Ok(ConflictContentRead::Unavailable)
@@ -1348,7 +1356,7 @@ mod tests {
 		});
 		let unavailable_output =
 			project_list(scan.clone(), true, unavailable, CancellationToken::new()).await?;
-		let different: crate::ports::ReadConflictContent = Arc::new(|id, _| {
+		let different: ReadConflictContent = Arc::new(|id, _| {
 			Box::pin(async move {
 				let value = if id.identity().rank() == ProviderRank::Regular(ModPriority::new(0)) {
 					"a"
@@ -1435,6 +1443,49 @@ mod tests {
 		assert_eq!(actual.resolution_status, ResolutionStatus::Exact);
 		assert_eq!(inspected.resolution_status, ResolutionStatus::Invalid);
 		assert_eq!(inspected.mod_name.as_str(), "Disabled");
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn explanation_includes_complete_directory_provenance_and_canonical_display_spelling()
+	-> Result<(), ErrorMarker> {
+		let mut base = fixed_provider(ProviderIdentity::SteamData, true, Vec::new());
+		base.directories.push(ProviderReference::SteamData {
+			original_path: path("TEXTURES"),
+		});
+		let mut lower = provider("Lower", 0, true, Vec::new(), Vec::new());
+		lower.directories.push(ProviderReference::DataMod {
+			mod_name: mod_name("Lower"),
+			priority: ModPriority::new(0),
+			original_path: path("textures"),
+			participation_reason: ParticipationReason::EnabledMod,
+		});
+		let mut higher = provider("Higher", 1, true, Vec::new(), Vec::new());
+		higher.directories.push(ProviderReference::DataMod {
+			mod_name: mod_name("Higher"),
+			priority: ModPriority::new(1),
+			original_path: path("Textures"),
+			participation_reason: ParticipationReason::EnabledMod,
+		});
+		let scan = EnvironmentConflictScan {
+			providers: vec![base, lower, higher],
+			problems: Vec::new(),
+		};
+
+		let output = project_path(
+			scan,
+			path("TeXtUrEs"),
+			false,
+			content_port(Arc::new(AtomicUsize::new(0))),
+			CancellationToken::new(),
+		)
+		.await?;
+
+		assert_eq!(output.display_path.as_str(), "Textures");
+		assert_eq!(output.provider_stack.len(), 3);
+		assert_eq!(output.provider_stack[0].original_path().as_str(), "Textures");
+		assert_eq!(output.provider_stack[1].original_path().as_str(), "textures");
+		assert_eq!(output.provider_stack[2].original_path().as_str(), "TEXTURES");
 		Ok(())
 	}
 
@@ -1580,13 +1631,22 @@ mod tests {
 						"Lower",
 						0,
 						true,
-						vec![data_mod_file(
-							1,
-							"Lower",
-							0,
-							"old.txt",
-							ParticipationReason::EnabledMod,
-						)],
+						vec![
+							data_mod_file(
+								1,
+								"Lower",
+								0,
+								"old.txt",
+								ParticipationReason::EnabledMod,
+							),
+							data_mod_file(
+								2,
+								"Lower",
+								0,
+								"folder/file.txt",
+								ParticipationReason::EnabledMod,
+							),
+						],
 						Vec::new(),
 					),
 					provider(
@@ -1594,12 +1654,20 @@ mod tests {
 						1,
 						true,
 						Vec::new(),
-						vec![owned_tombstone(
-							"Suppression",
-							1,
-							"old.txt",
-							TombstoneScope::ExactFile,
-						)],
+						vec![
+							owned_tombstone(
+								"Suppression",
+								1,
+								"old.txt",
+								TombstoneScope::ExactFile,
+							),
+							owned_tombstone(
+								"Suppression",
+								1,
+								"folder",
+								TombstoneScope::DirectorySubtree,
+							),
+						],
 					),
 				],
 				problems: Vec::new(),
@@ -1615,9 +1683,10 @@ mod tests {
 			(
 				suppression_only.ordinary_file_count,
 				suppression_only.owned_file_tombstone_count,
+				suppression_only.owned_directory_tombstone_count,
 				suppression_only.lower_file_entries_suppressed_count
 			),
-			(0, 1, 1)
+			(0, 1, 1, 2)
 		);
 
 		let empty = inspect(
@@ -1772,17 +1841,38 @@ mod tests {
 						"Selected",
 						1,
 						true,
-						vec![data_mod_file(
-							2,
-							"Selected",
-							1,
-							"own.txt",
-							ParticipationReason::EnabledMod,
-						)],
+						vec![
+							data_mod_file(
+								2,
+								"Selected",
+								1,
+								"own.txt",
+								ParticipationReason::EnabledMod,
+							),
+							data_mod_file(
+								3,
+								"Selected",
+								1,
+								"removed.txt",
+								ParticipationReason::EnabledMod,
+							),
+						],
 						vec![owned_tombstone(
 							"Selected",
 							1,
 							"old.txt",
+							TombstoneScope::ExactFile,
+						)],
+					),
+					provider(
+						"Higher",
+						2,
+						true,
+						Vec::new(),
+						vec![owned_tombstone(
+							"Higher",
+							2,
+							"removed.txt",
 							TombstoneScope::ExactFile,
 						)],
 					),
@@ -1800,9 +1890,108 @@ mod tests {
 			(
 				uncontested_with_suppression.ordinary_file_count,
 				uncontested_with_suppression.effective_file_count,
-				uncontested_with_suppression.lower_file_entries_suppressed_count
+				uncontested_with_suppression.lower_file_entries_suppressed_count,
+				uncontested_with_suppression.own_file_entries_suppressed_count
 			),
-			(1, 1, 1)
+			(2, 1, 1, 1)
+		);
+
+		let winning = inspect(
+			EnvironmentConflictScan {
+				providers: vec![
+					provider(
+						"Lower",
+						0,
+						true,
+						vec![data_mod_file(
+							1,
+							"Lower",
+							0,
+							"shared.txt",
+							ParticipationReason::EnabledMod,
+						)],
+						Vec::new(),
+					),
+					provider(
+						"Selected",
+						1,
+						true,
+						vec![data_mod_file(
+							2,
+							"Selected",
+							1,
+							"shared.txt",
+							ParticipationReason::EnabledMod,
+						)],
+						Vec::new(),
+					),
+				],
+				problems: Vec::new(),
+			},
+			"Selected",
+			false,
+			no_calls(),
+		)
+		.await?
+		.provider_summary;
+		assert_eq!(winning.state, ProviderState::WinningConflicts);
+		assert_eq!((winning.effective_file_count, winning.file_conflict_win_count), (1, 1));
+
+		let losing = inspect(
+			EnvironmentConflictScan {
+				providers: vec![
+					provider(
+						"Selected",
+						0,
+						true,
+						vec![
+							data_mod_file(
+								1,
+								"Selected",
+								0,
+								"shared.txt",
+								ParticipationReason::EnabledMod,
+							),
+							data_mod_file(
+								2,
+								"Selected",
+								0,
+								"unique.txt",
+								ParticipationReason::EnabledMod,
+							),
+						],
+						Vec::new(),
+					),
+					provider(
+						"Higher",
+						1,
+						true,
+						vec![data_mod_file(
+							3,
+							"Higher",
+							1,
+							"shared.txt",
+							ParticipationReason::EnabledMod,
+						)],
+						Vec::new(),
+					),
+				],
+				problems: Vec::new(),
+			},
+			"Selected",
+			false,
+			no_calls(),
+		)
+		.await?
+		.provider_summary;
+		assert_eq!(losing.state, ProviderState::LosingConflicts);
+		assert_eq!(
+			(
+				losing.ordinary_file_count,
+				losing.effective_file_count,
+				losing.file_conflict_loss_count
+			),
+			(2, 1, 1)
 		);
 
 		let mut invalid_provider = provider("Invalid", 0, true, Vec::new(), Vec::new());

@@ -49,6 +49,7 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let root = SafeDir::open_absolute(root_path).map_err(|error| {
 		if error.current_context().kind() == io::ErrorKind::NotFound {
 			error.context(ErrorMarker::environment_not_initialized())
@@ -108,6 +109,7 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		let key = installed.name.comparison_key().to_owned();
 		let identity = ProviderIdentity::DataMod {
 			mod_name: installed.name.clone(),
@@ -122,12 +124,6 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 			providers.push(provider);
 			continue;
 		};
-		if canonical_name.as_str() != installed.name.as_str() {
-			problems.push(ConflictProblem {
-				kind: ConflictProblemKind::ModlistInvalid,
-				scope: ProblemScope::Modlist,
-			});
-		}
 		let identity = ProviderIdentity::DataMod {
 			mod_name: canonical_name,
 			priority: installed.priority,
@@ -167,6 +163,7 @@ pub(crate) fn read_content(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::io_failure())?;
 	let provider = match id.identity() {
 		ProviderIdentity::SteamData => {
@@ -188,10 +185,11 @@ pub(crate) fn read_content(
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		if components.peek().is_none() {
 			let metadata = match current.symlink_metadata(component) {
 				Ok(metadata) => metadata,
-				Err(error) if error.current_context().kind() != io::ErrorKind::NotFound => {
+				Err(error) if error.current_context().kind() == io::ErrorKind::PermissionDenied => {
 					return Ok(ConflictContentRead::Unavailable);
 				}
 				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
@@ -239,11 +237,13 @@ fn directory_has_entries(directory: &SafeDir, cancellation: &CancellationToken) 
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let mut entries = opened.context(ErrorMarker::io_failure())?;
 	let next = entries.next();
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	match next {
 		Some(entry) => {
 			entry.into_report().context(ErrorMarker::io_failure())?;
@@ -321,12 +321,14 @@ fn enumerate_mod_directories(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let mut entries = opened.context(ErrorMarker::io_failure())?;
 	let mut result = HashMap::new();
 	loop {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		let Some(entry) = entries.next() else {
 			break;
 		};
@@ -423,16 +425,19 @@ fn scan_provider_directory(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let opened = directory.entries();
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let mut entries = opened.context(ErrorMarker::io_failure())?;
 	let mut directory_entries = 0_usize;
 	loop {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		let Some(entry) = entries.next() else {
 			break;
 		};
@@ -524,10 +529,7 @@ fn scan_provider_directory(
 			problems.push(path_problem(ConflictProblemKind::HardLink, &path));
 			continue;
 		}
-		if directory.open_regular(&os_name).is_err() {
-			return Err(report!(io::Error::other("provider file changed during scan"))
-				.context(ErrorMarker::io_failure()));
-		}
+		directory.open_regular(&os_name).context(ErrorMarker::io_failure())?;
 		let reference = provider_reference(identity, path.clone(), enabled);
 		provider.files.push(IndexedConflictFile {
 			id: IndexedConflictFileId::new(identity.clone(), path),
@@ -729,6 +731,9 @@ mod tests {
 	use std::env::current_dir;
 	use std::error::Error;
 	use std::fs;
+	use std::io::ErrorKind;
+	#[cfg(unix)]
+	use std::os::unix::fs::symlink;
 	use std::path::Path;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
@@ -781,7 +786,7 @@ mod tests {
 	fn scan_enumerates_base_mods_disabled_state_overwrite_and_tombstones() -> Result<(), Box<dyn Error>> {
 		let (temp, root) = fixture()?;
 		fs::write(temp.path().join("game/Data/Textures/Shared.dds"), b"base").or_else(|error| {
-			if error.kind() == std::io::ErrorKind::NotFound {
+			if error.kind() == ErrorKind::NotFound {
 				fs::create_dir_all(temp.path().join("game/Data/Textures"))?;
 				fs::write(temp.path().join("game/Data/Textures/Shared.dds"), b"base")
 			} else {
@@ -836,6 +841,29 @@ mod tests {
 				.sum::<usize>(),
 			4
 		);
+		Ok(())
+	}
+
+	#[test]
+	fn modlist_matching_is_case_insensitive_and_directory_spelling_is_canonical() -> Result<(), Box<dyn Error>> {
+		let (_temp, root) = fixture()?;
+		write_provider(
+			root.as_path(),
+			"Visuals",
+			&[("content.txt", b"content")],
+			"schema_version = 1\n",
+		)?;
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+visuals\n")?;
+
+		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let provider = completed
+			.providers
+			.iter()
+			.find(|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if mod_name.as_str() == "Visuals"))
+			.ok_or("canonical provider")?;
+
+		assert!(completed.problems.is_empty());
+		assert!(provider.problems.is_empty());
 		Ok(())
 	}
 
@@ -910,7 +938,7 @@ mod tests {
 	}
 
 	#[test]
-	fn indexed_content_reads_hash_once_opened_and_report_deleted_files_as_namespace_failure()
+	fn indexed_content_reads_hash_once_opened_and_report_namespace_replacements_as_failures()
 	-> Result<(), Box<dyn Error>> {
 		let (_temp, root) = fixture()?;
 		write_provider(
@@ -943,6 +971,15 @@ mod tests {
 		let error = read_content(root.as_path(), id, &CancellationToken::new())
 			.expect_err("deleted indexed content must invalidate the complete query");
 		assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
+
+		#[cfg(unix)]
+		{
+			fs::write(root.as_path().join("mods/Hashable/replacement.txt"), b"replacement")?;
+			symlink("replacement.txt", root.as_path().join("mods/Hashable/file.txt"))?;
+			let error = read_content(root.as_path(), id, &CancellationToken::new())
+				.expect_err("reparse replacement must invalidate the complete query");
+			assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
+		}
 		Ok(())
 	}
 }

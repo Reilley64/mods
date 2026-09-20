@@ -317,8 +317,13 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				mod_name,
 				compare_content,
 			} => {
-				let Ok(mod_name) = ModName::new(mod_name) else {
-					return marker_outcome(ErrorMarker::invalid_mod_name());
+				let mod_name = match ModName::new(mod_name) {
+					Ok(mod_name) => mod_name,
+					Err(report) => {
+						return report_outcome(
+							&report.context(ErrorMarker::invalid_mod_name()),
+						);
+					}
 				};
 
 				match inspect_mod_conflicts(
@@ -338,8 +343,13 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				}
 			}
 			ConflictsCommand::Explain { path, compare_content } => {
-				let Ok(path) = DataRelativePath::new(path) else {
-					return marker_outcome(ErrorMarker::invalid_data_path());
+				let path = match DataRelativePath::new(path) {
+					Ok(path) => path,
+					Err(report) => {
+						return report_outcome(
+							&report.context(ErrorMarker::invalid_data_path()),
+						);
+					}
 				};
 
 				match explain_path(

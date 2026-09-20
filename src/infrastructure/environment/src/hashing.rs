@@ -9,6 +9,7 @@ use rootcause::prelude::ResultExt;
 use rootcause::report;
 use sha2::Digest;
 use sha2::Sha256;
+use std::io::Error;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let Ok(before) = fingerprint(&file) else {
 		return Ok(ConflictContentRead::Unavailable);
 	};
@@ -31,6 +33,7 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		let Ok(read) = file.read_chunk(&mut buffer) else {
 			return Ok(ConflictContentRead::Unavailable);
 		};
@@ -43,6 +46,7 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let Ok(after) = fingerprint(&file) else {
 		return Ok(ConflictContentRead::Unavailable);
 	};
@@ -55,7 +59,7 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 	Ok(ConflictContentRead::Sha256(digest))
 }
 
-fn fingerprint(file: &SafeFile) -> Result<ContentFingerprint, std::io::Error> {
+fn fingerprint(file: &SafeFile) -> Result<ContentFingerprint, Error> {
 	let metadata = file.metadata()?;
 	Ok(ContentFingerprint {
 		length: metadata.len(),

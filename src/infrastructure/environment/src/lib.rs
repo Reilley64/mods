@@ -24,9 +24,6 @@ use crate::snapshot::load as load_snapshot;
 use crate::transactions::InstallationTransaction;
 use application::ErrorCode;
 use application::ErrorMarker;
-use application::conflicts::ConflictContentRead;
-use application::conflicts::EnvironmentConflictScan;
-use application::conflicts::IndexedConflictFileId;
 use application::installation::ApprovedInstallation;
 use application::installation::InstallPlan;
 use application::installation::InstallationAssessment;
@@ -306,35 +303,16 @@ impl EnvironmentAdapter {
 		Ok(InstallationChange { begin_file, finish })
 	}
 
-	fn scan_environment_conflicts(
-		&self,
-		root: &EnvironmentRoot,
-		cancellation: &CancellationToken,
-	) -> Result<EnvironmentConflictScan, ErrorMarker> {
-		scan_conflicts(root.as_path(), cancellation)
-	}
-
-	fn read_conflict_content(
-		&self,
-		root: &EnvironmentRoot,
-		id: IndexedConflictFileId,
-		cancellation: &CancellationToken,
-	) -> Result<ConflictContentRead, ErrorMarker> {
-		read_conflict_content(root.as_path(), &id, cancellation)
-	}
-
 	pub fn scan_environment_conflicts_port(&self, root: EnvironmentRoot) -> ScanEnvironmentConflicts {
-		let adapter = self.clone();
 		Arc::new(move |cancellation| {
-			let result = adapter.scan_environment_conflicts(&root, &cancellation);
+			let result = scan_conflicts(root.as_path(), &cancellation);
 			Box::pin(ready(result)) as PortFuture<_>
 		})
 	}
 
 	pub fn read_conflict_content_port(&self, root: EnvironmentRoot) -> ReadConflictContent {
-		let adapter = self.clone();
 		Arc::new(move |id, cancellation| {
-			let result = adapter.read_conflict_content(&root, id, &cancellation);
+			let result = read_conflict_content(root.as_path(), &id, &cancellation);
 			Box::pin(ready(result)) as PortFuture<_>
 		})
 	}
