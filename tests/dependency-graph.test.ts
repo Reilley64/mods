@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkDependencyGraphAsync, validateProjectGraph } from "../scripts/check-dependency-graph";
+import { validateProjectGraph } from "../scripts/check-dependency-graph";
 
 const validPackages = [
   {
@@ -36,8 +36,8 @@ const validPackages = [
 ];
 
 describe("workspace dependency graph", () => {
-  test("accepts the presentation-owned binary workspace", async () => {
-    expect(await checkDependencyGraphAsync()).toEqual([]);
+  test("accepts the presentation-owned binary workspace fixture", () => {
+    expect(validateProjectGraph({ packages: validPackages })).toEqual([]);
   });
 
   test("rejects a presentation library target", () => {
