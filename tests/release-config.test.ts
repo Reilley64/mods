@@ -11,6 +11,7 @@ test("release metadata follows presentation-owned product packages", async () =>
     "package-name": "mods",
     "include-component-in-tag": false,
     "skip-github-release": false,
+    "changelog-path": "/CHANGELOG.md",
   });
   expect(config.packages["presentation/mcp"]).toMatchObject({
     component: "mods-mcp",

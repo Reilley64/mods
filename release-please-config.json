@@ -73,7 +73,7 @@
       "release-type": "rust",
       "component": "mods",
       "package-name": "mods",
-      "changelog-path": "../../CHANGELOG.md",
+      "changelog-path": "/CHANGELOG.md",
       "include-component-in-tag": false,
       "skip-github-release": false
     },
