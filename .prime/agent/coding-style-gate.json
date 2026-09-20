@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "mode": "advisory",
+  "model": "jev-1.13.0",
+  "threshold": 0.86,
+  "styleFile": "CODING_STYLE.md",
+  "tools": [
+    "ipython",
+    "edit",
+    "bash"
+  ],
+  "timeoutMs": 10000,
+  "maxConcurrency": 4,
+  "maxFollowUps": 2,
+  "ruleThresholds": {
+    "application-use-cases-and-ports-use-case-local-implementation-modules": 0.45
+  }
+}
