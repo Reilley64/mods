@@ -4,7 +4,7 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
   "separate-pull-requests": false,
-  "group-pull-request-title-pattern": "chore: prepare v${version} release",
+  "pull-request-header": ":robot: I have created a release *beep* *boop*\n\nThe version-only release entry is the public `mods` package.",
   "plugins": [
     {
       "type": "cargo-workspace",
