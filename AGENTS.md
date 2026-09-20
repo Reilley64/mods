@@ -15,3 +15,7 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 ### Coding style
 
 Rust implementation and review must follow `CODING_STYLE.md`.
+
+### Implementation worktrees
+
+Before starting `/skill:implement`, fetch `origin/main`, then create a new branch and worktree from `origin/main`. Run the implementation only in that worktree.
