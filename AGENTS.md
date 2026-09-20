@@ -16,6 +16,10 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 
 Rust implementation and review must follow `CODING_STYLE.md`.
 
+### Ticket scope
+
+Ticket implementation and review remediation use a frozen scope contract and bounded repair cycle. See `docs/agents/ticket-scope.md`.
+
 ### Implementation worktrees
 
 Before starting `/skill:implement`, fetch `origin/main`, then create a new branch and worktree from `origin/main`. Run the implementation only in that worktree.
