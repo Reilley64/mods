@@ -7,7 +7,7 @@
     "format:check": "cargo fmt --all -- --check",
     "lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "dependency:check": "bun scripts/check-dependency-graph.ts",
-    "test": "cargo nextest run --workspace --all-targets && bun test tests ./.prime/agent/extensions/coding-style-gate/tests",
+    "test": "cargo test --workspace --all-targets && bun test tests ./.prime/agent/extensions/coding-style-gate/tests",
     "check:pr-title": "bun scripts/validate-pr-title.ts"
   },
   "dependencies": {
