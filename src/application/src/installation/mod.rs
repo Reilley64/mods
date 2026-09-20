@@ -1,6 +1,9 @@
 mod install_archive;
 mod types;
 
+pub use domain::EffectiveResult;
+pub use domain::TombstoneReference;
+pub use domain::TombstoneScope;
 pub use install_archive::InstallArchiveDependencies;
 pub use install_archive::InstallArchiveError;
 pub use install_archive::InstallArchiveOutput;
@@ -13,7 +16,6 @@ pub use types::CandidateDecision;
 pub use types::ConditionOperator;
 pub use types::ConditionScope;
 pub use types::ConditionalCandidates;
-pub use types::EffectiveResult;
 pub use types::FileDependencyFact;
 pub use types::FileDependencyKind;
 pub use types::FomodFlagWrite;
@@ -35,8 +37,6 @@ pub use types::MalformedGroupRepair;
 pub use types::PlanCandidateReference;
 pub use types::PlannedCandidate;
 pub use types::ProjectedModState;
-pub use types::TombstoneReference;
-pub use types::TombstoneScope;
 pub use types::UnresolvedGroup;
 pub use types::VisibleOption;
 pub use types::WinnerReason;

@@ -1,5 +1,6 @@
 use domain::ArchiveIdentity;
 use domain::DataRelativePath;
+use domain::EffectiveResult;
 use domain::FileDependencyState;
 use domain::FomodCardinality;
 use domain::FomodCondition;
@@ -71,23 +72,6 @@ pub struct ArchiveIndex {
 	pub installer: IndexedInstaller,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TombstoneScope {
-	ExactFile,
-	DirectorySubtree,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TombstoneReference {
-	pub scope: TombstoneScope,
-	pub owner: ProviderReference,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EffectiveResult {
-	File(ProviderReference),
-	Absent {
-		controlling_tombstone: Option<TombstoneReference>,
-	},
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileDependencyKind {
 	Plugin,

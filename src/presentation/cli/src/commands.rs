@@ -153,6 +153,7 @@ mod tests {
 	use super::Cli;
 	use super::Command;
 	use super::ConfigCommand;
+	use super::ConflictsCommand;
 	use super::LogLevel;
 	use super::SettingKeyArgument;
 	use super::parse_from;
@@ -204,6 +205,83 @@ mod tests {
 		};
 		assert_eq!(arguments.choice, [" group = option ", "second=two"]);
 		Ok(())
+	}
+
+	#[test]
+	fn parses_exact_conflict_commands_and_compare_content_defaults() -> Result<(), Box<dyn Error>> {
+		let list = parse_from(["mods", "conflicts", "list"])?;
+		assert!(matches!(
+			list.command,
+			Command::Conflicts {
+				command: ConflictsCommand::List { compare_content: false }
+			}
+		));
+
+		let compared_list = parse_from(["mods", "conflicts", "list", "--compare-content"])?;
+		assert!(matches!(
+			compared_list.command,
+			Command::Conflicts {
+				command: ConflictsCommand::List { compare_content: true }
+			}
+		));
+
+		let default_inspect = parse_from(["mods", "conflicts", "inspect", "Mojave Textures"])?;
+		assert!(matches!(
+			default_inspect.command,
+			Command::Conflicts {
+				command: ConflictsCommand::Inspect {
+					compare_content: false,
+					..
+				}
+			}
+		));
+
+		let inspect = parse_from(["mods", "conflicts", "inspect", "Mojave Textures", "--compare-content"])?;
+		assert!(matches!(
+			inspect.command,
+			Command::Conflicts {
+				command: ConflictsCommand::Inspect {
+					mod_name,
+					compare_content: true
+				}
+			} if mod_name == "Mojave Textures"
+		));
+
+		let default_explain = parse_from(["mods", "conflicts", "explain", r"textures\weapons\rifle.dds"])?;
+		assert!(matches!(
+			default_explain.command,
+			Command::Conflicts {
+				command: ConflictsCommand::Explain {
+					compare_content: false,
+					..
+				}
+			}
+		));
+
+		let explain = parse_from([
+			"mods",
+			"conflicts",
+			"explain",
+			r"textures\weapons\rifle.dds",
+			"--compare-content",
+		])?;
+		assert!(matches!(
+			explain.command,
+			Command::Conflicts {
+				command: ConflictsCommand::Explain {
+					path,
+					compare_content: true
+				}
+			} if path == r"textures\weapons\rifle.dds"
+		));
+		Ok(())
+	}
+
+	#[test]
+	fn conflict_commands_reject_unapproved_arguments() {
+		assert!(parse_from(["mods", "conflicts", "list", "extra"]).is_err());
+		assert!(parse_from(["mods", "conflicts", "inspect", "mod", "--filter", "x"]).is_err());
+		assert!(parse_from(["mods", "conflicts", "resolve", "path"]).is_err());
 	}
 
 	#[test]

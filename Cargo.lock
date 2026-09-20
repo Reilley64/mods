@@ -500,6 +500,7 @@ dependencies = [
  "rootcause",
  "same-file",
  "serde",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-util",

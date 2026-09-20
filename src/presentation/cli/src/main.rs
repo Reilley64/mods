@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod commands;
+mod conflict_output;
 mod diagnostics;
 mod error;
 mod install_warning;
@@ -31,6 +32,9 @@ async fn main() {
 			get_setting: resources.get_setting_dependencies(),
 			set_game_directory: resources.set_game_directory_dependencies(),
 			install_archive,
+			list_effective_conflicts: resources.list_effective_conflicts_dependencies(),
+			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(),
+			explain_path: resources.explain_path_dependencies(),
 		})
 	})
 	.await;

@@ -1,4 +1,6 @@
 mod active_code_page;
+mod conflict_scan;
+mod hashing;
 mod manifest;
 mod profile;
 mod profile_activation;
@@ -7,6 +9,8 @@ mod safe_fs;
 mod snapshot;
 mod transactions;
 
+use crate::conflict_scan::read_content as read_conflict_content;
+use crate::conflict_scan::scan as scan_conflicts;
 use crate::manifest::validate_manifest_file;
 use crate::manifest::write_manifest;
 use crate::profile::stage_profile;
@@ -20,6 +24,9 @@ use crate::snapshot::load as load_snapshot;
 use crate::transactions::InstallationTransaction;
 use application::ErrorCode;
 use application::ErrorMarker;
+use application::conflicts::ConflictContentRead;
+use application::conflicts::EnvironmentConflictScan;
+use application::conflicts::IndexedConflictFileId;
 use application::installation::ApprovedInstallation;
 use application::installation::InstallPlan;
 use application::installation::InstallationAssessment;
@@ -36,6 +43,8 @@ use application::ports::LoadInstallationState;
 use application::ports::PortFuture;
 use application::ports::ProfileFileRecord;
 use application::ports::PublishEnvironment;
+use application::ports::ReadConflictContent;
+use application::ports::ScanEnvironmentConflicts;
 use domain::DataRelativePath;
 use domain::EnvironmentRoot;
 use rootcause::Result;
@@ -295,6 +304,39 @@ impl EnvironmentAdapter {
 			}) as PortFuture<_>
 		});
 		Ok(InstallationChange { begin_file, finish })
+	}
+
+	fn scan_environment_conflicts(
+		&self,
+		root: &EnvironmentRoot,
+		cancellation: &CancellationToken,
+	) -> Result<EnvironmentConflictScan, ErrorMarker> {
+		scan_conflicts(root.as_path(), cancellation)
+	}
+
+	fn read_conflict_content(
+		&self,
+		root: &EnvironmentRoot,
+		id: IndexedConflictFileId,
+		cancellation: &CancellationToken,
+	) -> Result<ConflictContentRead, ErrorMarker> {
+		read_conflict_content(root.as_path(), &id, cancellation)
+	}
+
+	pub fn scan_environment_conflicts_port(&self, root: EnvironmentRoot) -> ScanEnvironmentConflicts {
+		let adapter = self.clone();
+		Arc::new(move |cancellation| {
+			let result = adapter.scan_environment_conflicts(&root, &cancellation);
+			Box::pin(ready(result)) as PortFuture<_>
+		})
+	}
+
+	pub fn read_conflict_content_port(&self, root: EnvironmentRoot) -> ReadConflictContent {
+		let adapter = self.clone();
+		Arc::new(move |id, cancellation| {
+			let result = adapter.read_conflict_content(&root, id, &cancellation);
+			Box::pin(ready(result)) as PortFuture<_>
+		})
 	}
 
 	pub fn load_installation_state_port(&self, root: EnvironmentRoot) -> LoadInstallationState {

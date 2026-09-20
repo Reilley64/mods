@@ -1,8 +1,10 @@
 use crate::commands::Cli;
 use crate::commands::Command;
 use crate::commands::ConfigCommand;
+use crate::commands::ConflictsCommand;
 use crate::commands::SetCommand;
 use crate::commands::parse_from;
+use crate::conflict_output;
 use crate::diagnostics::DiagnosticSession;
 use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
@@ -11,6 +13,12 @@ use crate::operation;
 use crate::output;
 use crate::path_resolution::resolve_path;
 use application::ErrorMarker;
+use application::conflicts::ExplainPathDependencies;
+use application::conflicts::InspectModConflictsDependencies;
+use application::conflicts::ListEffectiveConflictsDependencies;
+use application::conflicts::explain_path;
+use application::conflicts::inspect_mod_conflicts;
+use application::conflicts::list_effective_conflicts;
 use application::environment::InitializeEnvironmentDependencies;
 use application::environment::initialize_environment;
 use application::installation::InstallArchiveDependencies;
@@ -25,6 +33,7 @@ use application::settings::set_game_directory;
 use clap::Error as ClapError;
 use clap::error::ErrorKind;
 use domain::ArchivePath;
+use domain::DataRelativePath;
 use domain::EnvironmentRoot;
 use domain::FomodChoice;
 use domain::GameInstallationPath;
@@ -44,6 +53,9 @@ pub(crate) struct Dependencies {
 	pub(crate) get_setting: GetSettingDependencies,
 	pub(crate) set_game_directory: SetGameDirectoryDependencies,
 	pub(crate) install_archive: InstallArchiveDependencies,
+	pub(crate) list_effective_conflicts: ListEffectiveConflictsDependencies,
+	pub(crate) inspect_mod_conflicts: InspectModConflictsDependencies,
+	pub(crate) explain_path: ExplainPathDependencies,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,7 +108,15 @@ pub(crate) async fn execute(
 			command: ConfigCommand::Set { .. },
 		} => "config.set.game_dir",
 		Command::Install(_) => "install",
-		Command::Conflicts { .. } => "conflicts",
+		Command::Conflicts {
+			command: ConflictsCommand::List { .. },
+		} => "conflicts.list",
+		Command::Conflicts {
+			command: ConflictsCommand::Inspect { .. },
+		} => "conflicts.inspect",
+		Command::Conflicts {
+			command: ConflictsCommand::Explain { .. },
+		} => "conflicts.explain",
 		Command::Exec(_) => "exec",
 	};
 	let (mut session, diagnostic_warning) =
@@ -278,7 +298,68 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				Err(report) => report_outcome(&report),
 			}
 		}
-		Command::Conflicts { .. } | Command::Exec(_) => RunOutcome {
+		Command::Conflicts { command } => match command {
+			ConflictsCommand::List { compare_content } => match list_effective_conflicts(
+				dependencies.list_effective_conflicts,
+				compare_content,
+				operation::ctrl_c_token(),
+			)
+			.await
+			{
+				Ok(output) => RunOutcome {
+					status: 0,
+					stdout: conflict_output::list(&output),
+					stderr: String::new(),
+				},
+				Err(report) => report_outcome(&report),
+			},
+			ConflictsCommand::Inspect {
+				mod_name,
+				compare_content,
+			} => {
+				let Ok(mod_name) = ModName::new(mod_name) else {
+					return marker_outcome(ErrorMarker::invalid_mod_name());
+				};
+
+				match inspect_mod_conflicts(
+					dependencies.inspect_mod_conflicts,
+					mod_name,
+					compare_content,
+					operation::ctrl_c_token(),
+				)
+				.await
+				{
+					Ok(output) => RunOutcome {
+						status: 0,
+						stdout: conflict_output::inspection(&output),
+						stderr: String::new(),
+					},
+					Err(report) => report_outcome(&report),
+				}
+			}
+			ConflictsCommand::Explain { path, compare_content } => {
+				let Ok(path) = DataRelativePath::new(path) else {
+					return marker_outcome(ErrorMarker::invalid_data_path());
+				};
+
+				match explain_path(
+					dependencies.explain_path,
+					path,
+					compare_content,
+					operation::ctrl_c_token(),
+				)
+				.await
+				{
+					Ok(output) => RunOutcome {
+						status: 0,
+						stdout: conflict_output::explanation(&output),
+						stderr: String::new(),
+					},
+					Err(report) => report_outcome(&report),
+				}
+			}
+		},
+		Command::Exec(_) => RunOutcome {
 			status: 1,
 			stdout: String::new(),
 			stderr: "error: command is not implemented in this product slice\n".to_owned(),
@@ -352,6 +433,14 @@ mod tests {
 	use super::select_environment_root;
 	use crate::diagnostics::SINK_WARNING;
 	use application::ErrorMarker;
+	use application::conflicts::ConflictContentRead;
+	use application::conflicts::EnvironmentConflictScan;
+	use application::conflicts::ExplainPathDependencies;
+	use application::conflicts::IndexedConflictFile;
+	use application::conflicts::IndexedConflictFileId;
+	use application::conflicts::InspectModConflictsDependencies;
+	use application::conflicts::ListEffectiveConflictsDependencies;
+	use application::conflicts::ScannedConflictProvider;
 	use application::environment::InitializeEnvironmentDependencies;
 	use application::installation::InstallArchiveDependencies;
 	use application::ports::GameInstallationSource;
@@ -366,8 +455,14 @@ mod tests {
 	use application::settings::SetGameDirectoryDependencies;
 	use application::settings::SettingSource;
 	use clap::Parser;
+	use domain::DataRelativePath;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
+	use domain::ModName;
+	use domain::ModPriority;
+	use domain::ParticipationReason;
+	use domain::ProviderIdentity;
+	use domain::ProviderReference;
 	use domain::SteamBuildId;
 	use rootcause::report;
 	use std::error::Error;
@@ -381,6 +476,79 @@ mod tests {
 		($($value:expr),* $(,)?) => {
 			vec![$(OsString::from($value)),*]
 		};
+	}
+
+	fn successful_conflict_dependencies(
+		scan: EnvironmentConflictScan,
+	) -> (
+		ListEffectiveConflictsDependencies,
+		InspectModConflictsDependencies,
+		ExplainPathDependencies,
+	) {
+		let list_scan = scan.clone();
+		let inspect_scan = scan.clone();
+		let explain_scan = scan;
+		let list = ListEffectiveConflictsDependencies {
+			scan_environment: Arc::new(move |_| {
+				let scan = list_scan.clone();
+				Box::pin(async move { Ok(scan) }) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Ok(ConflictContentRead::Unavailable) }) as PortFuture<_>
+			}),
+		};
+		let inspect = InspectModConflictsDependencies {
+			scan_environment: Arc::new(move |_| {
+				let scan = inspect_scan.clone();
+				Box::pin(async move { Ok(scan) }) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Ok(ConflictContentRead::Unavailable) }) as PortFuture<_>
+			}),
+		};
+		let explain = ExplainPathDependencies {
+			scan_environment: Arc::new(move |_| {
+				let scan = explain_scan.clone();
+				Box::pin(async move { Ok(scan) }) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Ok(ConflictContentRead::Unavailable) }) as PortFuture<_>
+			}),
+		};
+		(list, inspect, explain)
+	}
+
+	fn unavailable_list_effective_conflicts_dependencies() -> ListEffectiveConflictsDependencies {
+		ListEffectiveConflictsDependencies {
+			scan_environment: Arc::new(|_| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
+		}
+	}
+
+	fn unavailable_inspect_mod_conflicts_dependencies() -> InspectModConflictsDependencies {
+		InspectModConflictsDependencies {
+			scan_environment: Arc::new(|_| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
+		}
+	}
+
+	fn unavailable_explain_path_dependencies() -> ExplainPathDependencies {
+		ExplainPathDependencies {
+			scan_environment: Arc::new(|_| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
+		}
 	}
 
 	fn unavailable_install_archive_dependencies() -> InstallArchiveDependencies {
@@ -493,6 +661,9 @@ mod tests {
 				}),
 			},
 			install_archive,
+			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
+			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
+			explain_path: unavailable_explain_path_dependencies(),
 		}
 	}
 
@@ -582,6 +753,204 @@ mod tests {
 				.parent()
 				.ok_or("temporary directory must have a parent")?
 				.join("portable")
+		);
+		Ok(())
+	}
+
+	fn dependencies_with_conflict_scan(
+		root: &Path,
+		scan: EnvironmentConflictScan,
+	) -> Result<Dependencies, ErrorMarker> {
+		let mut dependencies = successful_dependencies(root)?;
+		let (list, inspect, explain) = successful_conflict_dependencies(scan);
+		dependencies.list_effective_conflicts = list;
+		dependencies.inspect_mod_conflicts = inspect;
+		dependencies.explain_path = explain;
+		Ok(dependencies)
+	}
+
+	#[tokio::test]
+	async fn dispatches_all_conflict_commands_to_transport_free_use_cases() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let root = temp.path().join("environment");
+		let mod_name = ModName::new("Visuals".to_owned()).map_err(|_| "valid test mod name")?;
+		let lower_path =
+			DataRelativePath::new("Textures/Shared.dds".to_owned()).map_err(|_| "valid test path")?;
+		let mod_path =
+			DataRelativePath::new("textures/shared.dds".to_owned()).map_err(|_| "valid test path")?;
+		let scan = EnvironmentConflictScan {
+			providers: vec![
+				ScannedConflictProvider {
+					identity: ProviderIdentity::DataMod {
+						mod_name: ModName::new("Base Visuals".to_owned())
+							.map_err(|_| "valid test mod name")?,
+						priority: ModPriority::new(1),
+					},
+					enabled: true,
+					files: vec![IndexedConflictFile {
+						id: IndexedConflictFileId::new(
+							ProviderIdentity::DataMod {
+								mod_name: ModName::new("Base Visuals".to_owned())
+									.map_err(|_| "valid test mod name")?,
+								priority: ModPriority::new(1),
+							},
+							lower_path.clone(),
+						),
+						provider: ProviderReference::DataMod {
+							mod_name: ModName::new("Base Visuals".to_owned())
+								.map_err(|_| "valid test mod name")?,
+							priority: ModPriority::new(1),
+							original_path: lower_path,
+							participation_reason: ParticipationReason::EnabledMod,
+						},
+					}],
+					directories: Vec::new(),
+					tombstones: Vec::new(),
+				},
+				ScannedConflictProvider {
+					identity: ProviderIdentity::DataMod {
+						mod_name: mod_name.clone(),
+						priority: ModPriority::new(3),
+					},
+					enabled: true,
+					files: vec![IndexedConflictFile {
+						id: IndexedConflictFileId::new(
+							ProviderIdentity::DataMod {
+								mod_name: mod_name.clone(),
+								priority: ModPriority::new(3),
+							},
+							mod_path.clone(),
+						),
+						provider: ProviderReference::DataMod {
+							mod_name,
+							priority: ModPriority::new(3),
+							original_path: mod_path,
+							participation_reason: ParticipationReason::EnabledMod,
+						},
+					}],
+					directories: Vec::new(),
+					tombstones: Vec::new(),
+				},
+			],
+			problems: Vec::new(),
+		};
+
+		let listed = run(
+			arguments![
+				"mods",
+				"--environment",
+				root.as_os_str(),
+				"--log-level",
+				"off",
+				"conflicts",
+				"list",
+			],
+			temp.path().to_path_buf(),
+			None,
+			|_| dependencies_with_conflict_scan(&root, scan.clone()),
+		)
+		.await?;
+		assert_eq!(listed.status, 0);
+		assert_eq!(listed.stderr, "");
+		assert!(listed.stdout.contains("resolution_status = \"exact\""));
+		assert!(listed.stdout.contains("rows.count = 1"));
+
+		let inspected = run(
+			arguments![
+				"mods",
+				"--environment",
+				root.as_os_str(),
+				"--log-level",
+				"off",
+				"conflicts",
+				"inspect",
+				"visuals",
+				"--compare-content",
+			],
+			temp.path().to_path_buf(),
+			None,
+			|_| dependencies_with_conflict_scan(&root, scan.clone()),
+		)
+		.await?;
+		assert_eq!(inspected.status, 0);
+		assert_eq!(inspected.stderr, "");
+		assert!(inspected.stdout.contains("mod_name = \"Visuals\""));
+		assert!(inspected.stdout.contains("participation = \"active\""));
+		assert!(
+			inspected
+				.stdout
+				.contains("content_comparisons[0].state = \"unavailable\""),
+			"{}",
+			inspected.stdout
+		);
+
+		let explained = run(
+			arguments![
+				"mods",
+				"--environment",
+				root.as_os_str(),
+				"--log-level",
+				"off",
+				"conflicts",
+				"explain",
+				r"Textures\Missing.dds",
+			],
+			temp.path().to_path_buf(),
+			None,
+			|_| dependencies_with_conflict_scan(&root, scan),
+		)
+		.await?;
+		assert_eq!(explained.status, 0);
+		assert_eq!(explained.stderr, "");
+		assert!(explained.stdout.contains("normalized_key = \"textures/missing.dds\""));
+		assert!(explained.stdout.contains("display_path = \"Textures\\\\Missing.dds\""));
+		assert!(explained.stdout.contains("effective_result.kind = \"absent\""));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn conflict_dispatch_rejects_invalid_typed_inputs_before_scanning() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let root = temp.path().join("environment");
+		let invalid_mod = run(
+			arguments![
+				"mods",
+				"--environment",
+				root.as_os_str(),
+				"--log-level",
+				"off",
+				"conflicts",
+				"inspect",
+				"Overwrite",
+			],
+			temp.path().to_path_buf(),
+			None,
+			|_| successful_dependencies(&root),
+		)
+		.await?;
+		assert_eq!(invalid_mod.status, 1);
+		assert_eq!(invalid_mod.stderr, "error [invalid_mod_name]: mod name is invalid\n");
+
+		let invalid_path = run(
+			arguments![
+				"mods",
+				"--environment",
+				root.as_os_str(),
+				"--log-level",
+				"off",
+				"conflicts",
+				"explain",
+				"../outside.dds",
+			],
+			temp.path().to_path_buf(),
+			None,
+			|_| successful_dependencies(&root),
+		)
+		.await?;
+		assert_eq!(invalid_path.status, 1);
+		assert_eq!(
+			invalid_path.stderr,
+			"error [invalid_data_path]: Data-relative path is invalid\n"
 		);
 		Ok(())
 	}

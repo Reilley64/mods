@@ -22,6 +22,7 @@ pub enum ErrorCode {
 	UnsafeArchive,
 	AmbiguousInstallPlan,
 	InvalidModName,
+	InvalidDataPath,
 	ModAlreadyExists,
 	ModNotFound,
 	IoFailure,
@@ -52,6 +53,7 @@ impl ErrorCode {
 			Self::UnsafeArchive => "unsafe_archive",
 			Self::AmbiguousInstallPlan => "ambiguous_install_plan",
 			Self::InvalidModName => "invalid_mod_name",
+			Self::InvalidDataPath => "invalid_data_path",
 			Self::ModAlreadyExists => "mod_already_exists",
 			Self::ModNotFound => "mod_not_found",
 			Self::IoFailure => "io_failure",
@@ -198,6 +200,9 @@ impl ErrorMarker {
 	pub fn invalid_mod_name() -> Self {
 		Self::simple(ErrorCode::InvalidModName)
 	}
+	pub fn invalid_data_path() -> Self {
+		Self::simple(ErrorCode::InvalidDataPath)
+	}
 	pub fn mod_already_exists() -> Self {
 		Self::simple(ErrorCode::ModAlreadyExists)
 	}
@@ -281,9 +286,10 @@ impl ErrorMarker {
 			ErrorCode::UnsafeArchive => "archive is unsafe",
 			ErrorCode::AmbiguousInstallPlan => "install plan is ambiguous",
 			ErrorCode::InvalidModName => "mod name is invalid",
+			ErrorCode::InvalidDataPath => "Data-relative path is invalid",
 			ErrorCode::ModAlreadyExists => "mod already exists",
 			ErrorCode::ModNotFound => "mod was not found",
-			ErrorCode::IoFailure => "installation input/output failed",
+			ErrorCode::IoFailure => "input/output operation failed",
 			ErrorCode::TransactionFailure => "installation transaction failed",
 			ErrorCode::OperationCancelled => "operation cancelled",
 		}

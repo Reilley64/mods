@@ -1,6 +1,9 @@
+mod explain_path;
 mod get_setting;
 mod initialize_environment;
+mod inspect_mod_conflicts;
 mod install_archive;
+mod list_effective_conflicts;
 mod list_settings;
 mod set_game_directory;
 

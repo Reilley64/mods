@@ -1,3 +1,6 @@
+use crate::conflicts::ConflictContentRead;
+use crate::conflicts::EnvironmentConflictScan;
+use crate::conflicts::IndexedConflictFileId;
 use crate::installation::ApprovedInstallation;
 use crate::installation::InstallPlan;
 use crate::installation::InstallationAssessment;
@@ -85,3 +88,7 @@ pub type AssessInstallation =
 	Arc<dyn Fn(InstallPlan, CancellationToken) -> PortFuture<InstallationAssessment> + Send + Sync>;
 pub type BeginInstallation =
 	Arc<dyn Fn(ApprovedInstallation, CancellationToken) -> PortFuture<InstallationChange> + Send + Sync>;
+
+pub type ScanEnvironmentConflicts = Arc<dyn Fn(CancellationToken) -> PortFuture<EnvironmentConflictScan> + Send + Sync>;
+pub type ReadConflictContent =
+	Arc<dyn Fn(IndexedConflictFileId, CancellationToken) -> PortFuture<ConflictContentRead> + Send + Sync>;

@@ -47,6 +47,10 @@ pub(crate) struct SafeFile {
 }
 
 impl SafeFile {
+	pub(crate) fn metadata(&self) -> Result<Metadata, io::Error> {
+		self.inner.metadata().into_report()
+	}
+
 	pub(crate) fn read_chunk(&mut self, contents: &mut [u8]) -> Result<usize, io::Error> {
 		self.inner.read(contents).into_report()
 	}
@@ -131,11 +135,14 @@ impl SafeDir {
 		self.inner.entries().into_report()
 	}
 
-	pub(crate) fn symlink_metadata(&self, name: impl AsRef<Path>) -> Result<Metadata, io::Error> {
-		let metadata = self
-			.inner
+	pub(crate) fn entry_metadata(&self, name: impl AsRef<Path>) -> Result<Metadata, io::Error> {
+		self.inner
 			.symlink_metadata(checked_component(name.as_ref())?)
-			.into_report()?;
+			.into_report()
+	}
+
+	pub(crate) fn symlink_metadata(&self, name: impl AsRef<Path>) -> Result<Metadata, io::Error> {
+		let metadata = self.entry_metadata(name)?;
 		if is_reparse(&metadata) {
 			return Err(report!(io::Error::other("refusing to inspect a reparse point")));
 		}
