@@ -22,4 +22,4 @@ Ticket implementation and review remediation use a frozen scope contract and bou
 
 ### Implementation worktrees
 
-Before starting `/skill:implement`, fetch `origin/main`, then create a new branch and worktree from `origin/main`. Run the implementation only in that worktree.
+Before starting `/skill:implement`, fetch `origin/main`, then create a new branch and worktree from `origin/main`. Create worktrees under `<project-root>/.worktrees/` and run the implementation only in its worktree.

@@ -1,5 +1,6 @@
 .idea/
 .scratch/
+.worktrees/
 target/
 dist/
 node_modules/
