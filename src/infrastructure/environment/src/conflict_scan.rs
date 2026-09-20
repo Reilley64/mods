@@ -24,6 +24,7 @@ use domain::ModName;
 use domain::ModPriority;
 use domain::ParticipationReason;
 use domain::ProblemScope;
+use domain::ProviderClass;
 use domain::ProviderIdentity;
 use domain::ProviderReference;
 use domain::Tombstone;
@@ -90,15 +91,15 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 			ProviderIdentity::SteamData,
 			true,
 			false,
-			&mut problems,
 			cancellation,
 		)?),
 		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {
-			problems.push(ConflictProblem {
+			let mut provider = empty_provider(ProviderIdentity::SteamData, true);
+			provider.problems.push(ConflictProblem {
 				kind: ConflictProblemKind::ProviderMissing,
 				scope: ProblemScope::Provider(ProviderIdentity::SteamData),
 			});
-			providers.push(empty_provider(ProviderIdentity::SteamData, true));
+			providers.push(provider);
 		}
 		Err(error) => return Err(error.context(ErrorMarker::io_failure())),
 	}
@@ -113,11 +114,12 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 			priority: installed.priority,
 		};
 		let Some((directory_name, canonical_name)) = mod_directories.remove(&key) else {
-			problems.push(ConflictProblem {
+			let mut provider = empty_provider(identity.clone(), installed.enabled);
+			provider.problems.push(ConflictProblem {
 				kind: ConflictProblemKind::ProviderMissing,
-				scope: ProblemScope::Provider(identity.clone()),
+				scope: ProblemScope::Provider(identity),
 			});
-			providers.push(empty_provider(identity, installed.enabled));
+			providers.push(provider);
 			continue;
 		};
 		if canonical_name.as_str() != installed.name.as_str() {
@@ -136,7 +138,6 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 			identity,
 			installed.enabled,
 			true,
-			&mut problems,
 			cancellation,
 		)?);
 	}
@@ -152,7 +153,6 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 		ProviderIdentity::Overwrite,
 		true,
 		false,
-		&mut problems,
 		cancellation,
 	)?);
 
@@ -167,37 +167,19 @@ pub(crate) fn read_content(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	let Ok(root) = SafeDir::open_absolute(root_path) else {
-		return Ok(ConflictContentRead::Unavailable);
-	};
+	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::io_failure())?;
 	let provider = match id.identity() {
 		ProviderIdentity::SteamData => {
-			let Ok(binding) = manifest_game_binding(&root, cancellation) else {
-				return Ok(ConflictContentRead::Unavailable);
-			};
-			let Ok(game) = SafeDir::open_absolute(binding.game_directory().as_path()) else {
-				return Ok(ConflictContentRead::Unavailable);
-			};
-			let Ok(data) = game.open_dir("Data") else {
-				return Ok(ConflictContentRead::Unavailable);
-			};
-			data
+			let binding = manifest_game_binding(&root, cancellation)?;
+			let game = SafeDir::open_absolute(binding.game_directory().as_path())
+				.context(ErrorMarker::io_failure())?;
+			game.open_dir("Data").context(ErrorMarker::io_failure())?
 		}
 		ProviderIdentity::DataMod { mod_name, .. } => {
-			let Ok(mods) = root.open_dir("mods") else {
-				return Ok(ConflictContentRead::Unavailable);
-			};
-			let Ok(directory) = mods.open_dir(mod_name.as_str()) else {
-				return Ok(ConflictContentRead::Unavailable);
-			};
-			directory
+			let mods = root.open_dir("mods").context(ErrorMarker::io_failure())?;
+			mods.open_dir(mod_name.as_str()).context(ErrorMarker::io_failure())?
 		}
-		ProviderIdentity::Overwrite => {
-			let Ok(directory) = root.open_dir("overwrite") else {
-				return Ok(ConflictContentRead::Unavailable);
-			};
-			directory
-		}
+		ProviderIdentity::Overwrite => root.open_dir("overwrite").context(ErrorMarker::io_failure())?,
 	};
 
 	let mut current = provider;
@@ -207,17 +189,28 @@ pub(crate) fn read_content(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 		if components.peek().is_none() {
-			let Ok(file) = current.open_regular(component) else {
-				return Ok(ConflictContentRead::Unavailable);
+			let metadata = match current.symlink_metadata(component) {
+				Ok(metadata) => metadata,
+				Err(error) if error.current_context().kind() != io::ErrorKind::NotFound => {
+					return Ok(ConflictContentRead::Unavailable);
+				}
+				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
+			};
+			if !metadata.is_file() || metadata.nlink() != 1 {
+				return Err(report!(ErrorMarker::io_failure()));
+			}
+			let file = match current.open_regular(component) {
+				Ok(file) => file,
+				Err(error) if error.current_context().kind() == io::ErrorKind::PermissionDenied => {
+					return Ok(ConflictContentRead::Unavailable);
+				}
+				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
 			};
 			return hashing::sha256(file, cancellation);
 		}
-		let Ok(child) = current.open_dir(component) else {
-			return Ok(ConflictContentRead::Unavailable);
-		};
-		current = child;
+		current = current.open_dir(component).context(ErrorMarker::io_failure())?;
 	}
-	Ok(ConflictContentRead::Unavailable)
+	Err(report!(ErrorMarker::io_failure()))
 }
 
 fn empty_provider(identity: ProviderIdentity, enabled: bool) -> ScannedConflictProvider {
@@ -227,6 +220,7 @@ fn empty_provider(identity: ProviderIdentity, enabled: bool) -> ScannedConflictP
 		files: Vec::new(),
 		directories: Vec::new(),
 		tombstones: Vec::new(),
+		problems: Vec::new(),
 	}
 }
 
@@ -374,10 +368,10 @@ fn scan_provider(
 	identity: ProviderIdentity,
 	enabled: bool,
 	require_metadata: bool,
-	problems: &mut Vec<ConflictProblem>,
 	cancellation: &CancellationToken,
 ) -> Result<ScannedConflictProvider, ErrorMarker> {
 	let mut provider = empty_provider(identity.clone(), enabled);
+	let mut problems = Vec::new();
 	let mut keys = HashMap::new();
 	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
 	scan_provider_directory(
@@ -388,7 +382,7 @@ fn scan_provider(
 		"",
 		&mut provider,
 		&mut keys,
-		problems,
+		&mut problems,
 		cancellation,
 		&mut budget,
 		MAX_TRAVERSAL_DEPTH,
@@ -402,9 +396,10 @@ fn scan_provider(
 		});
 	}
 	if metadata_exists {
-		provider.tombstones = read_tombstones(directory, &identity, enabled, problems, cancellation)?;
+		provider.tombstones = read_tombstones(directory, &identity, enabled, &mut problems, cancellation)?;
 	}
-	validate_provider_tombstones(&provider, &keys, problems);
+	validate_provider_tombstones(&provider, &keys, &mut problems);
+	provider.problems = problems;
 	Ok(provider)
 }
 
@@ -458,8 +453,16 @@ fn scan_provider_directory(
 			});
 			continue;
 		};
-		if prefix.is_empty() && spelling == "meta.toml" && identity.class() != domain::ProviderClass::SteamData
+		let metadata_key = case_fold_key("meta.toml");
+		if prefix.is_empty()
+			&& case_fold_key(spelling) == metadata_key
+			&& identity.class() != ProviderClass::SteamData
 		{
+			if spelling != "meta.toml" {
+				let path =
+					DataRelativePath::new(spelling.to_owned()).context(ErrorMarker::io_failure())?;
+				problems.push(path_problem(ConflictProblemKind::ReservedPath, &path));
+			}
 			continue;
 		}
 		let relative = if prefix.is_empty() {
@@ -474,7 +477,7 @@ fn scan_provider_directory(
 			});
 			continue;
 		};
-		if identity.class() == domain::ProviderClass::SteamData
+		if identity.class() == ProviderClass::SteamData
 			&& prefix.is_empty() && path.comparison_key() == case_fold_key("meta.toml")
 		{
 			problems.push(path_problem(ConflictProblemKind::ReservedPath, &path));
@@ -851,12 +854,46 @@ mod tests {
 		let kinds = completed
 			.problems
 			.iter()
+			.chain(completed.providers.iter().flat_map(|provider| &provider.problems))
 			.map(|problem| problem.kind)
 			.collect::<Vec<_>>();
 
 		assert!(kinds.contains(&ConflictProblemKind::ModlistInvalid));
 		assert!(kinds.contains(&ConflictProblemKind::InvalidTombstonePath));
 		assert!(kinds.contains(&ConflictProblemKind::OrdinaryTombstoneCollision));
+		Ok(())
+	}
+
+	#[test]
+	fn root_metadata_is_excluded_by_windows_case_insensitive_name() -> Result<(), Box<dyn Error>> {
+		let (_temp, root) = fixture()?;
+		write_provider(
+			root.as_path(),
+			"Aliased",
+			&[("content.txt", b"content")],
+			"schema_version = 1\n",
+		)?;
+		fs::rename(
+			root.as_path().join("mods/Aliased/meta.toml"),
+			root.as_path().join("mods/Aliased/META.TOML"),
+		)?;
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+Aliased\n")?;
+
+		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let provider = completed
+			.providers
+			.iter()
+			.find(|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if mod_name.as_str() == "Aliased"))
+			.ok_or("aliased provider")?;
+
+		assert!(provider
+			.files
+			.iter()
+			.all(|file| file.provider.original_path().comparison_key() != "meta.toml"));
+		assert!(provider
+			.problems
+			.iter()
+			.any(|problem| problem.kind == ConflictProblemKind::ReservedPath));
 		Ok(())
 	}
 
@@ -873,7 +910,8 @@ mod tests {
 	}
 
 	#[test]
-	fn indexed_content_reads_hash_once_opened_and_report_deleted_files_unavailable() -> Result<(), Box<dyn Error>> {
+	fn indexed_content_reads_hash_once_opened_and_report_deleted_files_as_namespace_failure()
+	-> Result<(), Box<dyn Error>> {
 		let (_temp, root) = fixture()?;
 		write_provider(
 			root.as_path(),
@@ -902,11 +940,9 @@ mod tests {
 		);
 
 		fs::remove_file(root.as_path().join("mods/Hashable/file.txt"))?;
-		assert_eq!(
-			read_content(root.as_path(), id, &CancellationToken::new())
-				.expect("unavailable content read must complete"),
-			ConflictContentRead::Unavailable
-		);
+		let error = read_content(root.as_path(), id, &CancellationToken::new())
+			.expect_err("deleted indexed content must invalidate the complete query");
+		assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
 		Ok(())
 	}
 }

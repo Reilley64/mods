@@ -12,9 +12,7 @@ mod tombstones;
 
 pub use conflicts::ConflictProblem;
 pub use conflicts::ConflictProblemKind;
-pub use conflicts::ConflictProblemScope;
 pub use conflicts::ConflictRow;
-pub use conflicts::ConflictView;
 pub use conflicts::ContentComparison;
 pub use conflicts::ContentState;
 pub use conflicts::EffectiveResult;

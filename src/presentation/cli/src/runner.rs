@@ -806,6 +806,7 @@ mod tests {
 					}],
 					directories: Vec::new(),
 					tombstones: Vec::new(),
+					problems: Vec::new(),
 				},
 				ScannedConflictProvider {
 					identity: ProviderIdentity::DataMod {
@@ -830,6 +831,7 @@ mod tests {
 					}],
 					directories: Vec::new(),
 					tombstones: Vec::new(),
+					problems: Vec::new(),
 				},
 			],
 			problems: Vec::new(),

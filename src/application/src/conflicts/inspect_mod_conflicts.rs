@@ -1,5 +1,4 @@
 use super::projection::project_inspection;
-use crate::errors::ErrorMarker;
 use crate::ports::ReadConflictContent;
 use crate::ports::ScanEnvironmentConflicts;
 use domain::ConflictProblem;
@@ -10,7 +9,6 @@ use domain::ProviderSummary;
 use domain::ResolutionStatus;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
-use rootcause::report;
 use std::fmt;
 use tokio_util::sync::CancellationToken;
 
@@ -46,19 +44,11 @@ pub async fn inspect_mod_conflicts(
 	compare_content: bool,
 	cancellation: CancellationToken,
 ) -> Result<InspectModConflictsOutput, InspectModConflictsError> {
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InspectModConflictsError));
-	}
-
 	let scan = dependencies
 		.scan_environment
 		.call((cancellation.clone(),))
 		.await
 		.context(InspectModConflictsError)?;
-
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InspectModConflictsError));
-	}
 
 	project_inspection(
 		scan,

@@ -170,8 +170,6 @@ pub enum ProblemScope {
 	},
 }
 
-pub type ConflictProblemScope = ProblemScope;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConflictProblem {
 	pub kind: ConflictProblemKind,
@@ -223,13 +221,6 @@ pub enum ResolutionReason {
 		overriding_file: ProviderReference,
 	},
 	NamespaceInvalid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConflictView {
-	pub resolution_status: ResolutionStatus,
-	pub rows: Vec<ConflictRow>,
-	pub problems: Vec<ConflictProblem>,
 }
 
 #[cfg(test)]

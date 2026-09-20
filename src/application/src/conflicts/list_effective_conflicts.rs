@@ -1,5 +1,4 @@
 use super::projection::project_list;
-use crate::errors::ErrorMarker;
 use crate::ports::ReadConflictContent;
 use crate::ports::ScanEnvironmentConflicts;
 use domain::ConflictProblem;
@@ -7,7 +6,6 @@ use domain::ConflictRow;
 use domain::ResolutionStatus;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
-use rootcause::report;
 use std::fmt;
 use tokio_util::sync::CancellationToken;
 
@@ -39,19 +37,11 @@ pub async fn list_effective_conflicts(
 	compare_content: bool,
 	cancellation: CancellationToken,
 ) -> Result<ListEffectiveConflictsOutput, ListEffectiveConflictsError> {
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(ListEffectiveConflictsError));
-	}
-
 	let scan = dependencies
 		.scan_environment
 		.call((cancellation.clone(),))
 		.await
 		.context(ListEffectiveConflictsError)?;
-
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(ListEffectiveConflictsError));
-	}
 
 	project_list(scan, compare_content, dependencies.read_conflict_content, cancellation)
 		.await

@@ -1,5 +1,4 @@
 use super::projection::project_path;
-use crate::errors::ErrorMarker;
 use crate::ports::ReadConflictContent;
 use crate::ports::ScanEnvironmentConflicts;
 use domain::ConflictProblem;
@@ -12,7 +11,6 @@ use domain::ResolutionStatus;
 use domain::TombstoneEffect;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
-use rootcause::report;
 use std::fmt;
 use tokio_util::sync::CancellationToken;
 
@@ -51,19 +49,11 @@ pub async fn explain_path(
 	compare_content: bool,
 	cancellation: CancellationToken,
 ) -> Result<ExplainPathOutput, ExplainPathError> {
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(ExplainPathError));
-	}
-
 	let scan = dependencies
 		.scan_environment
 		.call((cancellation.clone(),))
 		.await
 		.context(ExplainPathError)?;
-
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(ExplainPathError));
-	}
 
 	project_path(
 		scan,

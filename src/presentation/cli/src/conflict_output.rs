@@ -230,7 +230,7 @@ fn provider_priority(text: &mut String, prefix: &str, value: ProviderRank) {
 		ProviderRank::Base => line_string(text, &format!("{prefix}.kind"), "base"),
 		ProviderRank::Regular(priority) => {
 			line_string(text, &format!("{prefix}.kind"), "regular");
-			line_u32(text, &format!("{prefix}.priority"), priority.get());
+			let _ = writeln!(text, "{prefix}.priority = {}", priority.get());
 		}
 		ProviderRank::Overwrite => line_string(text, &format!("{prefix}.kind"), "overwrite"),
 	}
@@ -485,10 +485,6 @@ fn line_string(text: &mut String, name: &str, value: &str) {
 
 fn line_path(text: &mut String, name: &str, value: &str) {
 	line_string(text, name, &value.replace('/', "\\"));
-}
-
-fn line_u32(text: &mut String, name: &str, value: u32) {
-	let _ = writeln!(text, "{name} = {value}");
 }
 
 fn line_u64(text: &mut String, name: &str, value: u64) {

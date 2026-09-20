@@ -1,4 +1,5 @@
 use domain::ConflictProblem;
+use domain::DataRelativePath;
 use domain::ProviderIdentity;
 use domain::ProviderReference;
 use domain::Sha256Digest;
@@ -7,11 +8,11 @@ use domain::Tombstone;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IndexedConflictFileId {
 	identity: ProviderIdentity,
-	path: domain::DataRelativePath,
+	path: DataRelativePath,
 }
 
 impl IndexedConflictFileId {
-	pub fn new(identity: ProviderIdentity, path: domain::DataRelativePath) -> Self {
+	pub fn new(identity: ProviderIdentity, path: DataRelativePath) -> Self {
 		Self { identity, path }
 	}
 
@@ -19,7 +20,7 @@ impl IndexedConflictFileId {
 		&self.identity
 	}
 
-	pub fn path(&self) -> &domain::DataRelativePath {
+	pub fn path(&self) -> &DataRelativePath {
 		&self.path
 	}
 }
@@ -37,6 +38,7 @@ pub struct ScannedConflictProvider {
 	pub files: Vec<IndexedConflictFile>,
 	pub directories: Vec<ProviderReference>,
 	pub tombstones: Vec<Tombstone>,
+	pub problems: Vec<ConflictProblem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

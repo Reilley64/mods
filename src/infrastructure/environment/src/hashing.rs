@@ -5,6 +5,7 @@ use application::conflicts::ConflictContentRead;
 use cap_std::time::SystemTime;
 use domain::Sha256Digest;
 use rootcause::Result;
+use rootcause::prelude::ResultExt;
 use rootcause::report;
 use sha2::Digest;
 use sha2::Sha256;
@@ -50,16 +51,12 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 	}
 
 	let digest = hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
-	let Ok(digest) = Sha256Digest::new(digest) else {
-		return Err(report!(ErrorMarker::io_failure()));
-	};
+	let digest = Sha256Digest::new(digest).context(ErrorMarker::io_failure())?;
 	Ok(ConflictContentRead::Sha256(digest))
 }
 
-fn fingerprint(file: &SafeFile) -> std::io::Result<ContentFingerprint> {
-	let metadata = file
-		.metadata()
-		.map_err(|report| std::io::Error::other(report.current_context().to_string()))?;
+fn fingerprint(file: &SafeFile) -> Result<ContentFingerprint, std::io::Error> {
+	let metadata = file.metadata()?;
 	Ok(ContentFingerprint {
 		length: metadata.len(),
 		modified: metadata.modified().ok(),
