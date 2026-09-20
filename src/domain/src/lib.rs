@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod conflicts;
 mod environment;
 mod game;
 mod identity;
@@ -7,7 +8,21 @@ mod installation;
 mod mods;
 mod paths;
 mod providers;
+mod tombstones;
 
+pub use conflicts::ConflictProblem;
+pub use conflicts::ConflictProblemKind;
+pub use conflicts::ConflictRow;
+pub use conflicts::ContentComparison;
+pub use conflicts::ContentState;
+pub use conflicts::EffectiveResult;
+pub use conflicts::Participation;
+pub use conflicts::ProblemScope;
+pub use conflicts::ProviderState;
+pub use conflicts::ProviderSummary;
+pub use conflicts::ResolutionReason;
+pub use conflicts::ResolutionStatus;
+pub use conflicts::TombstoneEffect;
 pub use environment::EnvironmentName;
 pub use environment::EnvironmentRoot;
 pub use environment::EnvironmentSchemaVersion;
@@ -44,4 +59,9 @@ pub use paths::DataRelativePath;
 pub use paths::InvalidDataRelativePath;
 pub use providers::ParticipationReason;
 pub use providers::ProviderClass;
+pub use providers::ProviderIdentity;
+pub use providers::ProviderRank;
 pub use providers::ProviderReference;
+pub use tombstones::Tombstone;
+pub use tombstones::TombstoneReference;
+pub use tombstones::TombstoneScope;

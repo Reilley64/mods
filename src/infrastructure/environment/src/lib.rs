@@ -1,4 +1,6 @@
 mod active_code_page;
+mod conflict_scan;
+mod hashing;
 mod manifest;
 mod profile;
 mod profile_activation;
@@ -7,6 +9,8 @@ mod safe_fs;
 mod snapshot;
 mod transactions;
 
+use crate::conflict_scan::read_content as read_conflict_content;
+use crate::conflict_scan::scan as scan_conflicts;
 use crate::manifest::validate_manifest_file;
 use crate::manifest::write_manifest;
 use crate::profile::stage_profile;
@@ -36,6 +40,8 @@ use application::ports::LoadInstallationState;
 use application::ports::PortFuture;
 use application::ports::ProfileFileRecord;
 use application::ports::PublishEnvironment;
+use application::ports::ReadConflictContent;
+use application::ports::ScanEnvironmentConflicts;
 use domain::DataRelativePath;
 use domain::EnvironmentRoot;
 use rootcause::Result;
@@ -295,6 +301,20 @@ impl EnvironmentAdapter {
 			}) as PortFuture<_>
 		});
 		Ok(InstallationChange { begin_file, finish })
+	}
+
+	pub fn scan_environment_conflicts_port(&self, root: EnvironmentRoot) -> ScanEnvironmentConflicts {
+		Arc::new(move |cancellation| {
+			let result = scan_conflicts(root.as_path(), &cancellation);
+			Box::pin(ready(result)) as PortFuture<_>
+		})
+	}
+
+	pub fn read_conflict_content_port(&self, root: EnvironmentRoot) -> ReadConflictContent {
+		Arc::new(move |id, cancellation| {
+			let result = read_conflict_content(root.as_path(), &id, &cancellation);
+			Box::pin(ready(result)) as PortFuture<_>
+		})
 	}
 
 	pub fn load_installation_state_port(&self, root: EnvironmentRoot) -> LoadInstallationState {

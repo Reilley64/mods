@@ -28,6 +28,8 @@ pub use environment::ProfileFileDisposition;
 pub use environment::ProfileFileRecord;
 pub use environment::ProfileSource;
 pub use environment::PublishEnvironment;
+pub use environment::ReadConflictContent;
+pub use environment::ScanEnvironmentConflicts;
 pub use environment::WriteInstallationChunk;
 pub use game_platform::GameInstallationSource;
 pub use game_platform::LoadProfileSources;

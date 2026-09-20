@@ -1,6 +1,7 @@
 #![feature(fn_traits)]
 #![forbid(unsafe_code)]
 
+pub mod conflicts;
 pub mod environment;
 mod errors;
 pub mod installation;
