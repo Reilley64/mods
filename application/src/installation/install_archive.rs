@@ -1,5 +1,7 @@
-use super::fomod;
-use super::planning::plan_candidates;
+mod fomod;
+mod planning;
+
+use self::planning::plan_candidates;
 use crate::errors::ErrorMarker;
 use crate::installation::AcceptedChoice;
 use crate::installation::AdditionalSelectionsRequired;
