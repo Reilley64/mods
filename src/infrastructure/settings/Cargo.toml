@@ -10,20 +10,20 @@ workspace = true
 
 [dependencies]
 application = { path = "../../application", version = "0.0.0" }
-cap-std = "=3.4.6"
-config = { version = "=0.15.25", default-features = false, features = ["toml"] }
+cap-std = "3.4.6"
+config = { version = "0.15.25", default-features = false, features = ["toml"] }
 domain = { path = "../../domain", version = "0.0.0" }
-encoding_rs = "0.8"
-rootcause = "0.13"
-serde = { version = "1", features = ["derive"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-toml = "0.9"
+encoding_rs = "0.8.41"
+rootcause = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
+toml = "0.9.12"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = "0.2.189"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Globalization", "Win32_Storage_FileSystem"] }
+windows = { version = "0.62.2", features = ["Win32_Globalization", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.27.0"
