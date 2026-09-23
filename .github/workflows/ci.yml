@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: windows-latest
+    runs-on: windows-2022
     outputs:
       rust_changed: ${{ steps.rust-changes.outputs.changed }}
     steps:
