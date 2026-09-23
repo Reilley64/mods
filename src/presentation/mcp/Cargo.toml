@@ -13,6 +13,6 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-application = { path = "../../application", version = "0.0.0" }
-domain = { path = "../../domain", version = "0.0.0" }
-infrastructure = { path = "../../infrastructure/dependencies", version = "0.0.0" }
+application = { workspace = true }
+domain = { workspace = true }
+infrastructure = { workspace = true }

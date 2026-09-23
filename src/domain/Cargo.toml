@@ -9,5 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-rootcause = "0.13.0"
+rootcause = { workspace = true }
 unicode-case-mapping = "1.0.0"
