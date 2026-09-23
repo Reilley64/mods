@@ -61,7 +61,7 @@ The implicit Mod Environment-owned Data provider with highest mod priority. It i
 _Avoid_: Root output, temporary directory
 
 **Output Target**:
-Overwrite or one installed, enabled Data Mod selected to receive new Data files and copy or file-move destinations for one managed execution. Selection does not change mod priority.
+Overwrite or one installed, enabled Data Mod selected to receive new Data files and new copy or file-move destinations for one managed execution. Selection does not change Mod Priority or relocate existing destination files from their current provider.
 _Avoid_: Profile State, staging directory
 
 **Diagnostic Session**:

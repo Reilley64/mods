@@ -1,6 +1,7 @@
 {
   "name": "mods-repository-tools",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "version": "0.0.0",
   "scripts": {
     "check": "bun run check:rust && bun run check:tools",
