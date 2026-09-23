@@ -4,6 +4,7 @@
 target/
 dist/
 node_modules/
+native/artifacts/
 *.log
 .env
 .env.*

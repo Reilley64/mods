@@ -10,13 +10,14 @@ permissions:
 
 jobs:
   check:
-    runs-on: windows-latest
+    runs-on: windows-2022
     outputs:
       rust_changed: ${{ steps.rust-changes.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          submodules: true
       - name: Detect Rust changes
         id: rust-changes
         shell: pwsh
@@ -30,7 +31,7 @@ jobs:
             $changed = git diff --name-only $env:BASE_SHA $env:HEAD_SHA
           }
           $rustChanged = @($changed | Where-Object {
-            $_ -match '^(src/|Cargo\.lock$|Cargo\.toml$|rust-toolchain\.toml$|rustfmt\.toml$)'
+            $_ -match '^(src/|native/|licenses/|\.gitmodules$|Cargo\.lock$|Cargo\.toml$|rust-toolchain\.toml$|rustfmt\.toml$)'
           }).Count -gt 0
           "changed=$($rustChanged.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - name: Set up Bun
@@ -47,28 +48,50 @@ jobs:
         with:
           toolchain: nightly-2026-08-21
           components: rustfmt, clippy
-          targets: x86_64-pc-windows-msvc
+          targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc
       - name: Install cargo-nextest
         if: steps.rust-changes.outputs.changed == 'true'
         uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2
         with:
           tool: cargo-nextest@0.9.145
           fallback: none
+      - name: Build unmodified upstream native artifacts
+        if: steps.rust-changes.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          ./native/build.ps1
+          "MODS_USVFS_ARTIFACTS=$pwd/native/artifacts/bin" >> $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:/Program Files/LLVM/bin" >> $env:GITHUB_ENV
+      - name: Compile and test x86 adapter bindings
+        if: steps.rust-changes.outputs.changed == 'true'
+        run: cargo test --locked --package execution --target i686-pc-windows-msvc
       - name: Run Rust checks
         if: steps.rust-changes.outputs.changed == 'true'
         run: bun run check:rust
 
   preview:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check.outputs.rust_changed == 'true'
+    # Disabled until complete corresponding source (including required static
+    # dependency source) is distributable. Registry references are insufficient.
+    if: ${{ false }}
     needs: check
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: nightly-2026-08-21
           targets: x86_64-pc-windows-msvc
+      - name: Build unmodified upstream native artifacts
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          ./native/build.ps1
+          "MODS_USVFS_ARTIFACTS=$pwd/native/artifacts/bin" >> $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:/Program Files/LLVM/bin" >> $env:GITHUB_ENV
       - name: Build preview
         run: cargo build --release --locked --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins
       - name: Package preview
@@ -80,7 +103,15 @@ jobs:
             "target/x86_64-pc-windows-msvc/release/mods.exe",
             "target/x86_64-pc-windows-msvc/release/mods-mcp.exe"
           )
-          Compress-Archive -Path $binaries -DestinationPath "dist/$artifact"
+          New-Item -ItemType Directory -Force dist/package/usvfs, dist/package/licenses | Out-Null
+          Copy-Item $binaries dist/package
+          Copy-Item native/artifacts/bin/* dist/package/usvfs
+          Copy-Item -Recurse licenses/usvfs dist/package/licenses
+          Copy-Item native/README.md dist/package/usvfs/BUILD-AND-SOURCE.md
+          # Partial source bundle only; static dependency source still blocks publication.
+          git archive --format=tar --output=dist/package/mods-source.tar HEAD
+          git -C native/usvfs archive --format=tar --output=../../dist/package/usvfs-source.tar HEAD
+          Compress-Archive -Path dist/package/* -DestinationPath "dist/$artifact"
       - name: Upload tagless preview
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

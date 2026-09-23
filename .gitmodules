@@ -1,0 +1,3 @@
+[submodule "native/usvfs"]
+	path = native/usvfs
+	url = https://github.com/ModOrganizer2/usvfs.git

@@ -3,30 +3,27 @@ name = "environment"
 version = "0.0.0"
 edition = "2024"
 publish = false
+license.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-application = { path = "../../application", version = "0.0.0" }
-domain = { path = "../../domain", version = "0.0.0" }
+application = { workspace = true }
+domain = { workspace = true }
 cap-fs-ext = "3.4.6"
-cap-std = "3.4.6"
-encoding_rs = "0.8"
-rootcause = "0.13"
-same-file = "1"
-serde = { version = "1", features = ["derive"] }
-sha2 = { version = "=0.11.0", default-features = false }
-toml = "0.9"
-tokio = { version = "1", features = ["sync"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+cap-std = { workspace = true }
+encoding_rs = { workspace = true }
+rootcause = { workspace = true }
+same-file = "1.0.6"
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true, features = ["rt"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = [
-	"Win32_Foundation",
-	"Win32_Globalization",
-	"Win32_Storage_FileSystem",
-] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

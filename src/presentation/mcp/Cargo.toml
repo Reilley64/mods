@@ -3,6 +3,7 @@ name = "mods-mcp"
 version = "0.0.0"
 edition = "2024"
 publish = false
+license.workspace = true
 
 [[bin]]
 name = "mods-mcp"
@@ -12,6 +13,6 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-application = { path = "../../application", version = "0.0.0" }
-domain = { path = "../../domain", version = "0.0.0" }
-infrastructure = { path = "../../infrastructure/dependencies", version = "0.0.0" }
+application = { workspace = true }
+domain = { workspace = true }
+infrastructure = { workspace = true }

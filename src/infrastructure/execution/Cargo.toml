@@ -3,10 +3,21 @@ name = "execution"
 version = "0.0.0"
 edition = "2024"
 publish = false
+license.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-application = { path = "../../application", version = "0.0.0" }
-domain = { path = "../../domain", version = "0.0.0" }
+application = { workspace = true }
+domain = { workspace = true }
+rootcause = { workspace = true }
+sha2 = { workspace = true }
+
+[build-dependencies]
+bindgen = "0.72.1"
+cc = "1.4.7"
+sha2 = { workspace = true }
+
+[target."cfg(windows)".dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security"] }
