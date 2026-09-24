@@ -466,7 +466,7 @@ fn publish_installation(
 	stage.rename_durable_to("mod", &mods, mod_name)
 		.context(publication_failed())?;
 
-	for (index, file) in profile_files.iter().enumerate() {
+	for file in profile_files {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -478,9 +478,6 @@ fn publish_installation(
 		staged_profile
 			.rename_durable_to(&file.name, &profile, &file.name)
 			.context(publication_failed())?;
-		if index + 1 == profile_files.len() {
-			break;
-		}
 	}
 
 	// The mod is final when no profile file changed. Otherwise, the last changed profile
@@ -563,6 +560,7 @@ mod tests {
 	use application::installation::WinnerReason;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
+	use application::ports::InstallationStateAccess;
 	use application::ports::ProfileSource;
 	use domain::ArchiveIdentity;
 	use domain::DataRelativePath;
@@ -713,9 +711,8 @@ mod tests {
 
 	#[expect(clippy::panic, reason = "a successful result must fail this test assertion")]
 	fn assert_manual_cleanup_required<T>(result: Result<T, ErrorMarker>) {
-		let error = match result {
-			Ok(_) => panic!("pending work must require manual cleanup"),
-			Err(error) => error,
+		let Err(error) = result else {
+			panic!("pending work must require manual cleanup");
 		};
 		assert_eq!(error.current_context().code(), ErrorCode::ManualCleanupRequired);
 	}
@@ -1034,7 +1031,7 @@ mod tests {
 		assert!(root.as_path().join("temp/operation/backup/modlist.txt").is_file());
 		assert_manual_cleanup_required(EnvironmentAdapter.load_installation_state(
 			&root,
-			application::ports::InstallationStateAccess::Mutation,
+			InstallationStateAccess::Mutation,
 			&CancellationToken::new(),
 		));
 	}
@@ -1104,7 +1101,7 @@ mod tests {
 		assert!(root.as_path().join("temp/operation").is_file());
 		assert_manual_cleanup_required(EnvironmentAdapter.load_installation_state(
 			&root,
-			application::ports::InstallationStateAccess::Mutation,
+			InstallationStateAccess::Mutation,
 			&CancellationToken::new(),
 		));
 	}

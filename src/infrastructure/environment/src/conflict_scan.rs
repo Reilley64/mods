@@ -1,4 +1,4 @@
-use crate::hashing;
+use crate::hashing::sha256;
 use crate::manifest::manifest_game_binding;
 use crate::profile::MAX_PROFILE_BYTES;
 use crate::safe_fs::EntryBudget;
@@ -208,7 +208,7 @@ pub(crate) fn read_content(
 				}
 				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
 			};
-			return hashing::sha256(file, cancellation);
+			return sha256(file, cancellation);
 		}
 		current = current.open_dir(component).context(ErrorMarker::io_failure())?;
 	}
@@ -266,13 +266,11 @@ fn directory_has_entries(directory: &SafeDir, cancellation: &CancellationToken) 
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	match next {
-		Some(entry) => {
-			entry.into_report().context(ErrorMarker::io_failure())?;
-			Ok(true)
-		}
-		None => Ok(false),
-	}
+	let Some(entry) = next else {
+		return Ok(false);
+	};
+	entry.into_report().context(ErrorMarker::io_failure())?;
+	Ok(true)
 }
 
 fn parse_modlist(bytes: &[u8]) -> (Vec<InstalledMod>, Vec<ConflictProblem>) {

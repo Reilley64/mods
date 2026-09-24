@@ -55,10 +55,12 @@ async fn main() {
 			exit(publication::exit_status(status, &publication_result));
 		}
 	};
+
 	let stdout = stdout();
 	let stderr = stderr();
 	let mut stdout = stdout.lock();
 	let mut stderr = stderr.lock();
+
 	let publication_result = publication::publish(&outcome, &mut stdout, &mut stderr);
 	let status = publication::exit_status(outcome.status as i32, &publication_result);
 	if status != 0 {

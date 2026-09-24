@@ -2,6 +2,7 @@ use crate::fs_access;
 use application::ErrorMarker;
 use cap_std::fs::Dir;
 use domain::case_fold_key;
+use encoding_rs::WINDOWS_1252;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -10,6 +11,8 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 use std::str;
+use toml::Value;
+use toml::from_str;
 #[cfg(windows)]
 use windows::Win32::Globalization::CP_UTF8;
 #[cfg(windows)]
@@ -90,7 +93,7 @@ fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 	validate_safe_tree(&saves)?;
 
 	let fallout = decode_ini(&read_regular(profile, "Fallout.ini")?)?;
-	let keys = archive_values(&fallout);
+	let keys = section_values(&fallout, "Archive", &MANAGED_ARCHIVE_KEYS);
 	if keys.get("binvalidateolderfiles")
 		.is_none_or(|values| values.as_slice() != ["1"])
 		|| keys.get("sinvalidationfile")
@@ -105,13 +108,15 @@ fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
-		if names.contains(name) {
-			let text = decode_ini(&read_regular(profile, name)?)?;
-			if contains_keys(&text, &MANAGED_GENERAL_KEYS)
-				|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
-			{
-				return Err(report!(ErrorMarker::environment_invalid(None)));
-			}
+		if !names.contains(name) {
+			continue;
+		}
+
+		let text = decode_ini(&read_regular(profile, name)?)?;
+		if contains_keys(&text, &MANAGED_GENERAL_KEYS)
+			|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
+		{
+			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
 	validate_plugin_list(&read_regular(profile, "plugins.txt")?, false)?;
@@ -141,8 +146,8 @@ fn validate_mods(mods: &Dir, listed_mods: &HashSet<String>) -> Result<(), ErrorM
 
 fn validate_meta(bytes: &[u8]) -> Result<(), ErrorMarker> {
 	let text = str::from_utf8(bytes).context(ErrorMarker::environment_invalid(None))?;
-	let metadata: toml::Value = toml::from_str(text).context(ErrorMarker::environment_invalid(None))?;
-	if metadata.get("schema_version").and_then(toml::Value::as_integer) != Some(1) {
+	let metadata: Value = from_str(text).context(ErrorMarker::environment_invalid(None))?;
+	if metadata.get("schema_version").and_then(Value::as_integer) != Some(1) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	Ok(())
@@ -269,7 +274,7 @@ fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
 	match String::from_utf8(bytes.to_vec()) {
 		Ok(text) => Ok(text),
 		Err(_) => {
-			let (text, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+			let (text, _, _) = WINDOWS_1252.decode(bytes);
 			Ok(text.into_owned())
 		}
 	}
@@ -381,7 +386,7 @@ fn decode_active_code_page(bytes: &[u8]) -> Result<String, ErrorMarker> {
 
 #[cfg(not(windows))]
 fn decode_active_code_page(bytes: &[u8]) -> Result<String, ErrorMarker> {
-	Ok(encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned())
+	Ok(WINDOWS_1252.decode(bytes).0.into_owned())
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -408,10 +413,6 @@ fn archive_list_valid(value: &str) -> bool {
 
 fn is_invalidation_archive(value: &str) -> bool {
 	case_fold_key(value) == "fallout - invalidation.bsa"
-}
-
-fn archive_values(text: &str) -> HashMap<String, Vec<&str>> {
-	section_values(text, "Archive", &MANAGED_ARCHIVE_KEYS)
 }
 
 fn general_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
@@ -453,8 +454,8 @@ fn section_values<'a>(text: &'a str, wanted_section: &str, wanted_keys: &[&str])
 	let mut result = HashMap::new();
 	let mut current = "";
 	for line in text.lines() {
-		if let Some(section) = line.trim().strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
-			current = section.trim();
+		if let Some(section) = section_name(line) {
+			current = section;
 			continue;
 		}
 		if !current.eq_ignore_ascii_case(wanted_section) {

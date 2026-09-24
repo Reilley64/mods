@@ -435,59 +435,60 @@ pub(super) fn evaluate(
 			FomodCardinality::SelectAtLeastOne => selected_count >= 1,
 			FomodCardinality::SelectAll => selected_count == selectable_count,
 		};
-		if !complete {
-			if selectable_count == 0
-				&& matches!(
-					group.cardinality,
-					FomodCardinality::SelectExactlyOne | FomodCardinality::SelectAtLeastOne
-				) {
-				return Err(report!(ErrorMarker::unsupported_installer()));
-			}
+		if complete {
+			continue;
+		}
 
-			let mut options = Vec::new();
-			for option in &group.options {
-				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
-				}
-				budget.spend()?;
-				if !condition_matches(&option.condition, &flags, &facts, &mut budget, cancellation)? {
-					continue;
-				}
-				let resolved_type =
-					resolve_option_type(option, &flags, &facts, &mut budget, cancellation)?;
-				options.push(VisibleOption {
-					id: option.id.clone(),
-					label: option.label.clone(),
-					description: option.description.clone(),
-					resolved_type,
-					selectable: resolved_type != ResolvedOptionType::NotUsable,
-					synthetic: false,
-				});
-			}
-			if matches!(
+		if selectable_count == 0
+			&& matches!(
 				group.cardinality,
-				FomodCardinality::SelectAtMostOne | FomodCardinality::SelectAny
+				FomodCardinality::SelectExactlyOne | FomodCardinality::SelectAtLeastOne
 			) {
-				options.push(VisibleOption {
-					id: "none".to_owned(),
-					label: "None".to_owned(),
-					description: "Select no option".to_owned(),
-					resolved_type: ResolvedOptionType::Optional,
-					selectable: true,
-					synthetic: true,
-				});
+			return Err(report!(ErrorMarker::unsupported_installer()));
+		}
+
+		let mut options = Vec::new();
+		for option in &group.options {
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			if options.is_empty() {
-				return Err(report!(ErrorMarker::unsupported_installer()));
+			budget.spend()?;
+			if !condition_matches(&option.condition, &flags, &facts, &mut budget, cancellation)? {
+				continue;
 			}
-			unresolved_groups.push(UnresolvedGroup {
-				id: group.id.clone(),
-				label: group.label.clone(),
-				description: group.description.clone(),
-				cardinality: group.cardinality,
-				options,
+			let resolved_type = resolve_option_type(option, &flags, &facts, &mut budget, cancellation)?;
+			options.push(VisibleOption {
+				id: option.id.clone(),
+				label: option.label.clone(),
+				description: option.description.clone(),
+				resolved_type,
+				selectable: resolved_type != ResolvedOptionType::NotUsable,
+				synthetic: false,
 			});
 		}
+		if matches!(
+			group.cardinality,
+			FomodCardinality::SelectAtMostOne | FomodCardinality::SelectAny
+		) {
+			options.push(VisibleOption {
+				id: "none".to_owned(),
+				label: "None".to_owned(),
+				description: "Select no option".to_owned(),
+				resolved_type: ResolvedOptionType::Optional,
+				selectable: true,
+				synthetic: true,
+			});
+		}
+		if options.is_empty() {
+			return Err(report!(ErrorMarker::unsupported_installer()));
+		}
+		unresolved_groups.push(UnresolvedGroup {
+			id: group.id.clone(),
+			label: group.label.clone(),
+			description: group.description.clone(),
+			cardinality: group.cardinality,
+			options,
+		});
 	}
 
 	let mut ordered = Vec::with_capacity(selected.len());
@@ -549,6 +550,7 @@ pub(super) fn evaluate(
 			});
 		}
 	}
+
 	for warning in &installer.warnings {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
@@ -556,6 +558,7 @@ pub(super) fn evaluate(
 		budget.spend()?;
 		warnings.push(warning.clone());
 	}
+
 	for item in &selected {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
@@ -575,6 +578,7 @@ pub(super) fn evaluate(
 			});
 		}
 	}
+
 	let mut ordinary_file_dependencies = BTreeSet::new();
 	visit_installer_conditions(
 		installer,
@@ -606,6 +610,7 @@ pub(super) fn evaluate(
 			state,
 		});
 	}
+
 	let mut fomm_versions = BTreeSet::new();
 	visit_installer_conditions(
 		installer,
@@ -694,14 +699,16 @@ pub(super) fn evaluate(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 		budget.spend()?;
-		if condition_matches(&pattern.condition, &flags, &facts, &mut budget, cancellation)? {
-			for candidate in &pattern.candidates {
-				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
-				}
-				budget.spend()?;
-				candidates.push(candidate.clone());
+		if !condition_matches(&pattern.condition, &flags, &facts, &mut budget, cancellation)? {
+			continue;
+		}
+
+		for candidate in &pattern.candidates {
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
+			budget.spend()?;
+			candidates.push(candidate.clone());
 		}
 	}
 	if cancellation.is_cancelled() {

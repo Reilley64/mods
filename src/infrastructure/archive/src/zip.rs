@@ -415,6 +415,7 @@ mod tests {
 	use std::io::Seek;
 	use std::io::SeekFrom;
 	use std::io::Write;
+	use std::result::Result as StdResult;
 	use std::time::Instant;
 	use tempfile::tempfile;
 	use tokio_util::sync::CancellationToken;
@@ -422,7 +423,7 @@ mod tests {
 	use zip::ZipWriter;
 	use zip::write::SimpleFileOptions;
 
-	type TestResult = std::result::Result<(), Box<dyn Error>>;
+	type TestResult = StdResult<(), Box<dyn Error>>;
 
 	#[test]
 	fn normal_zip_is_indexed_and_reopened_for_extraction() -> TestResult {
@@ -592,7 +593,7 @@ mod tests {
 		Ok(())
 	}
 
-	fn archive_with_entry() -> std::result::Result<File, Box<dyn Error>> {
+	fn archive_with_entry() -> StdResult<File, Box<dyn Error>> {
 		let file = tempfile()?;
 		let mut writer = ZipWriter::new(file);
 		writer.start_file(
@@ -603,7 +604,7 @@ mod tests {
 		Ok(writer.finish()?)
 	}
 
-	fn zip64_archive_bytes() -> std::result::Result<Vec<u8>, Box<dyn Error>> {
+	fn zip64_archive_bytes() -> StdResult<Vec<u8>, Box<dyn Error>> {
 		let mut bytes = archive_bytes(archive_with_entry()?)?;
 		let footer = end_of_central_directory(&bytes)?;
 		let entries = u16::from_le_bytes(bytes[footer + 10..footer + 12].try_into()?);
@@ -637,27 +638,27 @@ mod tests {
 		Ok(bytes)
 	}
 
-	fn archive_bytes(mut file: File) -> std::result::Result<Vec<u8>, Box<dyn Error>> {
+	fn archive_bytes(mut file: File) -> StdResult<Vec<u8>, Box<dyn Error>> {
 		file.seek(SeekFrom::Start(0))?;
 		let mut bytes = Vec::new();
 		file.read_to_end(&mut bytes)?;
 		Ok(bytes)
 	}
 
-	fn file_from_bytes(bytes: &[u8]) -> std::result::Result<File, Box<dyn Error>> {
+	fn file_from_bytes(bytes: &[u8]) -> StdResult<File, Box<dyn Error>> {
 		let mut file = tempfile()?;
 		file.write_all(bytes)?;
 		file.seek(SeekFrom::Start(0))?;
 		Ok(file)
 	}
 
-	fn end_of_central_directory(bytes: &[u8]) -> std::result::Result<usize, IoError> {
+	fn end_of_central_directory(bytes: &[u8]) -> StdResult<usize, IoError> {
 		bytes.windows(4)
 			.rposition(|window| window == b"PK\x05\x06")
 			.ok_or_else(|| IoError::other("ZIP fixture footer is missing"))
 	}
 
-	fn archive_with_compression(method: u16) -> std::result::Result<File, Box<dyn Error>> {
+	fn archive_with_compression(method: u16) -> StdResult<File, Box<dyn Error>> {
 		let file = tempfile()?;
 		let mut writer = ZipWriter::new(file);
 		writer.start_file(
@@ -683,7 +684,7 @@ mod tests {
 		signature: &[u8; 4],
 		method_offset: usize,
 		method: u16,
-	) -> std::result::Result<(), IoError> {
+	) -> StdResult<(), IoError> {
 		let header = archive
 			.windows(signature.len())
 			.position(|window| window == signature)

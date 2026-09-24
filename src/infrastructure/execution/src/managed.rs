@@ -1,4 +1,6 @@
 use crate::ExecutionError;
+#[cfg(windows)]
+use crate::HookedProcess;
 use rootcause::Result;
 use rootcause::report;
 use std::time::Duration;
@@ -15,7 +17,7 @@ pub trait ManagedProcess {
 }
 
 #[cfg(windows)]
-impl ManagedProcess for crate::HookedProcess {
+impl ManagedProcess for HookedProcess {
 	fn resume(&mut self) -> Result<(), ExecutionError> {
 		self.resume()
 	}
@@ -101,6 +103,7 @@ mod tests {
 	use crate::NativeFailure;
 	use std::cell::Cell;
 	use std::time::Duration;
+	use tokio::time::Instant;
 
 	struct Process {
 		polls: Cell<usize>,
@@ -260,7 +263,7 @@ mod tests {
 		let mut process = process(0, usize::MAX);
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
-		let started = tokio::time::Instant::now();
+		let started = Instant::now();
 		let status = supervise(&mut process, cancellation, CancellationToken::new()).await?;
 		assert_eq!(status.status, 0xc000013a);
 		assert!(started.elapsed() >= Duration::from_secs(5));
@@ -273,7 +276,7 @@ mod tests {
 		let mut process = process(0, usize::MAX);
 		let force = CancellationToken::new();
 		force.cancel();
-		let started = tokio::time::Instant::now();
+		let started = Instant::now();
 		let status = supervise(&mut process, CancellationToken::new(), force).await?;
 		assert_eq!(status.status, 0xc000013a);
 		assert!(started.elapsed() < Duration::from_secs(5));

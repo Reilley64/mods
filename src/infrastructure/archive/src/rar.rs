@@ -205,8 +205,8 @@ impl Deref for RarArchive {
 }
 
 struct RarSnapshot {
-	_file: File,
-	_directory: RarTempDir,
+	file: File,
+	directory: RarTempDir,
 }
 
 #[cfg(unix)]
@@ -242,9 +242,9 @@ pub(crate) fn open(
 	// rars 0.9.4 has no File or Read + Seek constructor. A private bounded disk snapshot avoids both
 	// its untrusted-path reopen and the only native alternative, retaining the whole archive in memory.
 	let mut snapshot = create_snapshot(source, sha256, cancellation, started)?;
-	preflight_snapshot(&mut snapshot._file, cancellation, started)?;
+	preflight_snapshot(&mut snapshot.file, cancellation, started)?;
 	let archive = ArchiveReader::read_path_with_options(
-		snapshot._directory.path().join("archive.rar"),
+		snapshot.directory.path().join("archive.rar"),
 		ArchiveReadOptions::new().with_rar50_buffered_decode_limit(MAX_DICTIONARY_BYTES),
 	)
 	.map_err(map_error)?;
@@ -808,10 +808,7 @@ fn create_snapshot(
 			.context(ArchiveError::Io)?
 	};
 
-	Ok(RarSnapshot {
-		_file: file,
-		_directory: directory,
-	})
+	Ok(RarSnapshot { file, directory })
 }
 
 fn copy_source_to_snapshot(
@@ -1199,6 +1196,7 @@ mod tests {
 	use std::sync::Arc;
 	use std::time::Instant;
 	use tempfile::TempDir;
+	use tempfile::tempfile;
 	use tokio_util::sync::CancellationToken;
 
 	type TestResult<T = ()> = StdResult<T, Box<dyn Error + Send + Sync>>;
@@ -1230,7 +1228,7 @@ mod tests {
 	}
 
 	fn preflight_bytes(bytes: &[u8]) -> Result<(), ArchiveError> {
-		let mut file = tempfile::tempfile().context(ArchiveError::Io)?;
+		let mut file = tempfile().context(ArchiveError::Io)?;
 		file.write_all(bytes).context(ArchiveError::Io)?;
 		preflight_snapshot(&mut file, &CancellationToken::new(), Instant::now())
 	}
@@ -1424,7 +1422,7 @@ mod tests {
 
 	#[test]
 	fn rar15_advertised_metadata_flood_is_rejected_from_sparse_file() -> TestResult {
-		let mut file = tempfile::tempfile()?;
+		let mut file = tempfile()?;
 		file.write_all(b"Rar!\x1a\x07\x00")?;
 		let mut main = [0_u8; 13];
 		main[2] = 0x73;
@@ -1544,10 +1542,10 @@ mod tests {
 		let sha256 = <[u8; 32]>::from(Sha256::digest(&bytes));
 
 		let snapshot = create_snapshot(&source, sha256, &CancellationToken::new(), Instant::now())?;
-		let snapshot_path = snapshot._directory.path().join("archive.rar");
+		let snapshot_path = snapshot.directory.path().join("archive.rar");
 		assert!(OpenOptions::new().write(true).open(&snapshot_path).is_err());
-		assert!(rename(&snapshot_path, snapshot._directory.path().join("replacement.rar")).is_err());
-		assert!(rename(snapshot._directory.path(), temp.path().join("replacement-directory")).is_err());
+		assert!(rename(&snapshot_path, snapshot.directory.path().join("replacement.rar")).is_err());
+		assert!(rename(snapshot.directory.path(), temp.path().join("replacement-directory")).is_err());
 
 		let mut reopened = File::open(snapshot_path)?;
 		let mut contents = Vec::new();

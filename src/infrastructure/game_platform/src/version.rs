@@ -46,15 +46,14 @@ impl GamePlatformAdapter {
 				Err(error) if error.current_context().kind() == ErrorKind::NotFound => continue,
 				Err(error) => return Err(error.context(ErrorMarker::game_install_invalid())),
 			};
-			let Some(mut version) = read_file_version(file)
-				.map_err(|error| {
+			let mut version = match read_file_version(file) {
+				Ok(version) => version,
+				Err(error) => {
 					if malformed.is_none() {
 						malformed = Some(error);
 					}
-				})
-				.ok()
-			else {
-				continue;
+					continue;
+				}
 			};
 
 			// xNVSE publishes 6.x.y as Windows file version 0.6.x.y. FOMOD dependencies use the

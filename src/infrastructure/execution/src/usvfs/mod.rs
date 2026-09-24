@@ -5,9 +5,19 @@ use crate::NativeFailure;
 use crate::PathMapping;
 use crate::ViewConfiguration;
 use crate::configuration::ConfigureView;
+use ffi::LINKFLAG_CREATETARGET;
+use ffi::LINKFLAG_RECURSIVE;
 pub(crate) use ffi::MODS_CLEANUP_TIMEOUT_MS as CLEANUP_TIMEOUT_MS;
+use ffi::ModsResult;
+use ffi::ModsUsvfs;
 pub(crate) use ffi::PROCESS_INFORMATION;
 pub(crate) use ffi::STARTUPINFOW;
+use ffi::mods_usvfs_clear_bypasses;
+use ffi::mods_usvfs_close;
+use ffi::mods_usvfs_launch;
+use ffi::mods_usvfs_link_directory;
+use ffi::mods_usvfs_link_file;
+use ffi::mods_usvfs_open;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -37,7 +47,7 @@ static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// A failed native teardown poisons this process's session gate rather than
 /// reconnecting to uncertain upstream state.
 pub struct VirtualGameView {
-	native: Option<NonNull<ffi::ModsUsvfs>>,
+	native: Option<NonNull<ModsUsvfs>>,
 	// Upstream controller state is global; do not permit cross-thread access.
 	_thread: PhantomData<Rc<()>>,
 }
@@ -92,7 +102,7 @@ impl VirtualGameView {
 		// SAFETY: checked terminated strings remain live; output is writable. The
 		// process-wide gate excludes concurrent upstream sessions. The shim catches
 		// C++ exceptions and owns all resources on failure.
-		let result = unsafe { ffi::mods_usvfs_open(library.as_ptr(), instance.as_ptr(), &mut native) };
+		let result = unsafe { mods_usvfs_open(library.as_ptr(), instance.as_ptr(), &mut native) };
 		if result.status != 0 {
 			if result.cleanup_status == 0 {
 				SESSION_ACTIVE.store(false, Ordering::Release);
@@ -133,7 +143,7 @@ impl VirtualGameView {
 		// terminated and outlive the call; command is writable. Startup has the SDK
 		// layout generated for this target. Only successful calls transfer handles.
 		let result = unsafe {
-			ffi::mods_usvfs_launch(
+			mods_usvfs_launch(
 				native.as_ptr(),
 				application.as_ptr(),
 				command.as_mut_ptr(),
@@ -167,7 +177,7 @@ impl VirtualGameView {
 		};
 		// SAFETY: pointer came from successful open and is consumed exactly once.
 		// Process supervision retains this owner until its Job is empty.
-		let result = unsafe { ffi::mods_usvfs_close(native.as_ptr()) };
+		let result = unsafe { mods_usvfs_close(native.as_ptr()) };
 		check(result)?;
 		SESSION_ACTIVE.store(false, Ordering::Release);
 		Ok(())
@@ -188,19 +198,19 @@ impl ConfigureView for VirtualGameView {
 			return Err(report!(ExecutionError));
 		};
 		// SAFETY: exclusive live session, exception-contained call, no borrowed buffers.
-		check(unsafe { ffi::mods_usvfs_clear_bypasses(native.as_ptr()) })
+		check(unsafe { mods_usvfs_clear_bypasses(native.as_ptr()) })
 	}
 	fn create_target(&mut self, mapping: &PathMapping, recursive: bool) -> Result<(), ExecutionError> {
 		let source = wide(mapping.source.as_os_str())?;
 		let destination = wide(mapping.destination.as_os_str())?;
-		let flags = ffi::LINKFLAG_CREATETARGET | if recursive { ffi::LINKFLAG_RECURSIVE } else { 0 };
+		let flags = LINKFLAG_CREATETARGET | if recursive { LINKFLAG_RECURSIVE } else { 0 };
 		let Some(native) = self.native else {
 			return Err(report!(ExecutionError));
 		};
 		// SAFETY: exclusive live session and checked terminated buffers live for the
 		// call. Flags come from the pinned upstream header, not handwritten ABI values.
 		check(unsafe {
-			ffi::mods_usvfs_link_directory(native.as_ptr(), source.as_ptr(), destination.as_ptr(), flags)
+			mods_usvfs_link_directory(native.as_ptr(), source.as_ptr(), destination.as_ptr(), flags)
 		})
 	}
 	fn link_directory(&mut self, mapping: &PathMapping) -> Result<(), ExecutionError> {
@@ -211,9 +221,7 @@ impl ConfigureView for VirtualGameView {
 		};
 		// SAFETY: exclusive live session; checked terminated buffers live through the
 		// nonrecursive link call. No creation target or read files are changed by flags.
-		check(unsafe {
-			ffi::mods_usvfs_link_directory(native.as_ptr(), source.as_ptr(), destination.as_ptr(), 0)
-		})
+		check(unsafe { mods_usvfs_link_directory(native.as_ptr(), source.as_ptr(), destination.as_ptr(), 0) })
 	}
 	fn link_file(&mut self, mapping: &PathMapping) -> Result<(), ExecutionError> {
 		let source = wide(mapping.source.as_os_str())?;
@@ -223,7 +231,7 @@ impl ConfigureView for VirtualGameView {
 		};
 		// SAFETY: exclusive live session; checked terminated buffers remain live and
 		// the native boundary does not retain their addresses.
-		check(unsafe { ffi::mods_usvfs_link_file(native.as_ptr(), source.as_ptr(), destination.as_ptr()) })
+		check(unsafe { mods_usvfs_link_file(native.as_ptr(), source.as_ptr(), destination.as_ptr()) })
 	}
 }
 
@@ -236,7 +244,7 @@ fn wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError> {
 	Ok(value)
 }
 
-fn check(result: ffi::ModsResult) -> Result<(), ExecutionError> {
+fn check(result: ModsResult) -> Result<(), ExecutionError> {
 	if result.status == 0 {
 		return Ok(());
 	}
@@ -273,7 +281,7 @@ mod tests {
 
 	#[test]
 	fn native_failure_retains_original_and_cleanup_codes() {
-		let result = check(ffi::ModsResult {
+		let result = check(ModsResult {
 			status: 2,
 			native_error: 5,
 			cleanup_status: 1,

@@ -303,10 +303,10 @@ fn absolute_anchor(path: &Path) -> Result<(Dir, Vec<OsString>), io::Error> {
 	anchor.push(Path::new(r"\"));
 	let mut components = Vec::new();
 	for component in path_components {
-		match component {
-			Component::Normal(name) => components.push(name.to_owned()),
-			_ => return Err(report!(invalid_path())),
-		}
+		let Component::Normal(name) = component else {
+			return Err(report!(invalid_path()));
+		};
+		components.push(name.to_owned());
 	}
 	Ok((
 		Dir::open_ambient_dir(anchor, ambient_authority()).into_report()?,

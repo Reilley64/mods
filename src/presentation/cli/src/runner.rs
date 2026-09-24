@@ -48,7 +48,8 @@ use domain::WorkingDirectory;
 use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
-use std::env;
+use std::env::current_dir;
+use std::env::var_os;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
@@ -390,7 +391,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			} else {
 				OutputTarget::Overwrite
 			};
-			let working_directory = match arguments
+			let Ok(working_directory) = arguments
 				.cwd
 				.map(|path| {
 					WorkingDirectory::new(path).and_then(|path| {
@@ -398,13 +399,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 					})
 				})
 				.transpose()
-			{
-				Ok(directory) => directory,
-				Err(_) => {
-					return execution_report_outcome(&report!(
-						ErrorMarker::invalid_working_directory()
-					));
-				}
+			else {
+				return execution_report_outcome(&report!(ErrorMarker::invalid_working_directory()));
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
@@ -514,8 +510,8 @@ pub(crate) async fn run_current_process(
 	arguments: impl IntoIterator<Item = OsString>,
 	dependency_factory: impl FnOnce(&EnvironmentRoot, &Path) -> Result<Dependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
-	let startup_directory = env::current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
-	let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
+	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
 	let factory_startup = startup_directory.clone();
 	run(arguments, startup_directory, local_app_data, |root| {
 		dependency_factory(root, &factory_startup)
@@ -531,6 +527,7 @@ mod tests {
 	use super::run;
 	use super::select_environment_root;
 	use crate::diagnostics::SINK_WARNING;
+	use application::ErrorCode;
 	use application::ErrorMarker;
 	use application::conflicts::ConflictContentRead;
 	use application::conflicts::EnvironmentConflictScan;
@@ -570,7 +567,9 @@ mod tests {
 	use rootcause::report;
 	use std::error::Error;
 	use std::ffi::OsString;
-	use std::fs;
+	use std::fs::read_dir;
+	use std::fs::read_to_string;
+	use std::fs::write;
 	use std::path::Path;
 	use std::sync::Arc;
 	use std::sync::atomic::AtomicBool;
@@ -890,7 +889,7 @@ mod tests {
 		};
 		let marker = report.current_context();
 
-		assert_eq!(marker.code(), application::ErrorCode::InvalidSelection);
+		assert_eq!(marker.code(), ErrorCode::InvalidSelection);
 		assert_eq!(marker.field(), Some("choices"));
 		assert_eq!(marker.supplied_sequence(), Some(1));
 		Ok(())
@@ -1140,7 +1139,7 @@ mod tests {
 	async fn appender_setup_failure_warns_without_changing_the_command_result() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let root = temp.path().join("not-a-directory");
-		fs::write(&root, b"file")?;
+		write(&root, b"file")?;
 		let expected = run(
 			arguments![
 				"mods",
@@ -1181,7 +1180,7 @@ mod tests {
 			|_| successful_dependencies(&root),
 		)
 		.await?;
-		let files = fs::read_dir(root.join("logs"))?.collect::<Result<Vec<_>, _>>()?;
+		let files = read_dir(root.join("logs"))?.collect::<Result<Vec<_>, _>>()?;
 		assert_eq!(files.len(), 1);
 		let id = files[0]
 			.path()
@@ -1189,7 +1188,7 @@ mod tests {
 			.and_then(|stem| stem.to_str())
 			.ok_or("diagnostic file stem")?
 			.to_owned();
-		let records = fs::read_to_string(files[0].path())?;
+		let records = read_to_string(files[0].path())?;
 		assert_ne!(result.status, 0);
 		assert!(result.stderr.contains(&format!("diagnostic session: {id}\n")));
 		assert!(records.contains("session.failed"));

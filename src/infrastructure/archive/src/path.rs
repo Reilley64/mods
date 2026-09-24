@@ -72,10 +72,6 @@ impl SafeArchivePath {
 		&self.components
 	}
 
-	fn identity_key(&self) -> String {
-		case_fold_key(&self.normalized)
-	}
-
 	pub(crate) fn starts_with_components(&self, prefix: &[String]) -> bool {
 		self.components.len() >= prefix.len()
 			&& self.components
@@ -100,7 +96,7 @@ pub(crate) fn validate_unique_paths<'a>(
 	let mut identity_keys = HashSet::new();
 	let mut normalization_alias_keys = HashSet::new();
 	for path in paths {
-		if !identity_keys.insert(path.identity_key())
+		if !identity_keys.insert(case_fold_key(path.as_str()))
 			|| !normalization_alias_keys.insert(normalization_alias_key(path.as_str()))
 		{
 			return Err(report!(ArchiveError::DuplicatePath));

@@ -13,8 +13,6 @@ use rootcause::report;
 use std::collections::HashSet;
 use tokio_util::sync::CancellationToken;
 
-// FNV settles each Profile State INI independently. A numbered slot in one file does not suppress the same numbered
-// slot in another file.
 pub(crate) struct ProfileActivation {
 	active_plugins: HashSet<String>,
 }
@@ -56,6 +54,8 @@ impl ProfileActivation {
 				ErrorMarker::environment_invalid(None),
 				cancellation,
 			)?;
+			// FNV settles each Profile State INI independently. A numbered slot in one file does not
+			// suppress the same numbered slot in another file.
 			let mut test_file_slots: [Option<String>; 10] = Default::default();
 			merge_test_file_slots(&decode_ini(&bytes)?, &mut test_file_slots);
 			active_plugins.extend(test_file_slots.into_iter().flatten());

@@ -236,6 +236,7 @@ pub(super) fn plan_candidates(
 mod tests {
 	use super::plan_candidates;
 	use crate::ErrorCode;
+	use crate::ErrorMarker;
 	use crate::installation::CandidateDecision;
 	use crate::installation::EffectiveResult;
 	use crate::installation::InstallWarning;
@@ -418,7 +419,7 @@ mod tests {
 				return Err(format!("collision was accepted for {destinations:?}").into());
 			};
 			assert!(report.iter_reports().any(|report| report
-				.downcast_current_context::<crate::ErrorMarker>()
+				.downcast_current_context::<ErrorMarker>()
 				.is_some_and(|marker| marker.code() == ErrorCode::UnsafeArchive)));
 		}
 		Ok(())
@@ -435,7 +436,7 @@ mod tests {
 			return Err("case-folded collision was accepted".into());
 		};
 		assert!(report.iter_reports().any(|report| report
-			.downcast_current_context::<crate::ErrorMarker>()
+			.downcast_current_context::<ErrorMarker>()
 			.is_some_and(|marker| marker.code() == ErrorCode::UnsafeArchive)));
 		Ok(())
 	}

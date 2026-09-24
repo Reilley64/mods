@@ -2,6 +2,7 @@ use rootcause::Result;
 use rootcause::report;
 use std::error::Error;
 use std::fmt;
+use std::iter::repeat_n;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchInputError {
@@ -40,11 +41,11 @@ fn encode_command_line(arguments: &[Vec<u16>]) -> Result<Vec<u16>, LaunchInputEr
 				continue;
 			}
 			let count = if unit == 34 { backslashes * 2 + 1 } else { backslashes };
-			output.extend(std::iter::repeat_n(92, count));
+			output.extend(repeat_n(92, count));
 			output.push(unit);
 			backslashes = 0;
 		}
-		output.extend(std::iter::repeat_n(92, backslashes * 2));
+		output.extend(repeat_n(92, backslashes * 2));
 		output.push(34);
 	}
 	if output.len() >= 32767 {

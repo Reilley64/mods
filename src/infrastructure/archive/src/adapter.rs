@@ -1566,13 +1566,12 @@ mod tests {
 	async fn io_cause_remains_beneath_archive_context_and_application_marker() -> TestResult {
 		let temp = TempDir::new()?;
 		let missing = temp.path().join("missing.zip");
-		let report = match ArchiveAdapter
+		let Err(report) = ArchiveAdapter
 			.index_port()
 			.call((archive_path(&missing)?, CancellationToken::new()))
 			.await
-		{
-			Ok(_) => return Err("missing archive unexpectedly indexed".into()),
-			Err(report) => report,
+		else {
+			return Err("missing archive unexpectedly indexed".into());
 		};
 
 		assert_eq!(report.current_context().code(), ErrorCode::IoFailure);

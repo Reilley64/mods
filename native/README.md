@@ -1,4 +1,4 @@
-    # Upstream usvfs source
+# Upstream usvfs source
 
 `usvfs/` is an unmodified submodule of
 <https://github.com/ModOrganizer2/usvfs>, pinned to

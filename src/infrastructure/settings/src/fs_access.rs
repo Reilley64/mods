@@ -50,12 +50,10 @@ fn open_filesystem_root(path: &Path) -> Result<(Dir, impl Iterator<Item = Compon
 		#[cfg(windows)]
 		Some(Component::Prefix(prefix)) => {
 			root.push(prefix.as_os_str());
-			match components.next() {
-				Some(Component::RootDir) => root.push(Path::new(r"\")),
-				_ => {
-					return Err(report!(IoError::other("path is not absolute")));
-				}
+			if components.next() != Some(Component::RootDir) {
+				return Err(report!(IoError::other("path is not absolute")));
 			}
+			root.push(Path::new(r"\"));
 		}
 		Some(Component::RootDir) => root.push(Path::new(MAIN_SEPARATOR_STR)),
 		_ => {

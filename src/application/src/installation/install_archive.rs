@@ -1,3 +1,6 @@
+use self::fomod::DependencyFacts;
+use self::fomod::condition_tree_matches;
+use self::fomod::evaluate;
 mod fomod;
 mod planning;
 
@@ -147,7 +150,7 @@ pub async fn install_archive(
 			if !matches!(index.identity, ArchiveIdentity::Fomod { .. }) {
 				return Err(report!(ErrorMarker::unsafe_archive()).context(InstallArchiveError));
 			}
-			let game_version = if fomod::condition_tree_matches(
+			let game_version = if condition_tree_matches(
 				installer,
 				|condition| matches!(condition, FomodCondition::GameDependency { .. }),
 				&cancellation,
@@ -167,7 +170,7 @@ pub async fn install_archive(
 			} else {
 				None
 			};
-			let nvse_version = if fomod::condition_tree_matches(
+			let nvse_version = if condition_tree_matches(
 				installer,
 				|condition| matches!(condition, FomodCondition::NvseDependency { .. }),
 				&cancellation,
@@ -187,13 +190,13 @@ pub async fn install_archive(
 			} else {
 				None
 			};
-			let facts = fomod::DependencyFacts {
+			let facts = DependencyFacts {
 				file_dependencies: &state.file_dependencies,
 				game_version: game_version.as_deref(),
 				nvse_version: nvse_version.as_deref(),
 			};
-			let evaluation = fomod::evaluate(installer, &choices, facts, &cancellation)
-				.context(InstallArchiveError)?;
+			let evaluation =
+				evaluate(installer, &choices, facts, &cancellation).context(InstallArchiveError)?;
 			InstallerEvaluation {
 				fomod_schema_version: Some(installer.schema_version.clone()),
 				choices: evaluation.choices,
@@ -225,6 +228,7 @@ pub async fn install_archive(
 		}
 		warnings.push(warning);
 	}
+
 	let (mode, priority, list_position, enabled) = if let Some(installed) = existing {
 		let position = state
 			.installed_mods
@@ -278,6 +282,7 @@ pub async fn install_archive(
 		candidates: planned_candidates,
 		projected_state,
 	};
+
 	let assessment = dependencies
 		.assess_installation
 		.call((plan.clone(), cancellation.clone()))
@@ -325,6 +330,7 @@ pub async fn install_archive(
 			winners.push(candidate.candidate.clone());
 		}
 	}
+
 	dependencies
 		.extract_approved_files
 		.call((
@@ -340,6 +346,7 @@ pub async fn install_archive(
 		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
 	}
 	change.finish.call((cancellation,)).await.context(InstallArchiveError)?;
+
 	Ok(InstallArchiveOutput::Installed(InstalledArchive {
 		warnings: plan.warnings,
 	}))

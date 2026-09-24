@@ -114,11 +114,11 @@ impl Error for ProfileConfigurationError {}
 pub fn build_profile_configuration(
 	input: ProfileConfigurationInput<'_>,
 ) -> Result<ProfileConfiguration, ProfileConfigurationError> {
-	let mut texts = HashMap::new();
+	let mut profile_texts = HashMap::new();
 	for file in input.files {
 		let key = case_fold_key(file.name);
 		if !PROFILE_FILES.iter().any(|name| name.eq_ignore_ascii_case(file.name))
-			|| texts.insert(key, file.text).is_some()
+			|| profile_texts.insert(key, file.text).is_some()
 		{
 			return Err(report!(ProfileConfigurationError {
 				file: file.name.into(),
@@ -128,6 +128,7 @@ pub fn build_profile_configuration(
 			}));
 		}
 	}
+
 	let required = [
 		("Archive", "bInvalidateOlderFiles", Some("1")),
 		("Archive", "SInvalidationFile", Some("")),
@@ -137,7 +138,7 @@ pub fn build_profile_configuration(
 	];
 	let mut test_files = Vec::new();
 	for name in PROFILE_FILES.iter().take(5) {
-		let text = texts.get(&case_fold_key(name)).copied().unwrap_or_default();
+		let text = profile_texts.get(&case_fold_key(name)).copied().unwrap_or_default();
 		let mut section = "";
 		let mut occurrences = [0; 5];
 		let mut slots: [Option<String>; 10] = Default::default();
@@ -170,19 +171,18 @@ pub fn build_profile_configuration(
 					.map(str::trim)
 					.filter(|value| !value.is_empty())
 					.collect();
-				let value_valid = fixed.map_or_else(
-					|| {
-						archives.first().is_some_and(|first| {
-							first.eq_ignore_ascii_case(INVALIDATION_ARCHIVE)
-						}) && archives
+				let value_valid = if let Some(expected) = fixed {
+					value == *expected
+				} else {
+					archives.first()
+						.is_some_and(|first| first.eq_ignore_ascii_case(INVALIDATION_ARCHIVE))
+						&& archives
 							.iter()
 							.filter(|archive| {
 								archive.eq_ignore_ascii_case(INVALIDATION_ARCHIVE)
 							})
 							.count() == 1
-					},
-					|expected| value == expected,
-				);
+				};
 				if *name != "Fallout.ini"
 					|| !section.eq_ignore_ascii_case(expected_section)
 					|| occurrences[setting] != 1 || !value_valid
@@ -236,11 +236,12 @@ pub fn build_profile_configuration(
 			}));
 		}
 	}
+
 	let mut warnings = Vec::new();
-	let mut explicit = HashSet::new();
-	let mut ordered = Vec::new();
+	let mut explicitly_enabled_plugins = HashSet::new();
+	let mut ordered_plugins = Vec::new();
 	for name in ["plugins.txt", "loadorder.txt"] {
-		let text = texts.get(name).copied().unwrap_or_default();
+		let text = profile_texts.get(name).copied().unwrap_or_default();
 		if text.replace("\r\n", "").contains(['\r', '\n']) {
 			return Err(report!(ProfileConfigurationError {
 				file: name.into(),
@@ -281,13 +282,14 @@ pub fn build_profile_configuration(
 				continue;
 			};
 			if name == "plugins.txt" {
-				explicit.insert(key);
+				explicitly_enabled_plugins.insert(key);
 			} else {
-				ordered.push(*file);
+				ordered_plugins.push(*file);
 			}
 		}
 	}
-	let listed: HashSet<_> = ordered.iter().map(|file| file.path.comparison_key()).collect();
+
+	let listed: HashSet<_> = ordered_plugins.iter().map(|file| file.path.comparison_key()).collect();
 	let mut unlisted: Vec<_> = input
 		.visible_files
 		.iter()
@@ -305,22 +307,23 @@ pub fn build_profile_configuration(
 			plugin: file.path.to_string(),
 		});
 	}
-	ordered.extend(unlisted);
-	if let Some(index) = ordered
+	ordered_plugins.extend(unlisted);
+	if let Some(index) = ordered_plugins
 		.iter()
 		.position(|file| file.path.comparison_key() == "falloutnv.esm")
 	{
-		let base = ordered.remove(index);
-		ordered.insert(0, base);
+		let base = ordered_plugins.remove(index);
+		ordered_plugins.insert(0, base);
 	}
+
 	let mut plugins = Vec::new();
-	for file in ordered {
+	for file in ordered_plugins {
 		let key = file.path.comparison_key();
 		let mut activation_sources = Vec::new();
 		if key == "falloutnv.esm" {
 			activation_sources.push(ActivationSource::BaseGame);
 		}
-		if explicit.contains(key) {
+		if explicitly_enabled_plugins.contains(key) {
 			activation_sources.push(ActivationSource::PluginsFile);
 		}
 		if let Some((stem, _)) = key.rsplit_once('.')
@@ -367,6 +370,7 @@ pub fn build_profile_configuration(
 			destination: directory.to_owned(),
 		});
 	}
+
 	Ok(ProfileConfiguration {
 		profile_directories,
 		profile_files,

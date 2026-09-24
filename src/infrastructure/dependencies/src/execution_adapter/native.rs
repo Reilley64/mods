@@ -40,6 +40,7 @@ impl ExecutionAdapter {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		let arguments: Vec<_> = arguments
 			.iter()
 			.map(|argument| argument.as_os_str().to_owned())
@@ -68,7 +69,7 @@ impl ExecutionAdapter {
 		let binding = validate_game.call((effective_binding, cancellation.clone())).await?;
 		let environment = EnvironmentAdapter;
 		let prepared = environment.prepare_execution(&self.root, &binding, &cancellation)?;
-		let selected = if let OutputTarget::DataMod(name) = output_target {
+		let selected_output_mod = if let OutputTarget::DataMod(name) = output_target {
 			let provider = prepared
 				.providers
 				.iter()
@@ -111,9 +112,11 @@ impl ExecutionAdapter {
 			cache_directory: &prepared.cache_directory,
 		})
 		.context(ErrorMarker::environment_invalid(Some("execution")))?;
+
 		for (order, plugin) in profile.plugins.iter().enumerate() {
 			tracing::info!(plugin = %plugin.path, order, activation_sources = ?plugin.activation_sources, "effective plugin configuration");
 		}
+
 		let mut warnings: Vec<_> = profile
 			.warnings
 			.into_iter()
@@ -148,7 +151,7 @@ impl ExecutionAdapter {
 				})
 				.collect(),
 			prepared.winners.clone(),
-			selected,
+			selected_output_mod,
 			profile.profile_directories,
 			mappings,
 			profile.saves,

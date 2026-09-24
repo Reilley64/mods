@@ -12,6 +12,7 @@ pub(super) fn read_file_version(mut file: File) -> Result<Vec<u32>, ErrorMarker>
 	let mut bytes = Vec::new();
 	file.read_to_end(&mut bytes)
 		.context(ErrorMarker::game_install_invalid())?;
+
 	let image = PeFile::from_bytes(&bytes)
 		.map_err(|error| report!(error).context(ErrorMarker::game_install_invalid()))?;
 	let resources = image
@@ -23,6 +24,7 @@ pub(super) fn read_file_version(mut file: File) -> Result<Vec<u32>, ErrorMarker>
 	let fixed = version_info
 		.fixed()
 		.ok_or_else(|| report!(MalformedVersionResource).context(ErrorMarker::game_install_invalid()))?;
+
 	Ok(vec![
 		u32::from(fixed.dwFileVersion.Major),
 		u32::from(fixed.dwFileVersion.Minor),

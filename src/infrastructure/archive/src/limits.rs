@@ -9,11 +9,11 @@ pub(crate) const MAX_ARCHIVE_PATH_COMPONENTS: usize = 64;
 pub(crate) const MAX_ARCHIVE_PATH_COMPONENT_UTF16: usize = 240;
 pub(crate) const MAX_COMPRESSION_RATIO: u64 = 1_000;
 pub(crate) const MAX_DICTIONARY_BYTES: u64 = 128 * 1024 * 1024;
-// Derived work counts each FOMOD descriptor, source-root probe, and file yielded by a folder descriptor.
+/// Derived work counts each FOMOD descriptor, source-root probe, and file yielded by a folder descriptor.
 pub(crate) const MAX_FOMOD_DERIVED_WORK: usize = 10_000;
-// Derived candidates count concrete source-member/destination pairs produced from FOMOD descriptors.
+/// Derived candidates count concrete source-member/destination pairs produced from FOMOD descriptors.
 pub(crate) const MAX_FOMOD_DERIVED_CANDIDATES: usize = 50_000;
-// A source member can feed this many destinations while one synchronous backend stream is active.
+/// A source member can feed this many destinations while one synchronous backend stream is active.
 pub(crate) const MAX_SOURCE_DESTINATION_FAN_OUT: usize = 64;
 // Winning destinations may duplicate source bytes, so bound staged output independently of archive expansion.
 pub(crate) const MAX_STAGED_OUTPUT_BYTES: u64 = 32 * 1024 * 1024 * 1024;

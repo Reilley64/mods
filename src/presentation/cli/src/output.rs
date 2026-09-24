@@ -75,7 +75,7 @@ pub(crate) fn set_game_directory(output: &SetGameDirectoryOutput) -> (String, St
 
 pub(crate) fn additional_selections(output: &AdditionalSelectionsRequired) -> (String, String) {
 	let mut text = String::from("outcome = \"additional_selections_required\"\n");
-	choice_events(&mut text, "accepted_choices", &output.accepted_choices);
+	accepted_choices(&mut text, "accepted_choices", &output.accepted_choices);
 	line_count(&mut text, "groups", output.unresolved_groups.len());
 	for (group_index, group) in output.unresolved_groups.iter().enumerate() {
 		let prefix = format!("groups[{group_index}]");
@@ -132,7 +132,7 @@ fn install_plan(text: &mut String, prefix: &str, plan: &InstallPlan) {
 	archive_identity(text, &format!("{prefix}.archive_identity"), &plan.archive_identity);
 	line_string(text, &format!("{prefix}.mod_name"), plan.mod_name.as_str());
 	line_bool(text, &format!("{prefix}.replacement"), plan.replacement);
-	choice_events(text, &format!("{prefix}.accepted_choices"), &plan.accepted_choices);
+	accepted_choices(text, &format!("{prefix}.accepted_choices"), &plan.accepted_choices);
 	warnings(text, &format!("{prefix}.warnings"), &plan.warnings);
 	line_count(text, &format!("{prefix}.candidates"), plan.candidates.len());
 	for (index, candidate) in plan.candidates.iter().enumerate() {
@@ -217,12 +217,12 @@ fn archive_identity(text: &mut String, prefix: &str, identity: &ArchiveIdentity)
 	}
 }
 
-fn choice_events(text: &mut String, prefix: &str, events: &[AcceptedChoice]) {
-	line_count(text, prefix, events.len());
-	for (index, event) in events.iter().enumerate() {
-		let event_prefix = format!("{prefix}[{index}]");
-		line_string(text, &format!("{event_prefix}.group_id"), &event.group_id);
-		line_string(text, &format!("{event_prefix}.option_id"), &event.option_id);
+fn accepted_choices(text: &mut String, prefix: &str, choices: &[AcceptedChoice]) {
+	line_count(text, prefix, choices.len());
+	for (index, choice) in choices.iter().enumerate() {
+		let choice_prefix = format!("{prefix}[{index}]");
+		line_string(text, &format!("{choice_prefix}.group_id"), &choice.group_id);
+		line_string(text, &format!("{choice_prefix}.option_id"), &choice.option_id);
 	}
 }
 
