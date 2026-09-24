@@ -13,6 +13,7 @@
   "maxConcurrency": 4,
   "maxFollowUps": 2,
   "ruleThresholds": {
+    "comments-and-documentation-reason-comments": 0.7,
     "application-use-cases-and-ports-use-case-local-implementation-modules": 0.45
   },
   "worktreeScope": "registered",

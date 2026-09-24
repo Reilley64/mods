@@ -1,4 +1,7 @@
+import { commentCalibrationCases } from "./comment-cases";
+
 export interface CalibrationCase {
+	source?: { commit: string; path: string; kind: "excerpt" | "controlled-mutation" };
 	name: string;
 	expectedViolation: boolean;
 	ruleId: string;
@@ -9,6 +12,7 @@ export interface CalibrationCase {
 }
 
 export const calibrationCases: CalibrationCase[] = [
+	...commentCalibrationCases,
 	{
 		name: "reason-comment-bad",
 		expectedViolation: true,

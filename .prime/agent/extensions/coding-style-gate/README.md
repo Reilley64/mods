@@ -91,7 +91,7 @@ Tracked Rust files and untracked, non-ignored Rust files in watched roots are el
 
 ## Calibration
 
-The labeled synthetic corpus lives in `calibration/cases.ts`. Run the production model against every rubric item with:
+The labeled corpus lives in `calibration/cases.ts`. `calibration/comment-cases.ts` adds real comment excerpts and explicitly marked redundant-comment mutations. `calibration/comment-audit.json` preserves the source audit, including ambiguous examples excluded from calibration labels. Run the production model against every rubric item with:
 
 ```text
 bun ./.prime/agent/extensions/coding-style-gate/calibration/run.ts
@@ -99,7 +99,7 @@ bun ./.prime/agent/extensions/coding-style-gate/calibration/run.ts
 
 This is a live API command. It requires `TYPESAFE_API_KEY` and incurs TypeSafe usage. Normal tests use MSW and never call the live API.
 
-The current `jev-1.13.0` calibration uses default threshold `0.86` plus a `0.45` threshold for use-case-local module placement. Re-run calibration when the model, rubric, prompt shape, evidence fields, or fixture corpus changes.
+The current `jev-1.13.0` calibration uses default threshold `0.86`, a `0.70` threshold for reason comments, and a `0.45` threshold for use-case-local module placement. See `calibration/comment-results.md` for the measured comment calibration and its limits. Re-run calibration when the model, rubric, prompt shape, evidence fields, or fixture corpus changes.
 
 ## Tests
 

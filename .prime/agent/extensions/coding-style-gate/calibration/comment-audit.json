@@ -1,0 +1,156 @@
+[
+	{
+		"name": "validated-input-summary",
+		"commit": "7d7d939",
+		"path": "src/infrastructure/environment/src/execution_preparation.rs",
+		"comment": "/// Validated, read-only inputs for managed execution.",
+		"context": "}\n\n/// Validated, read-only inputs for managed execution.\n#[derive(Debug, Clone, PartialEq, Eq)]\npub struct PreparedExecution {\n\tpub game_binding: GameBinding,\n\tpub providers: Vec<ExecutionProvider>,\n\tpub winners: Vec<ProviderReference>,\n\tpub visible_files: Vec<ExecutionVisibleFile>,\n\tpub profile_files: Vec<ExecutionProfileText>,\n\tpub profile_directory: PathBuf,\n\tpub data_directory: PathBuf,\n\tpub cache_directory: PathBuf,\n\tconsumed_state: InstallationState,\n\tconsumed_bytes: Vec<(PathBuf, Vec<u8>)>,",
+		"expectedViolation": false,
+		"rationale": "The summary resembles PreparedExecution, but validated/read-only adds a potentially important invariant. Do not treat as a confident redundancy finding.",
+		"ambiguous": true,
+		"line": 46
+	},
+	{
+		"name": "visible-file-summary",
+		"commit": "7d7d939",
+		"path": "src/infrastructure/execution/src/profile.rs",
+		"comment": "/// One effective Data file, with its backing-file modification time.",
+		"context": "}\n\n/// One effective Data file, with its backing-file modification time.\n#[derive(Debug, Clone)]\npub struct VisibleProfileFile {\n\tpub path: DataRelativePath,\n\tpub modified: SystemTime,\n}\n\n/// Resolved Fallout-specific directories and decoded state; no save contents.\npub struct ProfileConfigurationInput<'a> {\n\tpub files: &'a [ProfileText<'a>],\n\tpub visible_files: &'a [VisibleProfileFile],\n\tpub profile_directory: &'a Path,\n\tpub documents_directory: &'a Path,",
+		"expectedViolation": false,
+		"rationale": "The fields already show path and modified. However, effective and backing-file identify provenance not expressed by SystemTime; ambiguous, not a confident violation.",
+		"ambiguous": true,
+		"line": 33
+	},
+	{
+		"name": "profile-input-summary",
+		"commit": "7d7d939",
+		"path": "src/infrastructure/execution/src/profile.rs",
+		"comment": "/// Resolved Fallout-specific directories and decoded state; no save contents.",
+		"context": "}\n\n/// Resolved Fallout-specific directories and decoded state; no save contents.\npub struct ProfileConfigurationInput<'a> {\n\tpub files: &'a [ProfileText<'a>],\n\tpub visible_files: &'a [VisibleProfileFile],\n\tpub profile_directory: &'a Path,\n\tpub documents_directory: &'a Path,\n\tpub local_app_data_directory: &'a Path,\n\tpub data_directory: &'a Path,\n\tpub cache_directory: &'a Path,\n}\n\n#[derive(Debug, Clone, PartialEq, Eq)]\npub enum ActivationSource {",
+		"expectedViolation": false,
+		"rationale": "Mostly summarizes fields, but decoded state and exclusion of save contents may define the boundary. Retain unless that contract is documented elsewhere.",
+		"ambiguous": true,
+		"line": 40
+	},
+	{
+		"name": "provider-root-summary",
+		"commit": "4734903",
+		"path": "src/infrastructure/execution/src/configuration.rs",
+		"comment": "/// A validated provider root supplied by execution composition.",
+		"context": "use std::path::PathBuf;\n\n/// A validated provider root supplied by execution composition.\n#[derive(Debug, Clone)]\npub struct ProviderRoot {\n\tpub identity: ProviderIdentity,\n\tpub root: PathBuf,\n\tpub enabled: bool,\n}\n\n/// A named Profile State file or caller-owned save-directory mapping.\n#[derive(Debug, Clone, PartialEq, Eq)]\npub struct PathMapping {\n\tpub source: PathBuf,\n\tpub destination: PathBuf,",
+		"expectedViolation": false,
+		"rationale": "ProviderRoot already names the entity, but validation provenance may be a caller contract; insufficient evidence for a redundancy finding.",
+		"ambiguous": true,
+		"line": 12
+	},
+	{
+		"name": "execution-error-summary",
+		"commit": "4734903",
+		"path": "src/infrastructure/execution/src/error.rs",
+		"comment": "/// The execution adapter could not configure or launch the upstream view.",
+		"context": "use std::fmt;\n\n/// The execution adapter could not configure or launch the upstream view.\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct ExecutionError;\n\nimpl fmt::Display for ExecutionError {\n\tfn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {\n\t\tformatter.write_str(\"upstream execution failed\")\n\t}\n}\nimpl Error for ExecutionError {}\n\n/// A bounded failure at the native exception boundary.\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]",
+		"expectedViolation": false,
+		"rationale": "Close to the error name and Display text, but distinguishes configuration and launch failures. Terse public error summaries are not automatically unnecessary.",
+		"ambiguous": true,
+		"line": 4
+	},
+	{
+		"name": "native-failure-summary",
+		"commit": "4734903",
+		"path": "src/infrastructure/execution/src/error.rs",
+		"comment": "/// A bounded failure at the native exception boundary.",
+		"context": "impl Error for ExecutionError {}\n\n/// A bounded failure at the native exception boundary.\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub struct NativeFailure {\n\tpub status: u32,\n\tpub native_error: u32,\n\tpub cleanup_status: u32,\n\tpub cleanup_error: u32,\n}\n\nimpl fmt::Display for NativeFailure {\n\tfn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {\n\t\twrite!(\n\t\t\tformatter,",
+		"expectedViolation": false,
+		"rationale": "NativeFailure supplies most of the meaning, but bounded exception containment may be an architectural contract. Ambiguous rather than confidently tautological.",
+		"ambiguous": true,
+		"line": 15
+	},
+	{
+		"name": "diagnostic-zero-sentinel",
+		"commit": "7d7d939",
+		"path": "src/infrastructure/execution/src/profile.rs",
+		"comment": "/// A canonical file diagnostic. Line zero identifies a missing key or input.",
+		"context": "}\n\n/// A canonical file diagnostic. Line zero identifies a missing key or input.\n#[derive(Debug, Clone, PartialEq, Eq)]\npub struct ProfileConfigurationError {\n\tpub file: String,\n\tpub line: usize,\n\tpub value: String,\n\tpub expected: &'static str,\n}\n\nimpl fmt::Display for ProfileConfigurationError {\n\tfn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n\t\twrite!(f, \"{}:{}: expected {}\", self.file, self.line, self.expected)\n\t}",
+		"expectedViolation": false,
+		"rationale": "The usize line field cannot communicate the zero sentinel meaning; this is a useful API contract.",
+		"ambiguous": false,
+		"line": 92
+	},
+	{
+		"name": "thread-affine-worker",
+		"commit": "7d7d939",
+		"path": "src/infrastructure/dependencies/src/execution_adapter.rs",
+		"comment": "\t\t\t\t\t\t// The upstream session is thread-affine. Its complete lifetime stays on\n\t\t\t\t\t\t// this blocking worker; only the owned result crosses back to Tokio.",
+		"context": "\t\t\t\t\t#[cfg(windows)]\n\t\t\t\t\t{\n\t\t\t\t\t\t// The upstream session is thread-affine. Its complete lifetime stays on\n\t\t\t\t\t\t// this blocking worker; only the owned result crosses back to Tokio.\n\t\t\t\t\t\tlet dispatcher = get_default(Clone::clone);\n\t\t\t\t\t\tlet span = Span::current();\n\t\t\t\t\t\tspawn_blocking(move || {\n\t\t\t\t\t\t\twith_default(&dispatcher, || {\n\t\t\t\t\t\t\t\tlet _entered = span.enter();\n\t\t\t\t\t\t\t\tlet runtime = Builder::new_current_thread()\n\t\t\t\t\t\t\t\t.enable_time()\n\t\t\t\t\t\t\t\t.build()\n\t\t\t\t\t\t\t\t.context(ErrorMarker::execution_supervision_failed())?;\n\t\t\t\t\t\t\t\truntime.block_on(adapter.execute(\n\t\t\t\t\t\t\t\t\toutput_target,\n\t\t\t\t\t\t\t\t\tworking_directory,",
+		"expectedViolation": false,
+		"rationale": "Explains the external thread-affinity constraint behind keeping the entire session on one blocking worker.",
+		"ambiguous": false,
+		"line": 75
+	},
+	{
+		"name": "utf16-command-line",
+		"commit": "7d7d939",
+		"path": "src/infrastructure/execution/src/launch_inputs.rs",
+		"comment": "// The upstream API takes an already encoded command line, not an argument vector.\n// Encode UTF-16 directly so unpaired Windows surrogates are never replaced.",
+		"context": "impl Error for LaunchInputError {}\n\n// The upstream API takes an already encoded command line, not an argument vector.\n// Encode UTF-16 directly so unpaired Windows surrogates are never replaced.\nfn encode_command_line(arguments: &[Vec<u16>]) -> Result<Vec<u16>, LaunchInputError> {\n\tlet mut output = Vec::new();\n\tfor (index, argument) in arguments.iter().enumerate() {\n\t\tif argument.contains(&0) {\n\t\t\treturn Err(report!(LaunchInputError::InvalidString));\n\t\t}\n\t\tif index != 0 {\n\t\t\toutput.push(32);\n\t\t}\n\t\toutput.push(34);\n\t\tlet mut backslashes = 0;\n\t\tfor &unit in argument {",
+		"expectedViolation": false,
+		"rationale": "Explains both the upstream interface constraint and why direct UTF-16 encoding must preserve unpaired surrogates.",
+		"ambiguous": false,
+		"line": 24
+	},
+	{
+		"name": "native-open-safety",
+		"commit": "4734903",
+		"path": "src/infrastructure/execution/src/usvfs/mod.rs",
+		"comment": "\t\t// SAFETY: checked terminated strings remain live; output is writable. The\n\t\t// process-wide gate excludes concurrent upstream sessions. The shim catches\n\t\t// C++ exceptions and owns all resources on failure.",
+		"context": "\n\t\tlet mut native = null_mut();\n\t\t// SAFETY: checked terminated strings remain live; output is writable. The\n\t\t// process-wide gate excludes concurrent upstream sessions. The shim catches\n\t\t// C++ exceptions and owns all resources on failure.\n\t\tlet result = unsafe { ffi::mods_usvfs_open(library.as_ptr(), instance.as_ptr(), &mut native) };\n\t\tif result.status != 0 {\n\t\t\tif result.cleanup_status == 0 {\n\t\t\t\tSESSION_ACTIVE.store(false, Ordering::Release);\n\t\t\t}\n\t\t\tcheck(result)?;\n\t\t}\n\t\tlet Some(native) = NonNull::new(native) else {\n\t\t\treturn Err(report!(ExecutionError));\n\t\t};\n\t\tOk(Self {\n\t\t\tnative: Some(native),",
+		"expectedViolation": false,
+		"rationale": "Documents buffer lifetimes, session exclusion, exception containment, and failure ownership instead of merely calling the operation safe.",
+		"ambiguous": false,
+		"line": 92
+	},
+	{
+		"name": "nonrecursive-priority-reason",
+		"commit": "4734903",
+		"path": "src/infrastructure/execution/src/configuration.rs",
+		"comment": "\t\t// Nonrecursive: selecting a low-priority target must not remap its files last.",
+		"context": "\tpub(crate) fn apply(&self, native: &mut impl ConfigureView) -> Result<(), ExecutionError> {\n\t\tnative.clear_bypasses()?;\n\t\t// Nonrecursive: selecting a low-priority target must not remap its files last.\n\t\tnative.create_target(&self.data_target, false)?;\n\t\tfor mapping in &self.directories {\n\t\t\tnative.link_directory(mapping)?;\n\t\t}\n\t\tfor mapping in &self.files {\n\t\t\tnative.link_file(mapping)?;\n\t\t}\n\t\tnative.create_target(&self.saves, true)?;\n\t\tOk(())\n\t}\n}\n",
+		"expectedViolation": false,
+		"rationale": "Records the domain reason for nonrecursive output-target mapping: output selection must not change priority.",
+		"ambiguous": false,
+		"line": 145
+	},
+	{
+		"name": "fomod-not-semver",
+		"commit": "6daca92",
+		"path": "application/src/installation/install_archive/fomod.rs",
+		"comment": "// FOMOD versions are arbitrary-length numeric dot components, not SemVer. Evaluation also needs\n// cooperative cancellation and budget accounting, so a SemVer abstraction is unsuitable here.",
+		"context": "}\n\n// FOMOD versions are arbitrary-length numeric dot components, not SemVer. Evaluation also needs\n// cooperative cancellation and budget accounting, so a SemVer abstraction is unsuitable here.\nfn parse_version(\n\tvalue: &str,\n\tbudget: &mut EvaluationBudget,\n\tcancellation: &CancellationToken,\n) -> Result<Vec<u32>, ErrorMarker> {\n\tlet mut parts = Vec::new();\n\tfor part in value.split('.') {\n\t\tif cancellation.is_cancelled() {\n\t\t\treturn Err(report!(ErrorMarker::operation_cancelled()));\n\t\t}\n\t\tbudget.spend()?;\n\t\tlet part = part",
+		"expectedViolation": false,
+		"rationale": "Documents a concrete gap in SemVer and the cancellation/budget requirements that justify custom comparison.",
+		"ambiguous": false,
+		"line": 1233
+	},
+	{
+		"name": "write-all-control-errors",
+		"commit": "6daca92",
+		"path": "infrastructure/archive/src/extract.rs",
+		"comment": "// Write::write_all retries Interrupted forever, so bridge control signals use distinct non-retryable errors.",
+		"context": "}\n\n// Write::write_all retries Interrupted forever, so bridge control signals use distinct non-retryable errors.\n#[derive(Debug)]\nstruct CallbackStopped;\n\nimpl Display for CallbackStopped {\n\tfn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {\n\t\tformatter.write_str(\"archive callback stopped\")\n\t}\n}\n\nimpl Error for CallbackStopped {}\n\n#[derive(Debug)]",
+		"expectedViolation": false,
+		"rationale": "Records a dependency retry contract that explains a surprising error-kind choice.",
+		"ambiguous": false,
+		"line": 424
+	},
+	{
+		"name": "publication-cancellation-boundary",
+		"commit": "6daca92",
+		"path": "infrastructure/environment/src/publication.rs",
+		"comment": "\t// mods.toml is the last required canonical mutation. Caller cancellation is no longer\n\t// observable once that durable rename succeeds.",
+		"context": "\t}\n\n\t// mods.toml is the last required canonical mutation. Caller cancellation is no longer\n\t// observable once that durable rename succeeds.\n\tvalidate_stage(root, LayoutLocation::Root, &CancellationToken::new()).context(publication_failed())?;\n\n\tdrop(stage);\n\tdrop(operation);\n\tcleanup_best_effort(root, temp, OPERATION_DIRECTORY);\n\tOk(())\n}\n\npub(crate) fn cleanup_best_effort(root: &SafeDir, temp: &SafeDir, operation_name: &str) {\n\tif temp.remove_dir_all(operation_name).is_ok() {\n\t\tlet _ = temp.sync();\n\t\tlet _ = root.sync();",
+		"expectedViolation": false,
+		"rationale": "Documents the irreversible publication boundary and why cancellation must stop being observed after the durable rename.",
+		"ambiguous": false,
+		"line": 51
+	}
+]
