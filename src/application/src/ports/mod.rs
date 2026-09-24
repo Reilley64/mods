@@ -7,8 +7,8 @@ mod archive;
 mod environment;
 mod execution;
 mod game_platform;
+mod progress;
 mod settings;
-
 pub use archive::ExtractApprovedFiles;
 pub use archive::IndexArchive;
 pub use environment::AssessInitializationTarget;
@@ -41,6 +41,8 @@ pub use game_platform::ResolvedGameInstallation;
 pub use game_platform::ValidateEffectiveBinding;
 pub use game_platform::ValidateGameDirectory;
 pub use game_platform::ValidateGameInstallation;
+pub use progress::ProgressEvent;
+pub use progress::ReportProgress;
 pub use settings::CheckSettingsReadiness;
 pub use settings::LoadSettings;
 pub use settings::PreviewGameBinding;

@@ -209,15 +209,21 @@ impl EnvironmentAdapter {
 			let begin_transaction = Arc::clone(&begin_transaction);
 			Box::pin(async move {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("extraction")
+					));
 				}
 				let mut transaction = begin_transaction.lock().await;
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("extraction")
+					));
 				}
 				let file = transaction.begin_file(&path, &cancellation);
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("extraction")
+					));
 				}
 				let file = file?;
 				drop(transaction);
@@ -230,28 +236,29 @@ impl EnvironmentAdapter {
 						let write_file = Arc::clone(&write_file);
 						Box::pin(async move {
 							if cancellation.is_cancelled() {
-								return Err(
-									report!(ErrorMarker::operation_cancelled()),
-								);
+								return Err(report!(ErrorMarker::operation_cancelled(
+								)
+								.with_phase("extraction")));
 							}
 							let mut file = write_file.lock().await;
 							if cancellation.is_cancelled() {
-								return Err(
-									report!(ErrorMarker::operation_cancelled()),
-								);
+								return Err(report!(ErrorMarker::operation_cancelled(
+								)
+								.with_phase("extraction")));
 							}
 							if file.1 {
-								return Err(
-									report!(ErrorMarker::transaction_failure()),
-								);
+								return Err(report!(ErrorMarker::transaction_failure(
+								)
+								.with_phase("publication")));
 							}
-							let written =
-								file.0.write_chunk(&contents)
-									.context(ErrorMarker::transaction_failure());
+							let written = file.0.write_chunk(&contents).context(
+								ErrorMarker::transaction_failure()
+									.with_phase("publication"),
+							);
 							if cancellation.is_cancelled() {
-								return Err(
-									report!(ErrorMarker::operation_cancelled()),
-								);
+								return Err(report!(ErrorMarker::operation_cancelled(
+								)
+								.with_phase("extraction")));
 							}
 							written
 						}) as PortFuture<_>
@@ -264,24 +271,31 @@ impl EnvironmentAdapter {
 					let path_key = path_key.clone();
 					Box::pin(async move {
 						if cancellation.is_cancelled() {
-							return Err(report!(ErrorMarker::operation_cancelled()));
+							return Err(report!(ErrorMarker::operation_cancelled()
+								.with_phase("extraction")));
 						}
 						let mut file = finish_file.lock().await;
 						if cancellation.is_cancelled() {
-							return Err(report!(ErrorMarker::operation_cancelled()));
+							return Err(report!(ErrorMarker::operation_cancelled()
+								.with_phase("extraction")));
 						}
 						if file.1 {
-							return Err(report!(ErrorMarker::transaction_failure()));
+							return Err(report!(ErrorMarker::transaction_failure()
+								.with_phase("publication")));
 						}
 						let finished = file.0.finish();
 						if cancellation.is_cancelled() {
-							return Err(report!(ErrorMarker::operation_cancelled()));
+							return Err(report!(ErrorMarker::operation_cancelled()
+								.with_phase("extraction")));
 						}
-						finished.context(ErrorMarker::transaction_failure())?;
+						finished.context(
+							ErrorMarker::transaction_failure().with_phase("publication"),
+						)?;
 
 						let mut transaction = finish_transaction.lock().await;
 						if cancellation.is_cancelled() {
-							return Err(report!(ErrorMarker::operation_cancelled()));
+							return Err(report!(ErrorMarker::operation_cancelled()
+								.with_phase("extraction")));
 						}
 						transaction.finish_file(&path_key)?;
 						file.1 = true;
@@ -296,11 +310,15 @@ impl EnvironmentAdapter {
 			let finish_transaction = Arc::clone(&finish_transaction);
 			Box::pin(async move {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("publication")
+					));
 				}
 				let mut transaction = finish_transaction.lock().await;
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("publication")
+					));
 				}
 				transaction.finish(&cancellation)
 			}) as PortFuture<_>

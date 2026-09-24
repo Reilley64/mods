@@ -5,7 +5,10 @@ use crate::conflicts::IndexedConflictFile;
 use crate::conflicts::IndexedConflictFileId;
 use crate::conflicts::InspectModConflictsOutput;
 use crate::conflicts::ListEffectiveConflictsOutput;
+use crate::conflicts::ScannedConflictProvider;
 use crate::errors::ErrorMarker;
+use crate::installation::CandidateDecision;
+use crate::installation::InstallPlan;
 use crate::ports::ReadConflictContent;
 use domain::ConflictProblem;
 use domain::ConflictProblemKind;
@@ -28,6 +31,7 @@ use domain::Tombstone;
 use domain::TombstoneEffect;
 use domain::TombstoneScope;
 use rootcause::Result;
+use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::cmp::Ordering;
 use std::cmp::Reverse;
@@ -45,6 +49,88 @@ struct Projection {
 struct ResolvedPath {
 	unsuppressed: Vec<IndexedConflictFile>,
 	suppressed: Vec<(IndexedConflictFile, Tombstone)>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum InstallationParticipation {
+	Actual,
+	HypotheticalEnabled,
+}
+
+pub(crate) async fn project_installation(
+	mut scan: EnvironmentConflictScan,
+	plan: &InstallPlan,
+	participation: InstallationParticipation,
+	read_content: ReadConflictContent,
+	cancellation: CancellationToken,
+) -> Result<ListEffectiveConflictsOutput, ErrorMarker> {
+	let identity = ProviderIdentity::DataMod {
+		mod_name: plan.mod_name.clone(),
+		priority: plan.projected_state.priority,
+	};
+	let reason = match participation {
+		InstallationParticipation::HypotheticalEnabled => ParticipationReason::HypotheticalEnabledMod,
+		InstallationParticipation::Actual => ParticipationReason::EnabledMod,
+	};
+	let mut files = Vec::new();
+	let mut directories = HashMap::new();
+	for candidate in &plan.candidates {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
+		}
+		if !matches!(candidate.decision, CandidateDecision::Winner { .. }) {
+			continue;
+		}
+
+		let path = &candidate.candidate.destination;
+		let provider = ProviderReference::DataMod {
+			mod_name: plan.mod_name.clone(),
+			priority: plan.projected_state.priority,
+			original_path: path.clone(),
+			participation_reason: reason,
+		};
+		files.push(IndexedConflictFile {
+			id: IndexedConflictFileId::new(identity.clone(), path.clone()),
+			provider,
+		});
+		for (boundary, _) in path.as_str().match_indices('/') {
+			let directory = DataRelativePath::new(path.as_str()[..boundary].to_owned())
+				.context(ErrorMarker::ambiguous_install_plan())?;
+			directories.entry(directory.comparison_key().to_owned()).or_insert(
+				ProviderReference::DataMod {
+					mod_name: plan.mod_name.clone(),
+					priority: plan.projected_state.priority,
+					original_path: directory,
+					participation_reason: reason,
+				},
+			);
+		}
+	}
+
+	scan.providers.retain(|provider| {
+		!matches!(&provider.identity,
+		ProviderIdentity::DataMod { mod_name, .. } if mod_name == &plan.mod_name)
+	});
+	scan.providers.push(ScannedConflictProvider {
+		identity: identity.clone(),
+		enabled: plan.projected_state.enabled,
+		files,
+		directories: directories.into_values().collect(),
+		tombstones: Vec::new(),
+		problems: Vec::new(),
+	});
+
+	let projection = match participation {
+		InstallationParticipation::Actual => Projection::actual(scan),
+		InstallationParticipation::HypotheticalEnabled => Projection::from_scan(scan, Some(&identity)),
+	};
+	let rows = projection.rows(false, &read_content, &cancellation, None).await?;
+
+	Ok(ListEffectiveConflictsOutput {
+		resolution_status: projection.resolution_status(),
+		rows,
+		problems: projection.problems,
+	})
 }
 
 pub(super) async fn project_list(
@@ -74,7 +160,7 @@ pub(super) async fn project_inspection(
 	let Some(provider) = scan.providers.iter().find(|provider| {
 		matches!(&provider.identity, ProviderIdentity::DataMod { mod_name: candidate, .. } if candidate == &mod_name)
 	}) else {
-		return Err(report!(ErrorMarker::mod_not_found()));
+		return Err(report!(ErrorMarker::mod_not_found().with_mod_name(mod_name.clone())));
 	};
 
 	let enabled = provider.enabled;
@@ -85,7 +171,7 @@ pub(super) async fn project_inspection(
 		..
 	} = &identity
 	else {
-		return Err(report!(ErrorMarker::mod_not_found()));
+		return Err(report!(ErrorMarker::mod_not_found().with_mod_name(mod_name.clone())));
 	};
 	let canonical_mod_name = canonical_mod_name.clone();
 

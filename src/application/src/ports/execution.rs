@@ -1,5 +1,6 @@
 use crate::execution::ExecuteProgramOutput;
 use crate::ports::PortFuture;
+use crate::ports::ReportProgress;
 use domain::OutputTarget;
 use domain::Program;
 use domain::ProgramArgument;
@@ -13,6 +14,7 @@ pub type RunManagedProgram = Arc<
 			Option<WorkingDirectory>,
 			Program,
 			Vec<ProgramArgument>,
+			Option<ReportProgress>,
 			CancellationToken,
 		) -> PortFuture<ExecuteProgramOutput>
 		+ Send

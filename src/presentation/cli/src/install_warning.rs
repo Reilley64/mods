@@ -48,6 +48,7 @@ impl<'a> From<&'a InstallWarning> for WarningOutput<'a> {
 				flag_name,
 				values,
 				resolved_value,
+				..
 			} => {
 				fields.push(SafeField::string("flag_name", flag_name));
 				fields.push(SafeField::count("values", values.len()));
@@ -281,6 +282,8 @@ fn write_string(text: &mut String, name: &str, value: &str) {
 mod tests {
 	use super::messages;
 	use super::write_details;
+	use application::installation::ChoiceSource;
+	use application::installation::FlagWriter;
 	use application::installation::InstallWarning;
 
 	#[test]
@@ -289,6 +292,15 @@ mod tests {
 			flag_name: "mode".to_owned(),
 			values: vec!["legacy".to_owned(), "modern".to_owned()],
 			resolved_value: "modern".to_owned(),
+			writers: Vec::new(),
+			winning_event: FlagWriter {
+				sequence: 1,
+				flag_effect_order: 0,
+				source: ChoiceSource::Supplied,
+				group_id: "second".to_owned(),
+				option_id: "modern".to_owned(),
+				value: "modern".to_owned(),
+			},
 		}];
 		let mut details = String::new();
 

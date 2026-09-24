@@ -44,6 +44,7 @@ use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::str::from_utf8;
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use toml::Value;
 use toml::from_str;
@@ -67,25 +68,27 @@ pub(crate) fn load(
 	access: InstallationStateAccess,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, SnapshotLoad::Installation(access), None, cancellation)
+	load_inner(root_path, SnapshotLoad::Installation(access), None, None, cancellation)
 }
 
 pub(crate) fn load_during_publication(
 	root_path: &Path,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, SnapshotLoad::Publication, None, cancellation)
+	load_inner(root_path, SnapshotLoad::Publication, None, None, cancellation)
 }
 
 pub(crate) fn load_execution(
 	root_path: &Path,
 	binding: &GameBinding,
+	owned_spool: Option<&TempDir>,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
 	load_inner(
 		root_path,
 		SnapshotLoad::Installation(InstallationStateAccess::Mutation),
 		Some(binding),
+		owned_spool,
 		cancellation,
 	)
 }
@@ -100,6 +103,7 @@ fn load_inner(
 	root_path: &Path,
 	load: SnapshotLoad,
 	effective_binding: Option<&GameBinding>,
+	owned_spool: Option<&TempDir>,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
 	if cancellation.is_cancelled() {
@@ -132,9 +136,16 @@ fn load_inner(
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
-			if let Some(entry) = entries.next() {
-				entry.into_report().context(ErrorMarker::environment_invalid(None))?;
+			let entries = opened.context(ErrorMarker::environment_invalid(None))?;
+			for entry in entries {
+				let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
+				if owned_spool.is_some_and(|spool| {
+					spool.path().parent() == Some(root_path.join("temp").as_path())
+						&& spool.path().file_name() == Some(entry.file_name().as_os_str())
+				}) {
+					continue;
+				}
+
 				let marker = match access {
 					InstallationStateAccess::Preview => ErrorMarker::environment_invalid(None),
 					InstallationStateAccess::Mutation => ErrorMarker::manual_cleanup_required(),
@@ -1926,6 +1937,7 @@ mod tests {
 		let mod_name = ModName::new("Proposed".to_owned()).expect("fixture mod name must be valid");
 		let planned_candidate =
 			|candidate_id, destination: DataRelativePath, current_winner| PlannedCandidate {
+				origin_condition_evaluation: None,
 				candidate: InstallCandidate {
 					candidate_id,
 					origin: InstallCandidateOrigin::Required,
@@ -1953,6 +1965,8 @@ mod tests {
 			mod_name: mod_name.clone(),
 			replacement: false,
 			accepted_choices: Vec::new(),
+			automatic_events: Vec::new(),
+			resolved_flags: Vec::new(),
 			warnings: Vec::new(),
 			candidates: vec![
 				planned_candidate(
@@ -2036,8 +2050,11 @@ mod tests {
 			mod_name: mod_name.clone(),
 			replacement: false,
 			accepted_choices: Vec::new(),
+			automatic_events: Vec::new(),
+			resolved_flags: Vec::new(),
 			warnings: Vec::new(),
 			candidates: vec![PlannedCandidate {
+				origin_condition_evaluation: None,
 				candidate: InstallCandidate {
 					candidate_id: 0,
 					origin: InstallCandidateOrigin::Required,

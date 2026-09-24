@@ -126,6 +126,14 @@ pub(crate) struct ArchiveIndexCore {
 }
 
 pub(crate) fn index_archive(source: &Path, cancellation: &CancellationToken) -> Result<ArchiveIndexCore, ArchiveError> {
+	index_archive_with_progress(source, None, cancellation)
+}
+
+pub(crate) fn index_archive_with_progress(
+	source: &Path,
+	checkpoint: Option<&dyn Fn()>,
+	cancellation: &CancellationToken,
+) -> Result<ArchiveIndexCore, ArchiveError> {
 	let started = Instant::now();
 	if cancellation.is_cancelled() {
 		return Err(report!(ArchiveError::Cancelled));
@@ -146,7 +154,7 @@ pub(crate) fn index_archive(source: &Path, cancellation: &CancellationToken) -> 
 	}
 
 	let source_file = SourceFile::open(source)?;
-	let (sha256, prefix) = hash_and_prefix(&source_file, cancellation, started)?;
+	let (sha256, prefix) = hash_and_prefix(&source_file, checkpoint, cancellation, started)?;
 	let format = sniff_format(&prefix)?;
 	let members = match format {
 		ArchiveFormat::Zip => index_zip(source_file.duplicate()?, cancellation, started)?,
@@ -164,7 +172,7 @@ pub(crate) fn index_archive(source: &Path, cancellation: &CancellationToken) -> 
 	if cancellation.is_cancelled() {
 		return Err(report!(ArchiveError::Cancelled));
 	}
-	let (verified_sha256, verified_prefix) = hash_and_prefix(&source_file, cancellation, started)?;
+	let (verified_sha256, verified_prefix) = hash_and_prefix(&source_file, checkpoint, cancellation, started)?;
 	if verified_sha256 != sha256 || sniff_format(&verified_prefix)? != format {
 		return Err(report!(ArchiveError::IdentityChanged));
 	}
@@ -183,7 +191,7 @@ pub(crate) fn verify_identity(
 	cancellation: &CancellationToken,
 	started: Instant,
 ) -> Result<(), ArchiveError> {
-	let (sha256, prefix) = hash_and_prefix(&index.source, cancellation, started)?;
+	let (sha256, prefix) = hash_and_prefix(&index.source, None, cancellation, started)?;
 	if sha256 != index.sha256 || sniff_format(&prefix)? != index.format {
 		return Err(report!(ArchiveError::IdentityChanged));
 	}
@@ -192,6 +200,7 @@ pub(crate) fn verify_identity(
 
 fn hash_and_prefix(
 	source: &SourceFile,
+	checkpoint: Option<&dyn Fn()>,
 	cancellation: &CancellationToken,
 	started: Instant,
 ) -> Result<([u8; 32], Vec<u8>), ArchiveError> {
@@ -222,6 +231,9 @@ fn hash_and_prefix(
 			prefix.extend_from_slice(&buffer[..wanted]);
 		}
 		hasher.update(&buffer[..count]);
+		if let Some(checkpoint) = checkpoint {
+			checkpoint();
+		}
 	}
 	Ok((hasher.finalize().into(), prefix))
 }

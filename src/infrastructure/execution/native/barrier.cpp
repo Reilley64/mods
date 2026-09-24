@@ -126,14 +126,50 @@ ModsResult mods_usvfs_link_directory(ModsUsvfs* session, const wchar_t* source, 
   });
 }
 
+// STARTUPINFOEX is passed through unmodified upstream. Restrict inheritance to
+// the three selected child streams instead of every inheritable controller handle.
+struct StartupAttributes {
+  LPPROC_THREAD_ATTRIBUTE_LIST list{};
+  bool initialized{};
+  ~StartupAttributes() {
+    if (initialized) DeleteProcThreadAttributeList(list);
+    if (list) HeapFree(GetProcessHeap(), 0, list);
+  }
+};
+
 ModsResult mods_usvfs_launch(ModsUsvfs* session, const wchar_t* application, wchar_t* command,
-                            const wchar_t* directory, STARTUPINFOW* startup, BOOL inherit_handles,
+                            const wchar_t* directory, STARTUPINFOW* startup, BOOL inherit_handles, BOOL new_process_group,
                             PROCESS_INFORMATION* output) noexcept {
   *output = {};
   PROCESS_INFORMATION created{};
   auto result = guarded([&]() -> ModsResult {
+    StartupAttributes attributes;
+    STARTUPINFOEXW extended{};
+    DWORD flags = CREATE_SUSPENDED;
+    if (new_process_group) flags |= CREATE_NEW_PROCESS_GROUP;
+    if (inherit_handles) {
+      if (!startup || !(startup->dwFlags & STARTF_USESTDHANDLES)) return {1, ERROR_INVALID_PARAMETER, 0, 0};
+      SIZE_T bytes = 0;
+      InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes);
+      if (bytes == 0) return native_failure();
+      attributes.list = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(HeapAlloc(GetProcessHeap(), 0, bytes));
+      if (!attributes.list) return {3, ERROR_NOT_ENOUGH_MEMORY, 0, 0};
+      if (!InitializeProcThreadAttributeList(attributes.list, 1, 0, &bytes)) return native_failure();
+      attributes.initialized = true;
+      HANDLE handles[] = {startup->hStdInput, startup->hStdOutput, startup->hStdError};
+      if (!UpdateProcThreadAttribute(attributes.list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                     handles, sizeof(handles), nullptr, nullptr)) return native_failure();
+      extended.StartupInfo = *startup;
+      extended.StartupInfo.cb = sizeof(extended);
+      extended.lpAttributeList = attributes.list;
+      flags |= EXTENDED_STARTUPINFO_PRESENT;
+      SetLastError(ERROR_SUCCESS);
+      if (!session->launch(application, command, nullptr, nullptr, TRUE, flags,
+                           nullptr, directory, &extended.StartupInfo, &created)) return native_failure();
+      return {};
+    }
     SetLastError(ERROR_SUCCESS);
-    if (!session->launch(application, command, nullptr, nullptr, inherit_handles, CREATE_SUSPENDED,
+    if (!session->launch(application, command, nullptr, nullptr, FALSE, flags,
                          nullptr, directory, startup, &created)) return native_failure();
     return {};
   });
@@ -204,27 +240,27 @@ int main() {
   ModsUsvfs session{};
   session.launch = fail_after_create;
   PROCESS_INFORMATION output{};
-  auto result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, &output);
+  auto result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, FALSE, &output);
   assert(result.status == 2 && result.native_error == 0);
   assert(output.hProcess == nullptr && output.hThread == nullptr);
   assert(terminated == 1 && closed == 2 && waited_for == MODS_CLEANUP_TIMEOUT_MS);
   session.launch = native_failure_after_create;
-  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, &output);
+  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, FALSE, &output);
   assert(result.status == 1 && result.native_error == ERROR_ACCESS_DENIED);
   assert(terminated == 2 && closed == 4);
   session.launch = successful_launch;
-  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, &output);
+  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, FALSE, &output);
   assert(result.status == 0 && output.hProcess == reinterpret_cast<HANDLE>(1));
   assert(output.hThread == reinterpret_cast<HANDLE>(2));
   assert(terminated == 2 && closed == 4);
   cleanup_fails = true;
   session.launch = fail_after_create;
-  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, &output);
+  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, FALSE, &output);
   assert(result.status == 2 && result.cleanup_status == 1 && result.cleanup_error == ERROR_ACCESS_DENIED);
   assert(output.hProcess == nullptr && output.hThread == nullptr && terminated == 3 && closed == 6);
   cleanup_fails = false;
   wait_times_out = true;
-  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, &output);
+  result = mods_usvfs_launch(&session, nullptr, nullptr, nullptr, nullptr, FALSE, FALSE, &output);
   assert(result.status == 2 && result.cleanup_status == 1 && result.cleanup_error == ERROR_TIMEOUT);
   assert(waited_for == MODS_CLEANUP_TIMEOUT_MS && terminated == 4 && closed == 8);
   auto* owned = new ModsUsvfs;

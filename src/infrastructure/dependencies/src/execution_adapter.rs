@@ -3,6 +3,7 @@ use application::ports::RunManagedProgram;
 use domain::EnvironmentRoot;
 #[cfg(windows)]
 use execution::CallerSnapshot;
+use execution::ExecutionCapture;
 #[cfg(windows)]
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -35,6 +36,7 @@ pub(crate) struct ExecutionAdapter {
 	#[cfg(windows)]
 	settings: SettingsAdapter,
 	force_cancellation: CancellationToken,
+	capture: Option<Arc<ExecutionCapture>>,
 }
 impl ExecutionAdapter {
 	/// Captures inherited lookup and settings inputs at the caller's startup directory.
@@ -49,6 +51,7 @@ impl ExecutionAdapter {
 			#[cfg(windows)]
 			root,
 			force_cancellation: CancellationToken::new(),
+			capture: None,
 		}
 	}
 	/// Supplies the second console interrupt separately from cooperative cancellation.
@@ -56,10 +59,15 @@ impl ExecutionAdapter {
 		self.force_cancellation = cancellation;
 		self
 	}
+	pub fn with_capture(mut self, capture: Arc<ExecutionCapture>) -> Self {
+		self.capture = Some(capture);
+		self
+	}
+
 	pub fn run_port(&self) -> RunManagedProgram {
 		let adapter = self.clone();
 		Arc::new(
-			move |output_target, working_directory, program, arguments, cancellation| {
+			move |output_target, working_directory, program, arguments, progress, cancellation| {
 				let adapter = adapter.clone();
 				Box::pin(async move {
 					if cancellation.is_cancelled() {
@@ -67,7 +75,14 @@ impl ExecutionAdapter {
 					}
 					#[cfg(not(windows))]
 					{
-						let _ = (adapter, output_target, working_directory, program, arguments);
+						let _ = (
+							adapter,
+							output_target,
+							working_directory,
+							program,
+							arguments,
+							progress,
+						);
 						Err(report!(ErrorMarker::program_unsupported()))
 					}
 					#[cfg(windows)]
@@ -88,6 +103,7 @@ impl ExecutionAdapter {
 									working_directory,
 									program,
 									arguments,
+									progress,
 									cancellation,
 								))
 							})

@@ -51,7 +51,7 @@ impl InstallationTransaction {
 		cancellation: &CancellationToken,
 	) -> Result<Self, ErrorMarker> {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
 		let root = SafeDir::open_absolute(root_path).map_err(|error| {
@@ -67,10 +67,12 @@ impl InstallationTransaction {
 			Err(error) if error.current_context().kind() == io::ErrorKind::AlreadyExists => {
 				return Err(error.context(ErrorMarker::manual_cleanup_required()));
 			}
-			Err(error) => return Err(error.context(ErrorMarker::transaction_failure())),
+			Err(error) => {
+				return Err(error.context(ErrorMarker::transaction_failure().with_phase("publication")));
+			}
 		};
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
 		let current = load_during_publication(root_path, cancellation)?;
@@ -78,15 +80,16 @@ impl InstallationTransaction {
 
 		let stage = operation
 			.create_dir("stage")
-			.context(ErrorMarker::transaction_failure())?;
-		stage.create_dir("mod").context(ErrorMarker::transaction_failure())?;
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+		stage.create_dir("mod")
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		stage.create_dir("profile")
-			.context(ErrorMarker::transaction_failure())?;
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		operation
 			.create_dir("backup")
-			.context(ErrorMarker::transaction_failure())?;
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
 		let remaining = approved
@@ -112,7 +115,7 @@ impl InstallationTransaction {
 		cancellation: &CancellationToken,
 	) -> Result<SafeFile, ErrorMarker> {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
 		let key = path.comparison_key().to_owned();
@@ -121,38 +124,44 @@ impl InstallationTransaction {
 			|| path.as_str().eq_ignore_ascii_case("Fallout - Invalidation.bsa")
 			|| !self.remaining.remove(&key)
 		{
-			return Err(report!(ErrorMarker::transaction_failure()));
+			return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 		}
 
 		let result = (|| {
-			let root =
-				SafeDir::open_absolute(&self.root_path).context(ErrorMarker::transaction_failure())?;
-			let temp = root.open_dir("temp").context(ErrorMarker::transaction_failure())?;
+			let root = SafeDir::open_absolute(&self.root_path)
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+			let temp = root
+				.open_dir("temp")
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 			let operation = temp
 				.open_dir(OPERATION_DIRECTORY)
-				.context(ErrorMarker::transaction_failure())?;
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 			let stage = operation
 				.open_dir("stage")
-				.context(ErrorMarker::transaction_failure())?;
-			let mut directory = stage.open_dir("mod").context(ErrorMarker::transaction_failure())?;
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+			let mut directory = stage
+				.open_dir("mod")
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 			let components = path.components().collect::<Vec<_>>();
 			let Some((file_name, parents)) = components.split_last() else {
-				return Err(report!(ErrorMarker::transaction_failure()));
+				return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 			};
 			for component in parents {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("publication")
+					));
 				}
 
 				directory = open_or_create_exact(&directory, component, cancellation)?;
 			}
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 			}
 
 			directory
 				.create_new_file(file_name)
-				.context(ErrorMarker::transaction_failure())
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))
 		})();
 		let Ok(file) = result else {
 			self.poisoned = true;
@@ -165,48 +174,57 @@ impl InstallationTransaction {
 
 	pub(crate) fn finish_file(&mut self, path_key: &str) -> Result<(), ErrorMarker> {
 		if !self.in_progress.remove(path_key) {
-			return Err(report!(ErrorMarker::transaction_failure()));
+			return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 		}
 		Ok(())
 	}
 
 	pub(crate) fn finish(&mut self, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 		if self.finished || self.poisoned || !self.remaining.is_empty() || !self.in_progress.is_empty() {
-			return Err(report!(ErrorMarker::transaction_failure()));
+			return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 		}
 		self.finished = true;
 
-		let root = SafeDir::open_absolute(&self.root_path).context(ErrorMarker::transaction_failure())?;
-		let temp = root.open_dir("temp").context(ErrorMarker::transaction_failure())?;
+		let root = SafeDir::open_absolute(&self.root_path)
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+		let temp = root
+			.open_dir("temp")
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		let operation = temp
 			.open_dir(OPERATION_DIRECTORY)
-			.context(ErrorMarker::transaction_failure())?;
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		let stage = operation
 			.open_dir("stage")
-			.context(ErrorMarker::transaction_failure())?;
-		let staged_mod = stage.open_dir("mod").context(ErrorMarker::transaction_failure())?;
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+		let staged_mod = stage
+			.open_dir("mod")
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 
 		write_metadata(&staged_mod, &self.approved)?;
 		validate_staged_provider(&staged_mod, cancellation)?;
 
-		let staged_profile = stage.open_dir("profile").context(ErrorMarker::transaction_failure())?;
-		let profile = root.open_dir("profile").context(ErrorMarker::transaction_failure())?;
+		let staged_profile = stage
+			.open_dir("profile")
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+		let profile = root
+			.open_dir("profile")
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		let mut profile_files = Vec::new();
 		if !self.approved.plan.replacement {
 			let current_modlist = read_bounded(
 				&profile,
 				"modlist.txt",
 				MAX_PROFILE_BYTES,
-				ErrorMarker::transaction_failure(),
+				ErrorMarker::transaction_failure().with_phase("publication"),
 				cancellation,
 			)?;
 			let intended_modlist = append_disabled_mod(&current_modlist, &self.approved.plan.mod_name)?;
 			staged_profile
 				.write_new("modlist.txt", &intended_modlist)
-				.context(ErrorMarker::transaction_failure())?;
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 			profile_files.push("modlist.txt".to_owned());
 		}
 		if self.approved.plan.replacement && self.approved.plan.projected_state.enabled {
@@ -222,14 +240,27 @@ impl InstallationTransaction {
 		profile_files.sort_by_key(|name| usize::from(name == "modlist.txt"));
 
 		validate_prospective_namespace(&root, &staged_mod, &self.approved.plan, cancellation)?;
-		sync_tree(&staged_mod, ErrorMarker::transaction_failure(), cancellation)?;
-		sync_tree(&staged_profile, ErrorMarker::transaction_failure(), cancellation)?;
-		stage.sync().context(ErrorMarker::transaction_failure())?;
-		operation.sync().context(ErrorMarker::transaction_failure())?;
-		temp.sync().context(ErrorMarker::transaction_failure())?;
-		root.sync().context(ErrorMarker::transaction_failure())?;
+		sync_tree(
+			&staged_mod,
+			ErrorMarker::transaction_failure().with_phase("publication"),
+			cancellation,
+		)?;
+		sync_tree(
+			&staged_profile,
+			ErrorMarker::transaction_failure().with_phase("publication"),
+			cancellation,
+		)?;
+		stage.sync()
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+		operation
+			.sync()
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+		temp.sync()
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+		root.sync()
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
 		let mut published_profile_files = Vec::with_capacity(profile_files.len());
@@ -238,7 +269,7 @@ impl InstallationTransaction {
 				&staged_profile,
 				&name,
 				MAX_PROFILE_BYTES,
-				ErrorMarker::transaction_failure(),
+				ErrorMarker::transaction_failure().with_phase("publication"),
 				cancellation,
 			)?;
 			published_profile_files.push(PublishedProfileFile { name, expected });
@@ -265,14 +296,15 @@ fn validate_intent(installed: &[InstalledMod], plan: &InstallPlan) -> Result<(),
 	let existing = installed.iter().find(|item| item.name == plan.mod_name);
 	match (plan.replacement, existing) {
 		(false, None) => {
-			let expected = u32::try_from(installed.len()).context(ErrorMarker::transaction_failure())?;
+			let expected = u32::try_from(installed.len())
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 			if plan.projected_state.mode != InstallMode::NewInstall
 				|| plan.projected_state.mod_name != plan.mod_name
 				|| plan.projected_state.enabled
 				|| plan.projected_state.priority.get() != expected
 				|| plan.projected_state.list_position != u64::from(expected)
 			{
-				return Err(report!(ErrorMarker::transaction_failure()));
+				return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 			}
 		}
 		(true, Some(existing)) => {
@@ -283,10 +315,10 @@ fn validate_intent(installed: &[InstalledMod], plan: &InstallPlan) -> Result<(),
 				|| plan.projected_state.enabled != existing.enabled
 				|| plan.projected_state.priority != existing.priority
 			{
-				return Err(report!(ErrorMarker::transaction_failure()));
+				return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 			}
 		}
-		_ => return Err(report!(ErrorMarker::transaction_failure())),
+		_ => return Err(report!(ErrorMarker::transaction_failure().with_phase("publication"))),
 	}
 	Ok(())
 }
@@ -297,40 +329,46 @@ fn open_or_create_exact(
 	cancellation: &CancellationToken,
 ) -> Result<SafeDir, ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 	}
 	let opened = directory.entries();
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 	}
-	let mut entries = opened.context(ErrorMarker::transaction_failure())?;
+	let mut entries = opened.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
 	let mut directory_entries = 0_usize;
 	loop {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 		let Some(entry) = entries.next() else {
 			break;
 		};
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
-		let entry = entry.into_report().context(ErrorMarker::transaction_failure())?;
+		let entry = entry
+			.into_report()
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		budget.consume(&mut directory_entries)
-			.context(ErrorMarker::transaction_failure())?;
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		let existing = entry.file_name();
 		let existing = existing
 			.to_str()
-			.ok_or_else(|| report!(ErrorMarker::transaction_failure()))?;
+			.ok_or_else(|| report!(ErrorMarker::transaction_failure().with_phase("publication")))?;
 		if case_fold_key(existing) == case_fold_key(name) {
 			if existing != name {
-				return Err(report!(ErrorMarker::transaction_failure()));
+				return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 			}
-			return directory.open_dir(name).context(ErrorMarker::transaction_failure());
+			return directory
+				.open_dir(name)
+				.context(ErrorMarker::transaction_failure().with_phase("publication"));
 		}
 	}
-	directory.create_dir(name).context(ErrorMarker::transaction_failure())
+	directory
+		.create_dir(name)
+		.context(ErrorMarker::transaction_failure().with_phase("publication"))
 }
 
 #[derive(Serialize)]
@@ -358,7 +396,7 @@ struct MetadataChoice<'a> {
 fn write_metadata(mod_dir: &SafeDir, approved: &ApprovedInstallation) -> Result<(), ErrorMarker> {
 	let source_basename = approved.source_basename.as_str();
 	if source_basename.is_empty() {
-		return Err(report!(ErrorMarker::transaction_failure()));
+		return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 	}
 	let identity = &approved.plan.archive_identity;
 	let (config_member, config_sha256) = match identity {
@@ -390,9 +428,9 @@ fn write_metadata(mod_dir: &SafeDir, approved: &ApprovedInstallation) -> Result<
 		choices,
 		warnings,
 	};
-	let text = to_string_pretty(&metadata).context(ErrorMarker::transaction_failure())?;
+	let text = to_string_pretty(&metadata).context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 	mod_dir.write_new("meta.toml", text.as_bytes())
-		.context(ErrorMarker::transaction_failure())
+		.context(ErrorMarker::transaction_failure().with_phase("publication"))
 }
 
 fn warning_name(warning: &InstallWarning) -> &'static str {
@@ -452,14 +490,14 @@ fn publish_installation(
 		profile.open_regular(&file.name).context(publication_failed())?;
 	}
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 	}
 
 	if plan.replacement {
 		mods.rename_durable_to(mod_name, &backup, "mod")
 			.context(publication_failed())?;
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 	}
 
@@ -468,12 +506,12 @@ fn publish_installation(
 
 	for file in profile_files {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 		profile.rename_durable_to(&file.name, &backup, &file.name)
 			.context(publication_failed())?;
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 		staged_profile
 			.rename_durable_to(&file.name, &profile, &file.name)
@@ -633,8 +671,11 @@ mod tests {
 				mod_name: mod_name.clone(),
 				replacement,
 				accepted_choices: Vec::new(),
+				automatic_events: Vec::new(),
+				resolved_flags: Vec::new(),
 				warnings: Vec::new(),
 				candidates: vec![PlannedCandidate {
+					origin_condition_evaluation: None,
 					candidate: InstallCandidate {
 						candidate_id: 0,
 						origin: InstallCandidateOrigin::Required,
@@ -839,6 +880,7 @@ mod tests {
 		let mut approved = approved_installation(&archive, "Fomod", false, false, 0, "file.txt");
 		approved.fomod_schema_version = Some("5.0".to_owned());
 		approved.plan.accepted_choices = vec![AcceptedChoice {
+			sequence: 0,
 			group_id: "core".to_owned(),
 			option_id: "standard".to_owned(),
 		}];

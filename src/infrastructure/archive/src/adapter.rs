@@ -8,6 +8,7 @@ use crate::index::ArchiveIndexCore;
 use crate::index::ArchiveMember;
 use crate::index::MemberKind;
 use crate::index::index_archive;
+use crate::index::index_archive_with_progress;
 use crate::limits::COPY_BUFFER_BYTES;
 use crate::limits::MAX_ARCHIVE_WORK;
 use crate::limits::MAX_FOMOD_DERIVED_CANDIDATES;
@@ -22,6 +23,7 @@ use application::installation::ArchiveIndex;
 use application::installation::ConditionOperator;
 use application::installation::ConditionScope;
 use application::installation::ConditionalCandidates;
+use application::installation::FomodFileEffect;
 use application::installation::FomodFlagWrite;
 use application::installation::FomodGroup;
 use application::installation::FomodInstaller;
@@ -35,6 +37,8 @@ use application::ports::ExtractApprovedFiles;
 use application::ports::IndexArchive;
 use application::ports::InstallationFile;
 use application::ports::PortFuture;
+use application::ports::ProgressEvent;
+use application::ports::ReportProgress;
 use domain::ArchiveIdentity;
 use domain::ArchivePath;
 use domain::DataRelativePath;
@@ -63,6 +67,7 @@ use std::io::Write;
 use std::mem::take;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::channel;
 use tokio::task::spawn_blocking;
@@ -73,37 +78,61 @@ pub struct ArchiveAdapter;
 
 impl ArchiveAdapter {
 	pub fn index_port(&self) -> IndexArchive {
-		Arc::new(move |archive, cancellation| {
+		Arc::new(move |archive, progress, cancellation| {
 			Box::pin(async move {
-				spawn_blocking(move || index_for_application(archive, &cancellation))
-					.await
-					.context(ArchiveError::Io)
-					.map_err(map_archive_report)?
+				spawn_blocking(move || {
+					let runtime = Handle::current();
+					let checkpoint = || {
+						if let Some(progress) = &progress {
+							runtime.block_on(
+								progress.call((ProgressEvent::ArchiveScanCheckpoint,)),
+							);
+						}
+					};
+					index_for_application(archive, Some(&checkpoint), &cancellation)
+				})
+				.await
+				.context(ArchiveError::Io)
+				.map_err(|error| map_archive_report(error, "archive_validation"))?
 			}) as PortFuture<_>
 		})
 	}
 
 	pub fn extract_port(&self) -> ExtractApprovedFiles {
-		Arc::new(move |archive, identity, candidates, begin_file, cancellation| {
-			Box::pin(extract_for_application(
-				archive,
-				identity,
-				candidates,
-				begin_file,
-				cancellation,
-			)) as PortFuture<_>
-		})
+		Arc::new(
+			move |archive, identity, candidates, begin_file, progress, cancellation| {
+				Box::pin(extract_for_application(
+					archive,
+					identity,
+					candidates,
+					begin_file,
+					progress,
+					cancellation,
+				)) as PortFuture<_>
+			},
+		)
 	}
 }
 
-fn index_for_application(archive: ArchivePath, cancellation: &CancellationToken) -> Result<ArchiveIndex, ErrorMarker> {
+fn index_for_application(
+	archive: ArchivePath,
+	checkpoint: Option<&dyn Fn()>,
+	cancellation: &CancellationToken,
+) -> Result<ArchiveIndex, ErrorMarker> {
 	let started = Instant::now();
-	let core = index_archive(archive.as_path(), cancellation).map_err(map_archive_report)?;
+	let core = index_archive_with_progress(archive.as_path(), checkpoint, cancellation)
+		.map_err(|error| map_archive_report(error, "archive_validation"))?;
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(
+			report!(ArchiveError::Cancelled),
+			"archive_validation",
+		));
 	}
 	if started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(
+			report!(ArchiveError::WorkLimit),
+			"archive_validation",
+		));
 	}
 	let archive_sha256 = digest(core.sha256)?;
 	let package_root = core.discovery.package_root.join("/");
@@ -122,50 +151,62 @@ fn index_for_application(archive: ArchivePath, cancellation: &CancellationToken)
 	};
 
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(
+			report!(ArchiveError::Cancelled),
+			"archive_validation",
+		));
 	}
 	if started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(
+			report!(ArchiveError::WorkLimit),
+			"archive_validation",
+		));
 	}
 	let configuration = read_member_bounded(&core, configuration_ordinal, MAX_XML_BYTES, cancellation)
-		.map_err(map_archive_report)?;
+		.map_err(|error| map_archive_report(error, "archive_validation"))?;
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(
+			report!(ArchiveError::Cancelled),
+			"archive_validation",
+		));
 	}
 	if started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(
+			report!(ArchiveError::WorkLimit),
+			"archive_validation",
+		));
 	}
-	let document = parse(&configuration, cancellation).map_err(map_archive_report)?;
+	let document = parse(&configuration, cancellation).map_err(|error| map_archive_report(error, "fomod_parse"))?;
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 	}
 	if started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 	}
 	let config_member = core.members[configuration_ordinal].path.as_str().to_owned();
 	let config_sha256 = digest(Sha256::digest(&configuration).into())?;
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 	}
 	if started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 	}
 	let mut converter = FomodConverter::new(&core, cancellation, started)?;
 	let mut installer = converter.convert(&document)?;
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 	}
 	if started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 	}
 	if core.discovery.ignored_script_alias {
 		let mut ignored = None;
 		for member in &core.members {
 			if cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 
 			let components = member.path.components();
@@ -177,7 +218,8 @@ fn index_for_application(archive: ArchivePath, cancellation: &CancellationToken)
 				break;
 			}
 		}
-		let ignored = ignored.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))?;
+		let ignored =
+			ignored.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("fomod_parse")))?;
 		installer.warnings.push(InstallWarning::FomodModuleConfigPreferred {
 			selected_config_member: config_member.clone(),
 			ignored_config_member: ignored,
@@ -200,19 +242,19 @@ fn plain_candidates(
 	archive_started: Instant,
 ) -> Result<Vec<InstallCandidate>, ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(report!(ArchiveError::Cancelled), "planning"));
 	}
 	if archive_started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(report!(ArchiveError::WorkLimit), "planning"));
 	}
 
 	let mut candidates = Vec::new();
 	for member in core.members.iter().filter(|member| member.kind == MemberKind::File) {
 		if cancellation.is_cancelled() {
-			return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+			return Err(map_archive_report(report!(ArchiveError::Cancelled), "planning"));
 		}
 		if archive_started.elapsed() > MAX_ARCHIVE_WORK {
-			return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+			return Err(map_archive_report(report!(ArchiveError::WorkLimit), "planning"));
 		}
 
 		let components = member.path.components();
@@ -224,7 +266,7 @@ fn plain_candidates(
 			continue;
 		}
 		let Some(destination) = member.path.strip_prefix(&core.discovery.data_root) else {
-			return Err(report!(ErrorMarker::unsafe_archive()));
+			return Err(report!(ErrorMarker::unsafe_archive().with_phase("planning")));
 		};
 		if destination.is_empty() {
 			continue;
@@ -232,7 +274,7 @@ fn plain_candidates(
 		let destination = data_destination(destination)?;
 		let order = u64::try_from(member.ordinal)
 			.context(ArchiveError::InvalidArchive)
-			.map_err(map_archive_report)?;
+			.map_err(|error| map_archive_report(error, "planning"))?;
 		candidates.push(InstallCandidate {
 			candidate_id: order,
 			origin: InstallCandidateOrigin::Required,
@@ -244,13 +286,13 @@ fn plain_candidates(
 		});
 	}
 	if cancellation.is_cancelled() {
-		return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+		return Err(map_archive_report(report!(ArchiveError::Cancelled), "planning"));
 	}
 	if archive_started.elapsed() > MAX_ARCHIVE_WORK {
-		return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+		return Err(map_archive_report(report!(ArchiveError::WorkLimit), "planning"));
 	}
 	if candidates.is_empty() {
-		return Err(report!(ErrorMarker::unsupported_installer()));
+		return Err(report!(ErrorMarker::unsupported_installer().with_phase("planning")));
 	}
 	Ok(candidates)
 }
@@ -305,9 +347,9 @@ impl FomodBudget {
 		self.derived_work = self
 			.derived_work
 			.checked_add(1)
-			.ok_or_else(|| map_archive_report(report!(ArchiveError::ExpansionLimit)))?;
+			.ok_or_else(|| map_archive_report(report!(ArchiveError::ExpansionLimit), "fomod_parse"))?;
 		if self.derived_work > self.max_derived_work {
-			return Err(map_archive_report(report!(ArchiveError::ExpansionLimit)));
+			return Err(map_archive_report(report!(ArchiveError::ExpansionLimit), "fomod_parse"));
 		}
 		Ok(())
 	}
@@ -316,9 +358,9 @@ impl FomodBudget {
 		self.derived_candidates = self
 			.derived_candidates
 			.checked_add(1)
-			.ok_or_else(|| map_archive_report(report!(ArchiveError::ExpansionLimit)))?;
+			.ok_or_else(|| map_archive_report(report!(ArchiveError::ExpansionLimit), "fomod_parse"))?;
 		if self.derived_candidates > self.max_derived_candidates {
-			return Err(map_archive_report(report!(ArchiveError::ExpansionLimit)));
+			return Err(map_archive_report(report!(ArchiveError::ExpansionLimit), "fomod_parse"));
 		}
 		Ok(())
 	}
@@ -346,10 +388,10 @@ impl<'a> FomodConverter<'a> {
 		let mut source_lookup = BTreeMap::new();
 		for member in core.members.iter().filter(|member| member.kind == MemberKind::File) {
 			if cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			source_lookup.insert(normalized_components_key(member.path.components()), member.ordinal);
 		}
@@ -405,10 +447,10 @@ impl<'a> FomodConverter<'a> {
 		let mut used_step_ids = BTreeSet::new();
 		for (step_index, step) in ordered_children(steps, "installStep")?.into_iter().enumerate() {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			let step_label = required_attribute(step, "name")?;
 			let step_id = unique_identifier(
@@ -425,10 +467,16 @@ impl<'a> FomodConverter<'a> {
 			let mut used_group_ids = BTreeSet::new();
 			for (group_index, group) in ordered_children(file_groups, "group")?.into_iter().enumerate() {
 				if self.cancellation.is_cancelled() {
-					return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+					return Err(map_archive_report(
+						report!(ArchiveError::Cancelled),
+						"fomod_parse",
+					));
 				}
 				if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-					return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+					return Err(map_archive_report(
+						report!(ArchiveError::WorkLimit),
+						"fomod_parse",
+					));
 				}
 				let label = required_attribute(group, "name")?.to_owned();
 				let group_component = unique_identifier(
@@ -444,10 +492,16 @@ impl<'a> FomodConverter<'a> {
 					ordered_children(plugins, "plugin")?.into_iter().enumerate()
 				{
 					if self.cancellation.is_cancelled() {
-						return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+						return Err(map_archive_report(
+							report!(ArchiveError::Cancelled),
+							"fomod_parse",
+						));
 					}
 					if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-						return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+						return Err(map_archive_report(
+							report!(ArchiveError::WorkLimit),
+							"fomod_parse",
+						));
 					}
 					let option_label = required_attribute(plugin, "name")?.to_owned();
 					let option_id = unique_identifier(
@@ -507,9 +561,9 @@ impl<'a> FomodConverter<'a> {
 				.collect::<Result<Vec<_>, ErrorMarker>>()?,
 			None => Vec::new(),
 		};
-		let file_candidates = match optional_child(plugin, "files")? {
+		let (file_candidates, file_effects) = match optional_child(plugin, "files")? {
 			Some(files) => self.option_files(files, group_id, option_id)?,
-			None => Vec::new(),
+			None => (Vec::new(), Vec::new()),
 		};
 		if flag_writes.is_empty() && file_candidates.is_empty() {
 			self.warnings.push(InstallWarning::FomodEmptyOptionAccepted {
@@ -526,6 +580,7 @@ impl<'a> FomodConverter<'a> {
 			type_patterns,
 			flag_writes,
 			file_candidates,
+			file_effects,
 		})
 	}
 
@@ -548,10 +603,10 @@ impl<'a> FomodConverter<'a> {
 		let mut result = Vec::new();
 		for pattern in children(patterns, "pattern") {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			let condition = self.condition(
 				required_child(pattern, "dependencies")?,
@@ -572,15 +627,17 @@ impl<'a> FomodConverter<'a> {
 		files: &NormalizedElement,
 		group_id: &str,
 		option_id: &str,
-	) -> Result<Vec<InstallCandidate>, ErrorMarker> {
+	) -> Result<(Vec<InstallCandidate>, Vec<FomodFileEffect>), ErrorMarker> {
 		let mut result = Vec::new();
+		let mut effects = Vec::new();
 		for operation in &files.children {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
+
 			let always = boolean_attribute(operation, "alwaysInstall")?.unwrap_or(false);
 			let usable = boolean_attribute(operation, "installIfUsable")?.unwrap_or(false);
 			let trigger = if always {
@@ -590,6 +647,25 @@ impl<'a> FomodConverter<'a> {
 			} else {
 				OptionFileTrigger::Selected
 			};
+			let source = required_attribute(operation, "source")?;
+			let descriptor_order = self.next_descriptor;
+			let destination = optional_attribute(operation, "destination").unwrap_or(source);
+			let priority = optional_attribute(operation, "priority")
+				.map(str::parse::<i32>)
+				.transpose()
+				.context(ArchiveError::UnsupportedInstaller)
+				.map_err(|error| map_archive_report(error, "fomod_parse"))?
+				.unwrap_or(0);
+			effects.push(FomodFileEffect {
+				folder: operation.name.eq_ignore_ascii_case("folder"),
+				descriptor_order,
+				source: source.to_owned(),
+				destination: destination.to_owned(),
+				declared_priority: priority,
+				always_install: always,
+				install_if_usable: usable,
+			});
+
 			result.extend(self.operation(
 				operation,
 				InstallationPhase::SelectedOrForced,
@@ -602,7 +678,8 @@ impl<'a> FomodConverter<'a> {
 				Some(option_id),
 			)?);
 		}
-		Ok(result)
+
+		Ok((result, effects))
 	}
 
 	fn conditional_candidates(
@@ -617,16 +694,16 @@ impl<'a> FomodConverter<'a> {
 		let mut result = Vec::new();
 		for pattern in children(patterns, "pattern") {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			let pattern_order = self.next_pattern;
 			self.next_pattern = self
 				.next_pattern
 				.checked_add(1)
-				.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))?;
+				.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("fomod_parse")))?;
 			let condition = self.condition(
 				required_child(pattern, "dependencies")?,
 				ConditionScope::ConditionalFilePattern,
@@ -637,7 +714,10 @@ impl<'a> FomodConverter<'a> {
 			let candidates = self.file_list(
 				required_child(pattern, "files")?,
 				InstallationPhase::Conditional,
-				InstallCandidateOrigin::Conditional { pattern_order },
+				InstallCandidateOrigin::Conditional {
+					pattern_order,
+					condition: condition.clone(),
+				},
 				None,
 				None,
 			)?;
@@ -657,10 +737,10 @@ impl<'a> FomodConverter<'a> {
 		let mut result = Vec::new();
 		for operation in &files.children {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			result.extend(self.operation(operation, phase, origin.clone(), group_id, option_id)?);
 		}
@@ -676,10 +756,10 @@ impl<'a> FomodConverter<'a> {
 		option_id: Option<&str>,
 	) -> Result<Vec<InstallCandidate>, ErrorMarker> {
 		if self.cancellation.is_cancelled() {
-			return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+			return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 		}
 		if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-			return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+			return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 		}
 		self.budget.charge_work()?;
 		let source = required_attribute(operation, "source")?;
@@ -687,7 +767,7 @@ impl<'a> FomodConverter<'a> {
 		self.next_descriptor = self
 			.next_descriptor
 			.checked_add(1)
-			.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))?;
+			.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("fomod_parse")))?;
 		if source.is_empty() {
 			self.warnings.push(InstallWarning::FomodEmptySourceIgnored {
 				descriptor_order,
@@ -700,12 +780,13 @@ impl<'a> FomodConverter<'a> {
 			.map(str::parse::<i32>)
 			.transpose()
 			.context(ArchiveError::UnsupportedInstaller)
-			.map_err(map_archive_report)?
+			.map_err(|error| map_archive_report(error, "fomod_parse"))?
 			.unwrap_or(0);
 		let destination = optional_attribute(operation, "destination").unwrap_or(source);
 		let destination_is_directory = destination.is_empty() || destination.ends_with(['/', '\\']);
 		let source = source.trim_end_matches(['/', '\\']);
-		let source_path = SafeArchivePath::new(source).map_err(map_archive_report)?;
+		let source_path =
+			SafeArchivePath::new(source).map_err(|error| map_archive_report(error, "fomod_parse"))?;
 		let source_members =
 			self.resolve_source(&source_path, operation.name.eq_ignore_ascii_case("folder"))?;
 		let mut destination = normalize_destination(destination)?;
@@ -713,16 +794,16 @@ impl<'a> FomodConverter<'a> {
 			let basename = source_path
 				.components()
 				.last()
-				.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))?;
+				.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("fomod_parse")))?;
 			destination = join_destination(&destination, basename);
 		}
 		let mut result = Vec::new();
 		for ordinal in source_members {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			self.budget.charge_candidate()?;
 			let member = &self.core.members[ordinal];
@@ -739,13 +820,13 @@ impl<'a> FomodConverter<'a> {
 				.insert(alias_key, destination_identity.clone())
 				.is_some_and(|existing| existing != destination_identity)
 			{
-				return Err(report!(ErrorMarker::unsafe_archive()));
+				return Err(report!(ErrorMarker::unsafe_archive().with_phase("fomod_parse")));
 			}
 			let candidate_id = self.next_candidate;
 			self.next_candidate = self
 				.next_candidate
 				.checked_add(1)
-				.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))?;
+				.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("fomod_parse")))?;
 			result.push(InstallCandidate {
 				candidate_id,
 				origin: origin.clone(),
@@ -768,10 +849,10 @@ impl<'a> FomodConverter<'a> {
 		let mut matching_prefixes = Vec::new();
 		for prefix in prefixes {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			self.budget.charge_work()?;
 			let key = normalized_components_key(&prefix);
@@ -783,10 +864,16 @@ impl<'a> FomodConverter<'a> {
 						break;
 					}
 					if self.cancellation.is_cancelled() {
-						return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+						return Err(map_archive_report(
+							report!(ArchiveError::Cancelled),
+							"fomod_parse",
+						));
 					}
 					if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-						return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+						return Err(map_archive_report(
+							report!(ArchiveError::WorkLimit),
+							"fomod_parse",
+						));
 					}
 					self.budget.charge_work()?;
 					matches.push(*ordinal);
@@ -800,7 +887,7 @@ impl<'a> FomodConverter<'a> {
 		}
 
 		if matching_prefixes.is_empty() {
-			return Err(report!(ErrorMarker::unsupported_installer()));
+			return Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse")));
 		}
 		if matching_prefixes.len() != 1 || (!folder && matching_prefixes[0].len() != 1) {
 			return Err(report!(ErrorMarker::ambiguous_install_plan()));
@@ -821,15 +908,15 @@ impl<'a> FomodConverter<'a> {
 		let operator = match optional_attribute(node, "operator").unwrap_or("And") {
 			value if value.eq_ignore_ascii_case("And") => ConditionOperator::And,
 			value if value.eq_ignore_ascii_case("Or") => ConditionOperator::Or,
-			_ => return Err(report!(ErrorMarker::unsupported_installer())),
+			_ => return Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse"))),
 		};
 		let mut conditions = Vec::new();
 		for child in &node.children {
 			if self.cancellation.is_cancelled() {
-				return Err(map_archive_report(report!(ArchiveError::Cancelled)));
+				return Err(map_archive_report(report!(ArchiveError::Cancelled), "fomod_parse"));
 			}
 			if self.archive_started.elapsed() > MAX_ARCHIVE_WORK {
-				return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+				return Err(map_archive_report(report!(ArchiveError::WorkLimit), "fomod_parse"));
 			}
 			let condition = if child.name.eq_ignore_ascii_case("dependencies") {
 				self.condition(child, scope, group_id, option_id, pattern_order)?
@@ -841,7 +928,9 @@ impl<'a> FomodConverter<'a> {
 			} else if child.name.eq_ignore_ascii_case("fileDependency") {
 				let path = normalize_destination(required_attribute(child, "file")?)?;
 				if path.is_empty() {
-					return Err(report!(ErrorMarker::unsupported_installer()));
+					return Err(report!(
+						ErrorMarker::unsupported_installer().with_phase("fomod_parse")
+					));
 				}
 				let path = data_path(path)?.as_str().to_owned();
 				let state = parse_file_state(required_attribute(child, "state")?)?;
@@ -859,7 +948,7 @@ impl<'a> FomodConverter<'a> {
 					minimum_version: version(required_attribute(child, "version")?)?,
 				}
 			} else {
-				return Err(report!(ErrorMarker::unsupported_installer()));
+				return Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse")));
 			};
 			conditions.push(condition);
 		}
@@ -884,33 +973,42 @@ async fn extract_for_application(
 	identity: ArchiveIdentity,
 	candidates: Vec<InstallCandidate>,
 	begin_file: BeginInstallationFile,
+	progress: Option<ReportProgress>,
 	cancellation: CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	let started = Instant::now();
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("archive_validation")
+		));
 	}
 	let index_cancellation = cancellation.clone();
 	let indexed = spawn_blocking(move || {
-		let core = index_archive(archive.as_path(), &index_cancellation).map_err(map_archive_report)?;
+		let core = index_archive(archive.as_path(), &index_cancellation)
+			.map_err(|error| map_archive_report(error, "archive_validation"))?;
 		let actual_identity = identity_for_extraction(&core, &index_cancellation)?;
 		Ok((core, actual_identity))
 	})
 	.await
 	.context(ArchiveError::Io)
-	.map_err(map_archive_report)?;
+	.map_err(|error| map_archive_report(error, "archive_validation"))?;
 	let (core, actual_identity) = indexed?;
 	if actual_identity != identity {
-		return Err(report!(ErrorMarker::unsafe_archive()));
+		return Err(report!(ErrorMarker::unsafe_archive().with_phase("archive_validation")));
 	}
 
 	let mut source_members = HashMap::<String, usize>::with_capacity(core.members.len());
 	for member in &core.members {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("archive_validation")
+			));
 		}
 		if started.elapsed() > MAX_ARCHIVE_WORK {
-			return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+			return Err(map_archive_report(
+				report!(ArchiveError::WorkLimit),
+				"archive_validation",
+			));
 		}
 		if member.kind != MemberKind::File {
 			continue;
@@ -919,7 +1017,7 @@ async fn extract_for_application(
 			.insert(member.path.as_str().to_owned(), member.ordinal)
 			.is_some()
 		{
-			return Err(report!(ErrorMarker::unsafe_archive()));
+			return Err(report!(ErrorMarker::unsafe_archive().with_phase("archive_validation")));
 		}
 	}
 
@@ -928,10 +1026,15 @@ async fn extract_for_application(
 	let mut destination_aliases = BTreeMap::<String, String>::new();
 	for candidate in candidates {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("archive_validation")
+			));
 		}
 		if started.elapsed() > MAX_ARCHIVE_WORK {
-			return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+			return Err(map_archive_report(
+				report!(ArchiveError::WorkLimit),
+				"archive_validation",
+			));
 		}
 		let destination_key = candidate.destination.comparison_key().to_owned();
 		if !destination_keys.insert(destination_key.clone()) {
@@ -944,15 +1047,18 @@ async fn extract_for_application(
 			)
 			.is_some_and(|existing| existing != destination_key)
 		{
-			return Err(report!(ErrorMarker::unsafe_archive()));
+			return Err(report!(ErrorMarker::unsafe_archive().with_phase("archive_validation")));
 		}
 		let ordinal = source_members
 			.get(&candidate.source_member)
 			.copied()
-			.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))?;
+			.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("archive_validation")))?;
 		let member_destinations = destinations.entry(ordinal).or_default();
 		if member_destinations.len() >= MAX_SOURCE_DESTINATION_FAN_OUT {
-			return Err(map_archive_report(report!(ArchiveError::ExpansionLimit)));
+			return Err(map_archive_report(
+				report!(ArchiveError::ExpansionLimit),
+				"archive_validation",
+			));
 		}
 		member_destinations.push(candidate.destination);
 	}
@@ -960,18 +1066,23 @@ async fn extract_for_application(
 	let mut ordinals = Vec::with_capacity(destinations.len());
 	for (ordinal, member_destinations) in &destinations {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("archive_validation")
+			));
 		}
 		if started.elapsed() > MAX_ARCHIVE_WORK {
-			return Err(map_archive_report(report!(ArchiveError::WorkLimit)));
+			return Err(map_archive_report(
+				report!(ArchiveError::WorkLimit),
+				"archive_validation",
+			));
 		}
 		let member = core
 			.members
 			.get(*ordinal)
-			.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))?;
+			.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("archive_validation")))?;
 		staged_output
 			.charge(member.uncompressed_size, member_destinations.len())
-			.map_err(map_archive_report)?;
+			.map_err(|error| map_archive_report(error, "archive_validation"))?;
 		ordinals.push(*ordinal);
 	}
 	// Archive crates write synchronously while installation files are async.
@@ -995,14 +1106,15 @@ async fn extract_for_application(
 	while let Some(event) = receiver.recv().await {
 		let result: Result<(), ErrorMarker> = async {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(ErrorMarker::operation_cancelled().with_phase("extraction")));
 			}
 			match event {
 				ExtractionEvent::Start(destinations) => {
 					finish_files(take(&mut current_files), &cancellation).await?;
 					for destination in destinations {
 						if cancellation.is_cancelled() {
-							return Err(report!(ErrorMarker::operation_cancelled()));
+							return Err(report!(ErrorMarker::operation_cancelled()
+								.with_phase("extraction")));
 						}
 						let file = begin_file.call((destination, cancellation.clone())).await?;
 						current_files.push(file);
@@ -1011,9 +1123,13 @@ async fn extract_for_application(
 				ExtractionEvent::Chunk(chunk) => {
 					for file in &current_files {
 						if cancellation.is_cancelled() {
-							return Err(report!(ErrorMarker::operation_cancelled()));
+							return Err(report!(ErrorMarker::operation_cancelled()
+								.with_phase("extraction")));
 						}
 						file.write_chunk.call((chunk.clone(), cancellation.clone())).await?;
+					}
+					if let Some(progress) = &progress {
+						progress.call((ProgressEvent::ExtractionCheckpoint,)).await;
 					}
 				}
 			}
@@ -1027,15 +1143,25 @@ async fn extract_for_application(
 			return Err(error);
 		}
 	}
-	let producer_result = producer.await.context(ArchiveError::Io).map_err(map_archive_report)?;
-	producer_result.map_err(map_archive_report)?;
+	let producer_result = producer
+		.await
+		.context(ArchiveError::Io)
+		.map_err(|error| map_archive_report(error, "extraction"))?;
+	producer_result.map_err(|error| {
+		let phase = match error.current_context() {
+			ArchiveError::Io | ArchiveError::Cancelled => "extraction",
+			_ => "archive_validation",
+		};
+
+		map_archive_report(error, phase)
+	})?;
 	finish_files(current_files, &cancellation).await
 }
 
 async fn finish_files(files: Vec<InstallationFile>, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
 	for file in files {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("extraction")));
 		}
 		file.finish.call((cancellation.clone(),)).await?;
 	}
@@ -1055,7 +1181,7 @@ fn identity_for_extraction(
 		}),
 		Some(ordinal) => {
 			let configuration = read_member_bounded(core, ordinal, MAX_XML_BYTES, cancellation)
-				.map_err(map_archive_report)?;
+				.map_err(|error| map_archive_report(error, "archive_validation"))?;
 			Ok(ArchiveIdentity::Fomod {
 				archive_sha256,
 				package_root,
@@ -1092,10 +1218,10 @@ fn digest(bytes: [u8; 32]) -> Result<Sha256Digest, ErrorMarker> {
 	let value = bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
 	Sha256Digest::new(value)
 		.context(ArchiveError::InvalidArchive)
-		.map_err(map_archive_report)
+		.map_err(|error| map_archive_report(error, "archive_validation"))
 }
 
-fn map_archive_report(error: Report<ArchiveError>) -> Report<ErrorMarker> {
+fn map_archive_report(error: Report<ArchiveError>, phase: &'static str) -> Report<ErrorMarker> {
 	let marker = match error.current_context() {
 		ArchiveError::Cancelled => ErrorMarker::operation_cancelled(),
 		ArchiveError::Io => ErrorMarker::io_failure(),
@@ -1104,26 +1230,26 @@ fn map_archive_report(error: Report<ArchiveError>) -> Report<ErrorMarker> {
 		}
 		_ => ErrorMarker::unsafe_archive(),
 	};
-	error.context(marker)
+	error.context(marker.with_phase(phase))
 }
 
 fn data_path(value: String) -> Result<DataRelativePath, ErrorMarker> {
 	DataRelativePath::new(value)
 		.context(ArchiveError::UnsafePath)
-		.map_err(map_archive_report)
+		.map_err(|error| map_archive_report(error, "planning"))
 }
 
 fn data_destination(value: String) -> Result<DataRelativePath, ErrorMarker> {
 	let value = SafeArchivePath::new(&value)
 		.map(|path| path.as_str().to_owned())
-		.map_err(map_archive_report)?;
+		.map_err(|error| map_archive_report(error, "planning"))?;
 	let destination = data_path(value)?;
 	let first_component = destination.as_str().split('/').next().unwrap_or_default();
 	if ["meta.toml", "Fallout - Invalidation.bsa"]
 		.iter()
 		.any(|reserved| case_fold_key(first_component) == case_fold_key(reserved))
 	{
-		return Err(report!(ErrorMarker::unsafe_archive()));
+		return Err(report!(ErrorMarker::unsafe_archive().with_phase("planning")));
 	}
 	Ok(destination)
 }
@@ -1135,12 +1261,13 @@ fn children<'a>(node: &'a NormalizedElement, name: &str) -> Vec<&'a NormalizedEl
 		.collect()
 }
 fn required_child<'a>(node: &'a NormalizedElement, name: &str) -> Result<&'a NormalizedElement, ErrorMarker> {
-	optional_child(node, name)?.ok_or_else(|| report!(ErrorMarker::unsupported_installer()))
+	optional_child(node, name)?
+		.ok_or_else(|| report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse")))
 }
 fn optional_child<'a>(node: &'a NormalizedElement, name: &str) -> Result<Option<&'a NormalizedElement>, ErrorMarker> {
 	let found = children(node, name);
 	if found.len() > 1 {
-		return Err(report!(ErrorMarker::unsupported_installer()));
+		return Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse")));
 	}
 	Ok(found.into_iter().next())
 }
@@ -1151,14 +1278,15 @@ fn optional_attribute<'a>(node: &'a NormalizedElement, name: &str) -> Option<&'a
 		.map(|attribute| attribute.value.as_str())
 }
 fn required_attribute<'a>(node: &'a NormalizedElement, name: &str) -> Result<&'a str, ErrorMarker> {
-	optional_attribute(node, name).ok_or_else(|| report!(ErrorMarker::unsupported_installer()))
+	optional_attribute(node, name)
+		.ok_or_else(|| report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse")))
 }
 fn boolean_attribute(node: &NormalizedElement, name: &str) -> Result<Option<bool>, ErrorMarker> {
 	optional_attribute(node, name)
 		.map(|value| match value {
 			value if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
 			value if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
-			_ => Err(report!(ErrorMarker::unsupported_installer())),
+			_ => Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse"))),
 		})
 		.transpose()
 }
@@ -1176,7 +1304,7 @@ fn ordered_children<'a>(
 			values.sort_by_key(|node| case_fold_key(optional_attribute(node, "name").unwrap_or_default()));
 			values.reverse();
 		}
-		_ => return Err(report!(ErrorMarker::unsupported_installer())),
+		_ => return Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse"))),
 	}
 	Ok(values)
 }
@@ -1187,7 +1315,7 @@ fn parse_cardinality(value: &str) -> Result<FomodCardinality, ErrorMarker> {
 		"selectatleastone" => Ok(FomodCardinality::SelectAtLeastOne),
 		"selectany" => Ok(FomodCardinality::SelectAny),
 		"selectall" => Ok(FomodCardinality::SelectAll),
-		_ => Err(report!(ErrorMarker::unsupported_installer())),
+		_ => Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse"))),
 	}
 }
 fn parse_option_type(value: &str) -> Result<ResolvedOptionType, ErrorMarker> {
@@ -1197,7 +1325,7 @@ fn parse_option_type(value: &str) -> Result<ResolvedOptionType, ErrorMarker> {
 		"recommended" => Ok(ResolvedOptionType::Recommended),
 		"optional" => Ok(ResolvedOptionType::Optional),
 		"couldbeusable" => Ok(ResolvedOptionType::CouldBeUsable),
-		_ => Err(report!(ErrorMarker::unsupported_installer())),
+		_ => Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse"))),
 	}
 }
 fn parse_file_state(value: &str) -> Result<FileDependencyState, ErrorMarker> {
@@ -1205,7 +1333,7 @@ fn parse_file_state(value: &str) -> Result<FileDependencyState, ErrorMarker> {
 		"missing" => Ok(FileDependencyState::Missing),
 		"inactive" => Ok(FileDependencyState::Inactive),
 		"active" => Ok(FileDependencyState::Active),
-		_ => Err(report!(ErrorMarker::unsupported_installer())),
+		_ => Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse"))),
 	}
 }
 fn version(raw: &str) -> Result<String, ErrorMarker> {
@@ -1213,7 +1341,7 @@ fn version(raw: &str) -> Result<String, ErrorMarker> {
 		|| raw.split('.')
 			.any(|part| part.is_empty() || part.parse::<u32>().is_err())
 	{
-		return Err(report!(ErrorMarker::unsupported_installer()));
+		return Err(report!(ErrorMarker::unsupported_installer().with_phase("fomod_parse")));
 	}
 	Ok(raw.to_owned())
 }
@@ -1234,7 +1362,7 @@ fn normalize_destination(raw: &str) -> Result<String, ErrorMarker> {
 	} else {
 		SafeArchivePath::new(stripped)
 			.map(|path| path.as_str().to_owned())
-			.map_err(map_archive_report)
+			.map_err(|error| map_archive_report(error, "planning"))
 	}
 }
 fn join_destination(prefix: &str, suffix: &str) -> String {
@@ -1300,7 +1428,7 @@ fn source_suffix(
 			return Ok(member.path.components()[prefix.len()..].join("/"));
 		}
 	}
-	Err(report!(ErrorMarker::unsafe_archive()))
+	Err(report!(ErrorMarker::unsafe_archive().with_phase("archive_validation")))
 }
 
 #[cfg(test)]
@@ -1327,6 +1455,8 @@ mod tests {
 	use application::ports::BeginInstallationFile;
 	use application::ports::InstallationFile;
 	use application::ports::PortFuture;
+	use application::ports::ProgressEvent;
+	use application::ports::ReportProgress;
 	use domain::ArchivePath;
 	use domain::DataRelativePath;
 	use domain::FomodCardinality;
@@ -1568,7 +1698,7 @@ mod tests {
 		let missing = temp.path().join("missing.zip");
 		let Err(report) = ArchiveAdapter
 			.index_port()
-			.call((archive_path(&missing)?, CancellationToken::new()))
+			.call((archive_path(&missing)?, None, CancellationToken::new()))
 			.await
 		else {
 			return Err("missing archive unexpectedly indexed".into());
@@ -1600,11 +1730,21 @@ mod tests {
 				("fomod/info.xml", b"<fomod><Name>Decoration</Name></fomod>"),
 			],
 		)?;
+		let checkpoints = Arc::new(Mutex::new(Vec::new()));
+		let progress: ReportProgress = Arc::new({
+			let checkpoints = checkpoints.clone();
+			move |event| {
+				let checkpoints = checkpoints.clone();
+				Box::pin(async move {
+					checkpoints.lock().unwrap_or_else(|p| p.into_inner()).push(event);
+				})
+			}
+		});
 		let adapter = ArchiveAdapter;
 		let cancellation = CancellationToken::new();
 		let index = adapter
 			.index_port()
-			.call((archive_path(&path)?, cancellation.clone()))
+			.call((archive_path(&path)?, Some(progress.clone()), cancellation.clone()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = index.installer else {
 			return Err("plain ZIP became a FOMOD".into());
@@ -1643,7 +1783,14 @@ mod tests {
 			}
 		});
 		adapter.extract_port()
-			.call((archive_path(&path)?, index.identity, candidates, begin, cancellation))
+			.call((
+				archive_path(&path)?,
+				index.identity,
+				candidates,
+				begin,
+				Some(progress),
+				cancellation,
+			))
 			.await?;
 		assert_eq!(
 			written.lock()
@@ -1655,6 +1802,12 @@ mod tests {
 			*finished.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
 			["meshes/a.nif"]
 		);
+		let checkpoints = checkpoints.lock().unwrap_or_else(|p| p.into_inner());
+		assert!(checkpoints.contains(&ProgressEvent::ArchiveScanCheckpoint));
+		assert!(checkpoints
+			.iter()
+			.filter(|event| **event == ProgressEvent::ExtractionCheckpoint)
+			.count() >= 4);
 		Ok(())
 	}
 
@@ -1688,7 +1841,9 @@ mod tests {
 			(seven_path, "seven.txt", b"seven".as_slice()),
 			(rar_path, "rar.txt", b"rar".as_slice()),
 		] {
-			let indexed = index.call((archive_path(&path)?, CancellationToken::new())).await?;
+			let indexed = index
+				.call((archive_path(&path)?, None, CancellationToken::new()))
+				.await?;
 			let IndexedInstaller::Plain { candidates, .. } = indexed.installer else {
 				return Err("fixture became a FOMOD".into());
 			};
@@ -1716,6 +1871,7 @@ mod tests {
 					indexed.identity,
 					candidates,
 					begin,
+					None,
 					CancellationToken::new(),
 				))
 				.await?;
@@ -1741,7 +1897,7 @@ mod tests {
 		write_zip(&path, &[("fomod/ModuleConfig.xml", xml), ("Data/a.txt", b"payload")])?;
 		let index = ArchiveAdapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Fomod(installer) = index.installer else {
 			return Err("configuration was not recognized".into());
@@ -1772,7 +1928,7 @@ mod tests {
 
 		let index = ArchiveAdapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Fomod(installer) = index.installer else {
 			return Err("configuration was not recognized".into());
@@ -1798,7 +1954,10 @@ mod tests {
 			let plain = temp.path().join(format!("plain-{case}.zip"));
 			let plain_member = format!("Data/{reserved}");
 			write_zip(&plain, &[(plain_member.as_str(), b"reserved")])?;
-			let Err(error) = index.call((archive_path(&plain)?, CancellationToken::new())).await else {
+			let Err(error) = index
+				.call((archive_path(&plain)?, None, CancellationToken::new()))
+				.await
+			else {
 				return Err("reserved plain destination produced an archive index".into());
 			};
 			assert_eq!(error.current_context().code(), ErrorCode::UnsafeArchive);
@@ -1817,7 +1976,10 @@ mod tests {
 				&fomod,
 				&[("fomod/ModuleConfig.xml", xml.as_bytes()), ("payload.bin", b"reserved")],
 			)?;
-			let Err(error) = index.call((archive_path(&fomod)?, CancellationToken::new())).await else {
+			let Err(error) = index
+				.call((archive_path(&fomod)?, None, CancellationToken::new()))
+				.await
+			else {
 				return Err("reserved FOMOD destination produced an archive index".into());
 			};
 			assert_eq!(error.current_context().code(), ErrorCode::UnsafeArchive);
@@ -1854,7 +2016,7 @@ mod tests {
 
 			let Err(error) = ArchiveAdapter
 				.index_port()
-				.call((archive_path(&path)?, CancellationToken::new()))
+				.call((archive_path(&path)?, None, CancellationToken::new()))
 				.await
 			else {
 				return Err("normalization aliases produced an archive plan".into());
@@ -1900,7 +2062,7 @@ mod tests {
 
 			let Err(error) = ArchiveAdapter
 				.index_port()
-				.call((archive_path(&path)?, CancellationToken::new()))
+				.call((archive_path(&path)?, None, CancellationToken::new()))
 				.await
 			else {
 				return Err("ambiguous source produced an archive index".into());
@@ -1943,7 +2105,7 @@ mod tests {
 
 		let index = ArchiveAdapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Fomod(installer) = index.installer else {
 			return Err("fixture was not a FOMOD".into());
@@ -1984,7 +2146,7 @@ mod tests {
 
 		let index = ArchiveAdapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Fomod(installer) = index.installer else {
 			return Err("fixture was not a FOMOD".into());
@@ -2015,7 +2177,7 @@ mod tests {
 
 		let index = ArchiveAdapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Fomod(installer) = index.installer else {
 			return Err("fixture was not a FOMOD".into());
@@ -2039,7 +2201,7 @@ mod tests {
 
 		let index = ArchiveAdapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = index.installer else {
 			return Err("fixture was not plain".into());
@@ -2062,7 +2224,7 @@ mod tests {
 		let traversal = temp.path().join("traversal.zip");
 		write_zip(&traversal, &[("../escape.txt", b"escape")])?;
 		assert!(index
-			.call((archive_path(&traversal)?, CancellationToken::new()))
+			.call((archive_path(&traversal)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
@@ -2071,7 +2233,7 @@ mod tests {
 		writer.add_symlink("Data/link", "target", SimpleFileOptions::default())?;
 		writer.finish()?;
 		assert!(index
-			.call((archive_path(&symlink)?, CancellationToken::new()))
+			.call((archive_path(&symlink)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
@@ -2085,7 +2247,7 @@ mod tests {
 		split_bytes[footer + 4] = 1;
 		write_file(&split, split_bytes)?;
 		assert!(index
-			.call((archive_path(&split)?, CancellationToken::new()))
+			.call((archive_path(&split)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
@@ -2104,7 +2266,7 @@ mod tests {
 		)?;
 		write_file(&sfx, [b"MZ".as_slice(), rar.as_slice()].concat())?;
 		assert!(index
-			.call((archive_path(&sfx)?, CancellationToken::new()))
+			.call((archive_path(&sfx)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
@@ -2123,21 +2285,21 @@ mod tests {
 		)?;
 		write_file(&encrypted, rar)?;
 		assert!(index
-			.call((archive_path(&encrypted)?, CancellationToken::new()))
+			.call((archive_path(&encrypted)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
 		let legacy = temp.path().join("legacy.omod");
 		write_zip(&legacy, &[("Data/file.txt", b"data")])?;
 		assert!(index
-			.call((archive_path(&legacy)?, CancellationToken::new()))
+			.call((archive_path(&legacy)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
 		let scripted = temp.path().join("scripted.zip");
 		write_zip(&scripted, &[("fomod/script.cs", b"code"), ("Data/file.txt", b"data")])?;
 		assert!(index
-			.call((archive_path(&scripted)?, CancellationToken::new()))
+			.call((archive_path(&scripted)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
@@ -2150,7 +2312,7 @@ mod tests {
 		writer.write_all(&vec![0_u8; 8 * 1024 * 1024])?;
 		writer.finish()?;
 		assert!(index
-			.call((archive_path(&expansion)?, CancellationToken::new()))
+			.call((archive_path(&expansion)?, None, CancellationToken::new()))
 			.await
 			.is_err());
 
@@ -2165,7 +2327,7 @@ mod tests {
 		let adapter = ArchiveAdapter;
 		let indexed = adapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = indexed.installer else {
 			return Err("fixture was not plain".into());
@@ -2191,6 +2353,7 @@ mod tests {
 				indexed.identity.clone(),
 				vec![missing],
 				Arc::clone(&begin),
+				None,
 				CancellationToken::new(),
 			))
 			.await
@@ -2206,6 +2369,7 @@ mod tests {
 				indexed.identity,
 				vec![exact],
 				begin,
+				None,
 				CancellationToken::new(),
 			))
 			.await?;
@@ -2227,7 +2391,7 @@ mod tests {
 		let adapter = ArchiveAdapter;
 		let indexed = adapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = indexed.installer else {
 			return Err("fixture was not plain".into());
@@ -2252,6 +2416,7 @@ mod tests {
 				indexed.identity.clone(),
 				candidates.clone(),
 				Arc::clone(&begin),
+				None,
 				cancellation,
 			))
 			.await
@@ -2267,6 +2432,7 @@ mod tests {
 				indexed.identity,
 				candidates,
 				begin,
+				None,
 				CancellationToken::new(),
 			))
 			.await?;
@@ -2285,7 +2451,7 @@ mod tests {
 		let adapter = ArchiveAdapter;
 		let indexed = adapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = indexed.installer else {
 			return Err("fixture was not plain".into());
@@ -2309,6 +2475,7 @@ mod tests {
 				indexed.identity,
 				candidates,
 				begin,
+				None,
 				CancellationToken::new(),
 			))
 			.await;
@@ -2325,7 +2492,7 @@ mod tests {
 		let adapter = ArchiveAdapter;
 		let indexed = adapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = indexed.installer else {
 			return Err("fixture was not plain".into());
@@ -2353,6 +2520,7 @@ mod tests {
 				indexed.identity,
 				vec![first, second],
 				begin,
+				None,
 				CancellationToken::new(),
 			))
 			.await
@@ -2372,7 +2540,7 @@ mod tests {
 		let adapter = ArchiveAdapter;
 		let indexed = adapter
 			.index_port()
-			.call((archive_path(&path)?, CancellationToken::new()))
+			.call((archive_path(&path)?, None, CancellationToken::new()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = indexed.installer else {
 			return Err("fixture was not plain".into());
@@ -2403,6 +2571,7 @@ mod tests {
 				indexed.identity,
 				candidates,
 				begin,
+				None,
 				CancellationToken::new(),
 			))
 			.await
@@ -2423,7 +2592,7 @@ mod tests {
 		let cancellation = CancellationToken::new();
 		let index = adapter
 			.index_port()
-			.call((archive_path(&path)?, cancellation.clone()))
+			.call((archive_path(&path)?, None, cancellation.clone()))
 			.await?;
 		let IndexedInstaller::Plain { candidates, .. } = index.installer else {
 			return Err("fixture was not plain".into());
@@ -2464,7 +2633,14 @@ mod tests {
 		});
 		let Err(error) = adapter
 			.extract_port()
-			.call((archive_path(&path)?, index.identity, candidates, begin, cancellation))
+			.call((
+				archive_path(&path)?,
+				index.identity,
+				candidates,
+				begin,
+				None,
+				cancellation,
+			))
 			.await
 		else {
 			return Err("cancelled extraction succeeded".into());

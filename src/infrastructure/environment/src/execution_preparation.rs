@@ -21,6 +21,7 @@ use rootcause::report;
 use std::path::PathBuf;
 use std::str::from_utf8;
 use std::time::SystemTime;
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +74,17 @@ impl EnvironmentAdapter {
 		effective_binding: &GameBinding,
 		cancellation: &CancellationToken,
 	) -> Result<PreparedExecution, ErrorMarker> {
-		let snapshot = load_execution(root.as_path(), effective_binding, cancellation)?;
+		self.prepare_execution_with_spool(root, effective_binding, None, cancellation)
+	}
+
+	fn prepare_execution_with_spool(
+		&self,
+		root: &EnvironmentRoot,
+		effective_binding: &GameBinding,
+		owned_spool: Option<&TempDir>,
+		cancellation: &CancellationToken,
+	) -> Result<PreparedExecution, ErrorMarker> {
+		let snapshot = load_execution(root.as_path(), effective_binding, owned_spool, cancellation)?;
 		let data_directory = effective_binding.game_directory().as_path().join("Data");
 		let mut providers = vec![ExecutionProvider {
 			identity: ProviderIdentity::SteamData,
@@ -260,6 +271,23 @@ impl EnvironmentAdapter {
 		Ok(())
 	}
 
+	/// Accepts only the currently owned capture directory, not arbitrary pending work.
+	///
+	/// # Errors
+	///
+	/// Refuses other temporary entries and invalid retained environment state.
+	pub fn check_execution_with_spool(
+		&self,
+		root: &EnvironmentRoot,
+		effective_binding: &GameBinding,
+		owned_spool: Option<&TempDir>,
+		cancellation: &CancellationToken,
+	) -> Result<(), ErrorMarker> {
+		self.prepare_execution_with_spool(root, effective_binding, owned_spool, cancellation)?;
+
+		Ok(())
+	}
+
 	/// Validates retained post-run state without rollback, regardless of child status.
 	///
 	/// # Errors
@@ -316,6 +344,28 @@ mod tests {
 			&CancellationToken::new(),
 		)?;
 		Ok((temp, root, binding))
+	}
+
+	#[test]
+	fn live_owned_spool_is_not_pending_mutation_but_other_entries_are() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture()?;
+		let adapter = EnvironmentAdapter;
+		let cancellation = CancellationToken::new();
+		adapter.prepare_execution(&root, &binding, &cancellation)?;
+		let spool = TempDir::new_in(root.as_path().join("temp")).context(ErrorMarker::io_failure())?;
+
+		adapter.check_execution_with_spool(&root, &binding, Some(&spool), &cancellation)?;
+		assert!(adapter.check_execution(&root, &binding, &cancellation).is_err());
+		let other = TempDir::new_in(root.as_path().join("temp")).context(ErrorMarker::io_failure())?;
+		assert!(adapter
+			.check_execution_with_spool(&root, &binding, Some(&spool), &cancellation)
+			.is_err());
+		drop(other);
+		adapter.check_execution_with_spool(&root, &binding, Some(&spool), &cancellation)?;
+		drop(spool);
+
+		adapter.check_execution(&root, &binding, &cancellation)?;
+		Ok(())
 	}
 
 	#[test]

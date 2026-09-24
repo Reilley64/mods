@@ -1,15 +1,21 @@
 use self::fomod::DependencyFacts;
 use self::fomod::condition_tree_matches;
 use self::fomod::evaluate;
+use crate::ports::ProgressEvent;
+use crate::ports::ReportProgress;
 mod fomod;
 mod planning;
 
 use self::planning::plan_candidates;
+use crate::conflicts::InstallationParticipation;
+use crate::conflicts::project_installation;
 use crate::errors::ErrorMarker;
 use crate::installation::AcceptedChoice;
 use crate::installation::AdditionalSelectionsRequired;
 use crate::installation::ApprovedInstallation;
+use crate::installation::AutomaticChoiceEvent;
 use crate::installation::CandidateDecision;
+use crate::installation::ConditionEvaluation;
 use crate::installation::IndexedInstaller;
 use crate::installation::InstallMode;
 use crate::installation::InstallPlan;
@@ -17,6 +23,7 @@ use crate::installation::InstallPreview;
 use crate::installation::InstallWarning;
 use crate::installation::InstalledArchive;
 use crate::installation::ProjectedModState;
+use crate::installation::ResolvedFlag;
 use crate::installation::UnresolvedGroup;
 use crate::ports::AssessInstallation;
 use crate::ports::BeginInstallation;
@@ -24,8 +31,10 @@ use crate::ports::ExtractApprovedFiles;
 use crate::ports::IndexArchive as IndexArchivePort;
 use crate::ports::InstallationStateAccess;
 use crate::ports::LoadInstallationState;
+use crate::ports::ReadConflictContent;
 use crate::ports::ReadGameVersion;
 use crate::ports::ReadXnvseVersion;
+use crate::ports::ScanEnvironmentConflicts;
 use domain::ArchiveIdentity;
 use domain::ArchivePath;
 use domain::FomodChoice;
@@ -36,11 +45,15 @@ use domain::ModPriority;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+use std::collections::HashMap;
 use std::fmt;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct InstallArchiveDependencies {
+	pub report_progress: Option<ReportProgress>,
+	pub scan_environment_conflicts: ScanEnvironmentConflicts,
+	pub read_conflict_content: ReadConflictContent,
 	pub load_installation_state: LoadInstallationState,
 	pub assess_installation: AssessInstallation,
 	pub index_archive: IndexArchivePort,
@@ -52,9 +65,9 @@ pub struct InstallArchiveDependencies {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallArchiveOutput {
-	AdditionalSelectionsRequired(AdditionalSelectionsRequired),
+	AdditionalSelectionsRequired(Box<AdditionalSelectionsRequired>),
 	Preview(Box<InstallPreview>),
-	Installed(InstalledArchive),
+	Installed(Box<InstalledArchive>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +90,8 @@ pub async fn install_archive(
 	cancellation: CancellationToken,
 ) -> Result<InstallArchiveOutput, InstallArchiveError> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("settings_load"))
+			.context(InstallArchiveError));
 	}
 
 	let state = dependencies
@@ -91,18 +105,50 @@ pub async fn install_archive(
 			cancellation.clone(),
 		))
 		.await
+		.map_err(|mut report| {
+			report.current_context_mut().set_phase_if_missing("settings_load");
+			report
+		})
 		.context(InstallArchiveError)?;
+
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+		return Err(
+			report!(ErrorMarker::operation_cancelled().with_phase("game_binding_validation"))
+				.context(InstallArchiveError),
+		);
+	}
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::SettingsLoaded,)).await;
+	}
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ScanningArchive,)).await;
 	}
 
 	let index = dependencies
 		.index_archive
-		.call((archive.clone(), cancellation.clone()))
+		.call((
+			archive.clone(),
+			dependencies.report_progress.clone(),
+			cancellation.clone(),
+		))
 		.await
+		.map_err(|mut report| {
+			report.current_context_mut().set_phase_if_missing("archive_validation");
+			report
+		})
 		.context(InstallArchiveError)?;
+
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+		return Err(
+			report!(ErrorMarker::operation_cancelled().with_phase("archive_validation"))
+				.context(InstallArchiveError),
+		);
+	}
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ArchiveIndexed,)).await;
 	}
 
 	let requested_name = if let Some(name) = mod_name {
@@ -117,16 +163,31 @@ pub async fn install_archive(
 		.iter()
 		.find(|installed| installed.name == requested_name);
 	let selected_name = match (replace, existing) {
-		(false, Some(_)) => return Err(report!(ErrorMarker::mod_already_exists()).context(InstallArchiveError)),
-		(true, None) => return Err(report!(ErrorMarker::mod_not_found()).context(InstallArchiveError)),
+		(false, Some(installed)) => {
+			return Err(
+				report!(ErrorMarker::mod_already_exists().with_mod_name(installed.name.clone()))
+					.context(InstallArchiveError),
+			);
+		}
+		(true, None) => {
+			return Err(
+				report!(ErrorMarker::mod_not_found().with_mod_name(requested_name.clone()))
+					.context(InstallArchiveError),
+			);
+		}
 		(true, Some(installed)) => installed.name.clone(),
 		(false, None) => requested_name,
 	};
 
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::EvaluatingInstaller,)).await;
+	}
+
 	let evaluation = match &index.installer {
 		IndexedInstaller::Plain { candidates, warnings } => {
 			if !matches!(index.identity, ArchiveIdentity::DataArchive { .. }) {
-				return Err(report!(ErrorMarker::unsafe_archive()).context(InstallArchiveError));
+				return Err(report!(ErrorMarker::unsafe_archive().with_phase("archive_validation"))
+					.context(InstallArchiveError));
 			}
 			if let Some(choice) = choices.first() {
 				return Err(report!(ErrorMarker::invalid_selection(
@@ -139,8 +200,11 @@ pub async fn install_archive(
 			}
 
 			InstallerEvaluation {
+				candidate_conditions: HashMap::new(),
 				fomod_schema_version: None,
 				choices: Vec::new(),
+				automatic_events: Vec::new(),
+				resolved_flags: Vec::new(),
 				warnings: warnings.clone(),
 				unresolved_groups: Vec::new(),
 				candidates: candidates.clone(),
@@ -148,7 +212,8 @@ pub async fn install_archive(
 		}
 		IndexedInstaller::Fomod(installer) => {
 			if !matches!(index.identity, ArchiveIdentity::Fomod { .. }) {
-				return Err(report!(ErrorMarker::unsafe_archive()).context(InstallArchiveError));
+				return Err(report!(ErrorMarker::unsafe_archive().with_phase("archive_validation"))
+					.context(InstallArchiveError));
 			}
 			let game_version = if condition_tree_matches(
 				installer,
@@ -161,10 +226,16 @@ pub async fn install_archive(
 					.read_game_version
 					.call((state.game_binding.clone(), cancellation.clone()))
 					.await
+					.map_err(|mut report| {
+						report.current_context_mut().set_phase_if_missing("fomod_evaluation");
+						report
+					})
 					.context(InstallArchiveError)?;
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled())
-						.context(InstallArchiveError));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					)
+					.context(InstallArchiveError));
 				}
 				Some(version)
 			} else {
@@ -181,10 +252,16 @@ pub async fn install_archive(
 					.read_xnvse_version
 					.call((state.game_binding.clone(), cancellation.clone()))
 					.await
+					.map_err(|mut report| {
+						report.current_context_mut().set_phase_if_missing("fomod_evaluation");
+						report
+					})
 					.context(InstallArchiveError)?;
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled())
-						.context(InstallArchiveError));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					)
+					.context(InstallArchiveError));
 				}
 				version
 			} else {
@@ -198,8 +275,11 @@ pub async fn install_archive(
 			let evaluation =
 				evaluate(installer, &choices, facts, &cancellation).context(InstallArchiveError)?;
 			InstallerEvaluation {
+				candidate_conditions: evaluation.candidate_conditions,
 				fomod_schema_version: Some(installer.schema_version.clone()),
 				choices: evaluation.choices,
+				automatic_events: evaluation.automatic_events,
+				resolved_flags: evaluation.resolved_flags,
 				warnings: evaluation.warnings,
 				unresolved_groups: evaluation.unresolved_groups,
 				candidates: evaluation.candidates,
@@ -207,24 +287,46 @@ pub async fn install_archive(
 		}
 	};
 	if !evaluation.unresolved_groups.is_empty() {
-		let output = InstallArchiveOutput::AdditionalSelectionsRequired(AdditionalSelectionsRequired {
-			accepted_choices: evaluation.choices,
-			unresolved_groups: evaluation.unresolved_groups,
-			warnings: evaluation.warnings,
-		});
+		let output =
+			InstallArchiveOutput::AdditionalSelectionsRequired(Box::new(AdditionalSelectionsRequired {
+				archive_identity: index.identity,
+				mod_name: selected_name,
+				accepted_choices: evaluation.choices,
+				automatic_events: evaluation.automatic_events,
+				resolved_flags: evaluation.resolved_flags,
+				unresolved_groups: evaluation.unresolved_groups,
+				warnings: evaluation.warnings,
+			}));
+
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+			return Err(
+				report!(ErrorMarker::operation_cancelled().with_phase("fomod_evaluation"))
+					.context(InstallArchiveError),
+			);
 		}
 		return Ok(output);
 	}
 
-	let (planned_candidates, planning_warnings) =
+	let (mut planned_candidates, planning_warnings) =
 		plan_candidates(evaluation.candidates, &state.current_winners, &cancellation)
 			.context(InstallArchiveError)?;
+
+	for candidate in &mut planned_candidates {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning"))
+				.context(InstallArchiveError));
+		}
+		candidate.origin_condition_evaluation = evaluation
+			.candidate_conditions
+			.get(&candidate.candidate.candidate_id)
+			.cloned();
+	}
+
 	let mut warnings = evaluation.warnings;
 	for warning in planning_warnings {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning"))
+				.context(InstallArchiveError));
 		}
 		warnings.push(warning);
 	}
@@ -263,7 +365,7 @@ pub async fn install_archive(
 		.file_name()
 		.and_then(|name| name.to_str())
 		.filter(|name| !name.is_empty())
-		.ok_or_else(|| report!(ErrorMarker::unsafe_archive()))
+		.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("archive_validation")))
 		.context(InstallArchiveError)?;
 	let projected_state = ProjectedModState {
 		mode,
@@ -278,31 +380,86 @@ pub async fn install_archive(
 		mod_name: projected_state.mod_name.clone(),
 		replacement: replace,
 		accepted_choices: evaluation.choices,
+		automatic_events: evaluation.automatic_events,
+		resolved_flags: evaluation.resolved_flags,
 		warnings,
 		candidates: planned_candidates,
 		projected_state,
 	};
 
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::InstallationPlanned,)).await;
+	}
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ScanningConflicts,)).await;
+	}
+
 	let assessment = dependencies
 		.assess_installation
 		.call((plan.clone(), cancellation.clone()))
 		.await
+		.map_err(|mut report| {
+			report.current_context_mut().set_phase_if_missing("conflict_scan");
+			report
+		})
 		.context(InstallArchiveError)?;
+
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan"))
+			.context(InstallArchiveError));
 	}
 	plan.projected_state.overlaps = assessment.overlaps;
 
+	let scan = dependencies
+		.scan_environment_conflicts
+		.call((cancellation.clone(),))
+		.await
+		.map_err(|mut report| {
+			report.current_context_mut().set_phase_if_missing("conflict_scan");
+			report
+		})
+		.context(InstallArchiveError)?;
+
+	let participation = if dry_run {
+		InstallationParticipation::HypotheticalEnabled
+	} else {
+		InstallationParticipation::Actual
+	};
+	let conflicts = project_installation(
+		scan,
+		&plan,
+		participation,
+		dependencies.read_conflict_content,
+		cancellation.clone(),
+	)
+	.await
+	.context(InstallArchiveError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ConflictsScanned,)).await;
+	}
+
 	if dry_run {
-		let output = InstallArchiveOutput::Preview(Box::new(InstallPreview { plan }));
+		let output = InstallArchiveOutput::Preview(Box::new(InstallPreview {
+			plan,
+			hypothetical_enabled_conflicts: conflicts,
+		}));
+
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan"))
+				.context(InstallArchiveError));
 		}
 		return Ok(output);
 	}
 
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("extraction"))
+			.context(InstallArchiveError));
+	}
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ExtractingFiles,)).await;
 	}
 
 	let change = dependencies
@@ -316,15 +473,22 @@ pub async fn install_archive(
 			cancellation.clone(),
 		))
 		.await
+		.map_err(|mut report| {
+			report.current_context_mut().set_phase_if_missing("publication");
+			report
+		})
 		.context(InstallArchiveError)?;
+
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("extraction"))
+			.context(InstallArchiveError));
 	}
 
 	let mut winners = Vec::new();
 	for candidate in &plan.candidates {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("extraction"))
+				.context(InstallArchiveError));
 		}
 		if matches!(candidate.decision, CandidateDecision::Winner { .. }) {
 			winners.push(candidate.candidate.clone());
@@ -338,23 +502,44 @@ pub async fn install_archive(
 			plan.archive_identity.clone(),
 			winners,
 			change.begin_file,
+			dependencies.report_progress.clone(),
 			cancellation.clone(),
 		))
 		.await
+		.map_err(|mut report| {
+			report.current_context_mut().set_phase_if_missing("extraction");
+			report
+		})
 		.context(InstallArchiveError)?;
+
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()).context(InstallArchiveError));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("extraction"))
+			.context(InstallArchiveError));
 	}
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::FilesExtracted,)).await;
+	}
+
 	change.finish.call((cancellation,)).await.context(InstallArchiveError)?;
 
-	Ok(InstallArchiveOutput::Installed(InstalledArchive {
-		warnings: plan.warnings,
-	}))
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::InstallationPublished,)).await;
+	}
+
+	Ok(InstallArchiveOutput::Installed(Box::new(InstalledArchive {
+		warnings: plan.warnings.clone(),
+		plan,
+		conflicts,
+	})))
 }
 
 struct InstallerEvaluation {
+	candidate_conditions: HashMap<u64, ConditionEvaluation>,
 	fomod_schema_version: Option<String>,
 	choices: Vec<AcceptedChoice>,
+	automatic_events: Vec<AutomaticChoiceEvent>,
+	resolved_flags: Vec<ResolvedFlag>,
 	warnings: Vec<InstallWarning>,
 	unresolved_groups: Vec<UnresolvedGroup>,
 	candidates: Vec<InstallCandidate>,
@@ -370,6 +555,10 @@ mod tests {
 	use super::install_archive;
 	use crate::ErrorCode;
 	use crate::ErrorMarker;
+	use crate::conflicts::EnvironmentConflictScan;
+	use crate::conflicts::IndexedConflictFile;
+	use crate::conflicts::IndexedConflictFileId;
+	use crate::conflicts::ScannedConflictProvider;
 	use crate::installation::ArchiveIndex;
 	use crate::installation::CandidateDecision;
 	use crate::installation::FileDependencyFact;
@@ -387,8 +576,10 @@ mod tests {
 	use crate::ports::InstallationFile;
 	use crate::ports::InstallationStateAccess;
 	use crate::ports::PortFuture;
+	use crate::ports::ProgressEvent;
 	use domain::ArchiveIdentity;
 	use domain::ArchivePath;
+	use domain::ConflictRow;
 	use domain::DataRelativePath;
 	use domain::FileDependencyState;
 	use domain::FomodCardinality;
@@ -401,9 +592,16 @@ mod tests {
 	use domain::InstallationPhase;
 	use domain::InvalidModName;
 	use domain::OptionFileTrigger;
+	use domain::Participation;
+	use domain::ProviderIdentity;
+	use domain::ProviderReference;
+	use domain::ResolutionStatus;
 	use domain::ResolvedOptionType;
 	use domain::Sha256Digest;
 	use domain::SteamBuildId;
+	use domain::Tombstone;
+	use domain::TombstoneScope;
+	use rootcause::Result;
 	use rootcause::report;
 	use std::collections::HashMap;
 	use std::env::temp_dir;
@@ -453,6 +651,18 @@ mod tests {
 		version_calls: Arc<AtomicUsize>,
 	) -> InstallArchiveDependencies {
 		InstallArchiveDependencies {
+			report_progress: None,
+			scan_environment_conflicts: Arc::new(|_| {
+				Box::pin(async {
+					Ok(EnvironmentConflictScan {
+						providers: Vec::new(),
+						problems: Vec::new(),
+					})
+				}) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
 			load_installation_state: Arc::new({
 				let order = order.clone();
 				move |access, _| {
@@ -483,7 +693,7 @@ mod tests {
 			}),
 			index_archive: Arc::new({
 				let order = order.clone();
-				move |_, _| {
+				move |_, _, _| {
 					record(&order, "index");
 					Box::pin(async {
 						Ok(ArchiveIndex {
@@ -554,7 +764,7 @@ mod tests {
 			}),
 			extract_approved_files: Arc::new({
 				let order = order.clone();
-				move |_, _, candidates, begin_file, token| {
+				move |_, _, candidates, begin_file, _, token| {
 					record(&order, "extract");
 					Box::pin(async move {
 						let file = begin_file
@@ -586,6 +796,7 @@ mod tests {
 				})
 				.collect(),
 			file_candidates: Vec::new(),
+			file_effects: Vec::new(),
 		}
 	}
 
@@ -617,7 +828,7 @@ mod tests {
 				})
 			}) as PortFuture<_>
 		});
-		dependencies.index_archive = Arc::new(move |_, _| {
+		dependencies.index_archive = Arc::new(move |_, _, _| {
 			let installer = installer.clone();
 			Box::pin(async move {
 				Ok(ArchiveIndex {
@@ -632,6 +843,37 @@ mod tests {
 			}) as PortFuture<_>
 		});
 		dependencies
+	}
+
+	#[tokio::test]
+	async fn cancelled_dependency_retains_cause_and_owning_phase() -> Result<()> {
+		let mut dependencies =
+			dependencies(Arc::new(Mutex::new(Vec::new())), false, Arc::new(AtomicUsize::new(0)));
+		dependencies.load_installation_state = Arc::new(|_, _| {
+			Box::pin(async { Err(report!("dependency cause").context(ErrorMarker::operation_cancelled())) })
+				as PortFuture<_>
+		});
+
+		let report = install_archive(
+			dependencies,
+			ArchivePath::new(temp_dir().join("fixture.zip"))?,
+			None,
+			false,
+			Vec::new(),
+			true,
+			CancellationToken::new(),
+		)
+		.await
+		.expect_err("cancelled dependency");
+		let marker = report
+			.iter_reports()
+			.find_map(|report| report.downcast_current_context::<ErrorMarker>())
+			.expect("semantic marker");
+
+		assert_eq!(marker.code(), ErrorCode::OperationCancelled);
+		assert_eq!(marker.phase(), Some("settings_load"));
+		assert!(format!("{report:?}").contains("dependency cause"));
+		Ok(())
 	}
 
 	#[tokio::test]
@@ -653,6 +895,9 @@ mod tests {
 			return Err("expected installed".into());
 		};
 		assert!(installed.warnings.is_empty());
+		assert_eq!(installed.plan.mod_name.as_str(), "Plain Mod");
+		assert!(!installed.plan.projected_state.enabled);
+		assert!(installed.conflicts.rows.is_empty());
 		assert_eq!(calls.load(Ordering::SeqCst), 0);
 		assert_eq!(
 			*order.lock().map_err(|_| "lock")?,
@@ -670,6 +915,51 @@ mod tests {
 		);
 		Ok(())
 	}
+
+	#[tokio::test]
+	async fn progress_reports_real_installation_checkpoints() -> Result<()> {
+		let events = Arc::new(Mutex::new(Vec::new()));
+		let mut dependencies =
+			dependencies(Arc::new(Mutex::new(Vec::new())), false, Arc::new(AtomicUsize::new(0)));
+		dependencies.report_progress = Some(Arc::new({
+			let events = events.clone();
+			move |event| {
+				let events = events.clone();
+				Box::pin(async move {
+					events.lock().expect("events").push(event);
+				})
+			}
+		}));
+
+		install_archive(
+			dependencies,
+			ArchivePath::new(temp_dir().join("Progress.zip"))?,
+			None,
+			false,
+			Vec::new(),
+			false,
+			CancellationToken::new(),
+		)
+		.await?;
+
+		assert_eq!(
+			*events.lock().expect("events"),
+			vec![
+				ProgressEvent::SettingsLoaded,
+				ProgressEvent::ScanningArchive,
+				ProgressEvent::ArchiveIndexed,
+				ProgressEvent::EvaluatingInstaller,
+				ProgressEvent::InstallationPlanned,
+				ProgressEvent::ScanningConflicts,
+				ProgressEvent::ConflictsScanned,
+				ProgressEvent::ExtractingFiles,
+				ProgressEvent::FilesExtracted,
+				ProgressEvent::InstallationPublished,
+			]
+		);
+		Ok(())
+	}
+
 	#[tokio::test]
 	async fn pending_mutation_stops_before_archive_evaluation() -> StdResult<(), Box<dyn Error>> {
 		let order = Arc::new(Mutex::new(Vec::new()));
@@ -734,8 +1024,20 @@ mod tests {
 	#[tokio::test]
 	async fn cancellation_after_chunk_preserves_partial_file_without_finishing() -> StdResult<(), Box<dyn Error>> {
 		let order = Arc::new(Mutex::new(Vec::new()));
+		let events = Arc::new(Mutex::new(Vec::new()));
+		let mut dependencies = dependencies(order.clone(), true, Arc::new(AtomicUsize::new(0)));
+		dependencies.report_progress = Some(Arc::new({
+			let events = events.clone();
+			move |event| {
+				let events = events.clone();
+				Box::pin(async move {
+					events.lock().expect("events").push(event);
+				})
+			}
+		}));
+
 		let result = install_archive(
-			dependencies(order.clone(), true, Arc::new(AtomicUsize::new(0))),
+			dependencies,
 			ArchivePath::new(temp_dir().join("cancel.zip")).map_err(|_| "archive")?,
 			None,
 			false,
@@ -750,8 +1052,14 @@ mod tests {
 			.is_some_and(|marker| marker.code() == ErrorCode::OperationCancelled)));
 		assert!(!order.lock().map_err(|_| "lock")?.contains(&"finish_file"));
 		assert!(!order.lock().map_err(|_| "lock")?.contains(&"finish_change"));
+		let events = events.lock().expect("events");
+		assert!(events.contains(&ProgressEvent::ExtractingFiles));
+		assert!(!events.contains(&ProgressEvent::FilesExtracted));
+		assert!(!events.contains(&ProgressEvent::InstallationPublished));
+
 		Ok(())
 	}
+
 	#[tokio::test]
 	async fn dry_run_does_not_create_change() -> StdResult<(), Box<dyn Error>> {
 		let order = Arc::new(Mutex::new(Vec::new()));
@@ -773,6 +1081,49 @@ mod tests {
 		);
 		Ok(())
 	}
+
+	#[tokio::test]
+	async fn unresolved_conditions_retain_results_for_short_circuited_children() -> Result<()> {
+		let installer = fomod_installer(vec![FomodGroup {
+			id: "choice".into(),
+			label: "Choice".into(),
+			description: String::new(),
+			cardinality: FomodCardinality::SelectExactlyOne,
+			condition: FomodCondition::Any(vec![
+				FomodCondition::Constant(true),
+				FomodCondition::FlagDependency {
+					name: "absent".into(),
+					value: "on".into(),
+				},
+			]),
+			options: vec![
+				fomod_option("a", ResolvedOptionType::Optional, &[]),
+				fomod_option("b", ResolvedOptionType::Optional, &[]),
+			],
+		}]);
+
+		let output = install_archive(
+			fomod_dependencies(installer, HashMap::new()),
+			ArchivePath::new(temp_dir().join("conditions.zip"))?,
+			None,
+			false,
+			Vec::new(),
+			true,
+			CancellationToken::new(),
+		)
+		.await?;
+		let InstallArchiveOutput::AdditionalSelectionsRequired(output) = output else {
+			return Err(report!("expected choices"));
+		};
+		let evaluation = &output.unresolved_groups[0].condition_evaluation;
+		assert!(evaluation.result);
+		assert_eq!(
+			evaluation.children.iter().map(|child| child.result).collect::<Vec<_>>(),
+			[true, false]
+		);
+		Ok(())
+	}
+
 	#[tokio::test]
 	async fn required_fomod_flag_reaches_fixed_point_and_reveals_group() -> StdResult<(), Box<dyn Error>> {
 		let installer = fomod_installer(vec![
@@ -817,6 +1168,28 @@ mod tests {
 			return Err("expected additional selections".into());
 		};
 		assert_eq!(required.unresolved_groups[0].id, "extra");
+		assert_eq!(required.mod_name.as_str(), "fixed-point");
+		assert_eq!(required.automatic_events.len(), 1);
+		assert_eq!(required.automatic_events[0].sequence, 0);
+		assert_eq!(required.automatic_events[0].group_id, "core");
+		assert_eq!(required.automatic_events[0].option_id, "required");
+		assert_eq!(required.resolved_flags[0].name, "mode");
+		assert_eq!(required.resolved_flags[0].value, "on");
+		assert_eq!(required.resolved_flags[0].winning_event.sequence, 0);
+		assert_eq!(
+			required.unresolved_groups[0].condition,
+			FomodCondition::FlagDependency {
+				name: "mode".into(),
+				value: "on".into()
+			}
+		);
+		assert_eq!(
+			required.unresolved_groups[0].options[0].condition,
+			FomodCondition::Constant(true)
+		);
+		assert!(required.unresolved_groups[0].options[0].flag_effects.is_empty());
+		assert!(required.unresolved_groups[0].options[0].file_effects.is_empty());
+		assert!(matches!(required.archive_identity, ArchiveIdentity::Fomod { .. }));
 		Ok(())
 	}
 
@@ -1000,7 +1373,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn conflicting_flags_report_values_without_writer_provenance() -> StdResult<(), Box<dyn Error>> {
+	async fn conflicting_flags_report_values_and_writer_provenance() -> StdResult<(), Box<dyn Error>> {
 		let installer = fomod_installer(vec![
 			FomodGroup {
 				id: "first".into(),
@@ -1054,14 +1427,24 @@ mod tests {
 			return Err("expected preview".into());
 		};
 		assert_eq!(preview.plan.accepted_choices.len(), 2);
-		assert!(preview
-			.plan
-			.warnings
-			.contains(&InstallWarning::FomodConflictingFlagValues {
-				flag_name: "mode".to_owned(),
-				values: vec!["legacy".to_owned(), "modern".to_owned()],
-				resolved_value: "modern".to_owned(),
-			}));
+		let Some(InstallWarning::FomodConflictingFlagValues {
+			flag_name,
+			values,
+			resolved_value,
+			writers,
+			winning_event,
+		}) = preview.plan.warnings.first()
+		else {
+			return Err("missing conflicting flag warning".into());
+		};
+		assert_eq!(flag_name, "mode");
+		assert_eq!(values, &["legacy", "modern"]);
+		assert_eq!(resolved_value, "modern");
+		assert_eq!(writers.len(), 2);
+		assert_eq!(writers[0].sequence, 0);
+		assert_eq!(winning_event.sequence, 1);
+		assert_eq!(winning_event.group_id, "second");
+		assert_eq!(winning_event.option_id, "modern");
 		Ok(())
 	}
 
@@ -1395,7 +1778,7 @@ mod tests {
 			.collect::<StdResult<Vec<_>, Box<dyn Error>>>()?;
 		let mut dependencies =
 			dependencies(Arc::new(Mutex::new(Vec::new())), false, Arc::new(AtomicUsize::new(0)));
-		dependencies.index_archive = Arc::new(move |_, _| {
+		dependencies.index_archive = Arc::new(move |_, _, _| {
 			let candidates = candidates.clone();
 			Box::pin(async move {
 				Ok(ArchiveIndex {
@@ -1448,7 +1831,7 @@ mod tests {
 			.collect::<Vec<_>>();
 		let mut dependencies =
 			dependencies(Arc::new(Mutex::new(Vec::new())), false, Arc::new(AtomicUsize::new(0)));
-		dependencies.index_archive = Arc::new(move |_, _| {
+		dependencies.index_archive = Arc::new(move |_, _, _| {
 			let candidates = candidates.clone();
 			Box::pin(async move {
 				Ok(ArchiveIndex {
@@ -1584,6 +1967,72 @@ mod tests {
 		assert_eq!(marker.group_id(), Some("missing"));
 		assert_eq!(marker.option_id(), Some("unknown"));
 		assert_eq!(marker.supplied_sequence(), Some(1));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn preview_keeps_unrelated_tombstone_conflicts_from_full_namespace() -> Result<()> {
+		let mut dependencies =
+			dependencies(Arc::new(Mutex::new(Vec::new())), false, Arc::new(AtomicUsize::new(0)));
+		let path = DataRelativePath::new("unrelated.txt".to_owned())?;
+		let scan = EnvironmentConflictScan {
+			providers: vec![
+				ScannedConflictProvider {
+					identity: ProviderIdentity::SteamData,
+					enabled: true,
+					files: vec![IndexedConflictFile {
+						id: IndexedConflictFileId::new(
+							ProviderIdentity::SteamData,
+							path.clone(),
+						),
+						provider: ProviderReference::SteamData {
+							original_path: path.clone(),
+						},
+					}],
+					directories: Vec::new(),
+					tombstones: Vec::new(),
+					problems: Vec::new(),
+				},
+				ScannedConflictProvider {
+					identity: ProviderIdentity::Overwrite,
+					enabled: true,
+					files: Vec::new(),
+					directories: Vec::new(),
+					problems: Vec::new(),
+					tombstones: vec![Tombstone {
+						scope: TombstoneScope::ExactFile,
+						owner: ProviderReference::Overwrite { original_path: path },
+					}],
+				},
+			],
+			problems: Vec::new(),
+		};
+		dependencies.scan_environment_conflicts = Arc::new(move |_| {
+			let scan = scan.clone();
+			Box::pin(async move { Ok(scan) }) as PortFuture<_>
+		});
+
+		let output = install_archive(
+			dependencies,
+			ArchivePath::new(temp_dir().join("Plain Mod.zip"))?,
+			None,
+			false,
+			Vec::new(),
+			true,
+			CancellationToken::new(),
+		)
+		.await?;
+		let InstallArchiveOutput::Preview(preview) = output else {
+			return Err(report!("expected preview"));
+		};
+		assert!(preview.plan.projected_state.overlaps.is_empty());
+		assert_eq!(
+			preview.hypothetical_enabled_conflicts.resolution_status,
+			ResolutionStatus::Exact
+		);
+		assert!(
+			matches!(preview.hypothetical_enabled_conflicts.rows.as_slice(), [ConflictRow::Tombstone { normalized_key, participation: Participation::Hypothetical, .. }] if normalized_key == "unrelated.txt")
+		);
 		Ok(())
 	}
 }

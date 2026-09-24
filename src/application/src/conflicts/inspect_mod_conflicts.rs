@@ -1,5 +1,7 @@
 use super::projection::project_inspection;
+use crate::ports::ProgressEvent;
 use crate::ports::ReadConflictContent;
+use crate::ports::ReportProgress;
 use crate::ports::ScanEnvironmentConflicts;
 use domain::ConflictProblem;
 use domain::ConflictRow;
@@ -14,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct InspectModConflictsDependencies {
+	pub report_progress: Option<ReportProgress>,
 	pub scan_environment: ScanEnvironmentConflicts,
 	pub read_conflict_content: ReadConflictContent,
 }
@@ -44,11 +47,19 @@ pub async fn inspect_mod_conflicts(
 	compare_content: bool,
 	cancellation: CancellationToken,
 ) -> Result<InspectModConflictsOutput, InspectModConflictsError> {
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ScanningConflicts,)).await;
+	}
+
 	let scan = dependencies
 		.scan_environment
 		.call((cancellation.clone(),))
 		.await
 		.context(InspectModConflictsError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ConflictsScanned,)).await;
+	}
 
 	project_inspection(
 		scan,

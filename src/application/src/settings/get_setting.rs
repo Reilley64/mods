@@ -1,5 +1,7 @@
 use crate::errors::ErrorMarker;
 use crate::ports::LoadSettings;
+use crate::ports::ProgressEvent;
+use crate::ports::ReportProgress;
 use crate::settings::types::SettingKey;
 use crate::settings::types::SettingRecord;
 use rootcause::Result;
@@ -9,6 +11,7 @@ use std::fmt;
 
 #[derive(Clone)]
 pub struct GetSettingDependencies {
+	pub report_progress: Option<ReportProgress>,
 	pub load_settings: LoadSettings,
 }
 
@@ -32,6 +35,10 @@ pub async fn get_setting(
 	key: SettingKey,
 ) -> Result<GetSettingOutput, GetSettingError> {
 	let resolved = dependencies.load_settings.call(()).await.context(GetSettingError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::SettingsLoaded,)).await;
+	}
 
 	let setting = resolved
 		.settings
@@ -85,6 +92,7 @@ mod tests {
 			manifest_binding: binding,
 		};
 		let dependencies = GetSettingDependencies {
+			report_progress: None,
 			load_settings: Arc::new(move || {
 				let value = resolved.clone();
 				Box::pin(async move { Ok(value) }) as PortFuture<_>

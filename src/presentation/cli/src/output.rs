@@ -269,7 +269,7 @@ fn candidate_origin(text: &mut String, prefix: &str, origin: &InstallCandidateOr
 				},
 			);
 		}
-		InstallCandidateOrigin::Conditional { pattern_order } => {
+		InstallCandidateOrigin::Conditional { pattern_order, .. } => {
 			line_string(text, &format!("{prefix}.kind"), "conditional");
 			line_u64(text, &format!("{prefix}.pattern_order"), *pattern_order);
 		}
@@ -455,6 +455,8 @@ mod tests {
 	use application::environment::InitializeEnvironmentWarning;
 	use application::installation::AcceptedChoice;
 	use application::installation::AdditionalSelectionsRequired;
+	use application::installation::ConditionEvaluation;
+	use application::installation::OptionSelectionState;
 	use application::installation::UnresolvedGroup;
 	use application::installation::VisibleOption;
 	use application::settings::EffectiveBinding;
@@ -464,28 +466,53 @@ mod tests {
 	use application::settings::SettingRecord;
 	use application::settings::SettingSource;
 	use application::settings::SettingValue;
+	use domain::ArchiveIdentity;
 	use domain::FomodCardinality;
+	use domain::FomodCondition;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
 	use domain::InstallCandidateOrigin;
+	use domain::ModName;
 	use domain::ResolvedOptionType;
+	use domain::Sha256Digest;
 	use domain::SteamBuildId;
 	use std::env::current_dir;
 	use std::error::Error;
 
 	#[test]
-	fn incomplete_choice_output_contains_only_decision_data() {
+	fn incomplete_choice_output_contains_only_decision_data() -> rootcause::Result<()> {
 		let output = AdditionalSelectionsRequired {
+			archive_identity: ArchiveIdentity::DataArchive {
+				archive_sha256: Sha256Digest::new("a".repeat(64))?,
+				package_root: String::new(),
+			},
+			mod_name: ModName::new("example".to_owned())?,
+			automatic_events: Vec::new(),
+			resolved_flags: Vec::new(),
 			accepted_choices: vec![AcceptedChoice {
+				sequence: 0,
 				group_id: "previous".to_owned(),
 				option_id: "accepted".to_owned(),
 			}],
 			unresolved_groups: vec![UnresolvedGroup {
+				condition_evaluation: ConditionEvaluation {
+					result: true,
+					children: Vec::new(),
+				},
+				condition: FomodCondition::Constant(true),
 				id: "visuals".to_owned(),
 				label: "Visuals".to_owned(),
 				description: "Choose a style".to_owned(),
 				cardinality: FomodCardinality::SelectAtMostOne,
 				options: vec![VisibleOption {
+					condition_evaluation: ConditionEvaluation {
+						result: true,
+						children: Vec::new(),
+					},
+					condition: FomodCondition::Constant(true),
+					selection_state: OptionSelectionState::Unselected,
+					flag_effects: Vec::new(),
+					file_effects: Vec::new(),
 					id: "none".to_owned(),
 					label: "None".to_owned(),
 					description: "Select no option".to_owned(),
@@ -524,11 +551,15 @@ mod tests {
 		] {
 			assert!(!stdout.contains(removed), "found removed trace {removed}");
 		}
+		Ok(())
 	}
 
 	#[test]
 	fn conditional_candidate_origin_includes_operational_identity() {
-		let origin = InstallCandidateOrigin::Conditional { pattern_order: 4 };
+		let origin = InstallCandidateOrigin::Conditional {
+			pattern_order: 4,
+			condition: FomodCondition::Constant(true),
+		};
 		let mut output = String::new();
 
 		candidate_origin(&mut output, "candidate.origin", &origin);

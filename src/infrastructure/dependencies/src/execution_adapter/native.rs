@@ -2,6 +2,8 @@ use super::ExecutionAdapter;
 use application::ErrorMarker;
 use application::execution::ExecuteProgramOutput;
 use application::execution::ExecutionWarning;
+use application::ports::ProgressEvent;
+use application::ports::ReportProgress;
 use domain::OutputTarget;
 use domain::ProcessStatus;
 use domain::Program;
@@ -35,6 +37,7 @@ impl ExecutionAdapter {
 		working_directory: Option<WorkingDirectory>,
 		program: Program,
 		arguments: Vec<ProgramArgument>,
+		progress: Option<ReportProgress>,
 		cancellation: CancellationToken,
 	) -> Result<ExecuteProgramOutput, ErrorMarker> {
 		if cancellation.is_cancelled() {
@@ -61,7 +64,12 @@ impl ExecutionAdapter {
 				};
 				error.context(marker)
 			})?;
-		let streams = InheritedStreams::capture().context(ErrorMarker::program_launch_failed())?;
+
+		let inherited_streams = if self.capture.is_none() {
+			Some(InheritedStreams::capture().context(ErrorMarker::program_launch_failed())?)
+		} else {
+			None
+		};
 
 		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
 		let platform = GamePlatformAdapter::system();
@@ -76,9 +84,13 @@ impl ExecutionAdapter {
 				.find(
 					|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if *mod_name == name),
 				)
-				.ok_or_else(|| report!(ErrorMarker::output_target_not_found()))?;
+				.ok_or_else(|| {
+					report!(ErrorMarker::output_target_not_found().with_mod_name(name.clone()))
+				})?;
 			if !provider.enabled {
-				return Err(report!(ErrorMarker::output_target_disabled()));
+				return Err(report!(
+					ErrorMarker::output_target_disabled().with_mod_name(name.clone())
+				));
 			}
 			Some(name)
 		} else {
@@ -156,7 +168,7 @@ impl ExecutionAdapter {
 			mappings,
 			profile.saves,
 		)
-		.context(ErrorMarker::vfs_failed())?;
+		.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
 
 		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
 		let current_binding = validate_game.call((effective_binding, cancellation.clone())).await?;
@@ -168,7 +180,8 @@ impl ExecutionAdapter {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let view = VirtualGameView::configure(&configuration).context(ErrorMarker::vfs_failed())?;
+		let view = VirtualGameView::configure(&configuration)
+			.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
 		if let Err(mut failure) = environment.revalidate_execution(&self.root, &prepared, &cancellation) {
 			if let Err(cleanup) = view.close() {
 				failure.children_mut().push(cleanup.into_dynamic().into_cloneable());
@@ -177,16 +190,26 @@ impl ExecutionAdapter {
 		}
 
 		if cancellation.is_cancelled() {
-			view.close().context(ErrorMarker::vfs_failed())?;
+			view.close().context(ErrorMarker::vfs_failed().with_phase("cleanup"))?;
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let mut process = view
+		let mut private_streams = self
+			.capture
+			.as_ref()
+			.map(|capture| capture.prepare(self.force_cancellation.clone()))
+			.transpose()?;
+
+		let launched = view
 			.launch(LaunchRequest {
+				new_process_group: self.capture.is_some(),
 				application: &launch.application,
 				command_line: &launch.command_line,
 				directory: &launch.directory,
-				standard_streams: Some(streams.borrowed()),
+				standard_streams: private_streams
+					.as_ref()
+					.and_then(|streams| streams.borrowed())
+					.or_else(|| inherited_streams.as_ref().map(InheritedStreams::borrowed)),
 			})
 			.map_err(|error| {
 				let native = error
@@ -194,31 +217,52 @@ impl ExecutionAdapter {
 					.find_map(|report| report.downcast_current_context::<NativeFailure>());
 				let marker = if let Some(native) = native {
 					if native.cleanup_status != 0 {
-						ErrorMarker::vfs_failed()
+						ErrorMarker::vfs_failed().with_phase("cleanup")
 					} else if native.native_error == 740 {
 						ErrorMarker::elevation_required()
 					} else if matches!(native.native_error, 2 | 3 | 5 | 193 | 216 | 267) {
 						ErrorMarker::program_launch_failed()
 					} else {
-						ErrorMarker::vfs_failed()
+						ErrorMarker::vfs_failed().with_phase("vfs_setup")
 					}
 				} else {
-					ErrorMarker::execution_supervision_failed()
+					ErrorMarker::execution_supervision_failed().with_phase("launch")
 				};
 				error.context(marker)
-			})?;
+			});
+		if let Some(streams) = &mut private_streams {
+			streams.close_child_ends();
+		}
+
+		let mut process = launched?;
+
+		if let Some(progress) = &progress {
+			progress.call((ProgressEvent::ExecutionPrepared,)).await;
+		}
+
 		let outcome = supervise(&mut process, cancellation, self.force_cancellation.clone())
 			.await
-			.context(ErrorMarker::execution_supervision_failed())?;
+			.context(ErrorMarker::execution_supervision_failed().with_phase("running"));
+		drop(process);
+		if let Some(streams) = private_streams {
+			streams.finish()?;
+		}
+
+		let outcome = outcome?;
 
 		if environment
-			.check_execution(&self.root, &binding, &CancellationToken::new())
+			.check_execution_with_spool(
+				&self.root,
+				&binding,
+				self.capture.as_ref().and_then(|capture| capture.directory()),
+				&CancellationToken::new(),
+			)
 			.is_err()
 		{
 			warnings.push(ExecutionWarning::ProfileStateInvalid);
 		}
 		if outcome.forced {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("cleanup")));
 		}
 
 		Ok(ExecuteProgramOutput {

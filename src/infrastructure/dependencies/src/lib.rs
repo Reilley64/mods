@@ -14,6 +14,9 @@ mod set_game_directory;
 use archive::ArchiveAdapter;
 use domain::EnvironmentRoot;
 use environment::EnvironmentAdapter;
+pub use execution::CapturedOutput;
+pub use execution::CapturedStream;
+pub use execution::ExecutionCapture;
 use game_platform::GamePlatformAdapter;
 use settings::SettingsAdapter;
 

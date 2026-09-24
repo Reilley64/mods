@@ -1,3 +1,4 @@
+use crate::conflicts::ListEffectiveConflictsOutput;
 use domain::ArchiveIdentity;
 use domain::DataRelativePath;
 use domain::EffectiveResult;
@@ -25,6 +26,25 @@ pub struct FomodOptionTypePattern {
 	pub option_type: ResolvedOptionType,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FomodFileEffect {
+	pub folder: bool,
+	pub descriptor_order: u64,
+	pub source: String,
+	pub destination: String,
+	pub declared_priority: i32,
+	pub always_install: bool,
+	pub install_if_usable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionSelectionState {
+	Unselected,
+	Supplied,
+	AutomaticRequired,
+	AutomaticSelectAll,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FomodOption {
 	pub id: String,
 	pub label: String,
@@ -34,6 +54,7 @@ pub struct FomodOption {
 	pub type_patterns: Vec<FomodOptionTypePattern>,
 	pub flag_writes: Vec<FomodFlagWrite>,
 	pub file_candidates: Vec<InstallCandidate>,
+	pub file_effects: Vec<FomodFileEffect>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FomodGroup {
@@ -92,8 +113,53 @@ pub struct InstallationState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptedChoice {
+	pub sequence: u64,
 	pub group_id: String,
 	pub option_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutomaticAction {
+	Selected,
+	Withdrawn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutomaticCause {
+	Required,
+	SelectAll,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomaticChoiceEvent {
+	pub sequence: u64,
+	pub action: AutomaticAction,
+	pub group_id: String,
+	pub option_id: String,
+	pub active_causes: Vec<AutomaticCause>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChoiceSource {
+	Supplied,
+	Automatic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlagWriter {
+	pub sequence: u64,
+	pub flag_effect_order: u64,
+	pub source: ChoiceSource,
+	pub group_id: String,
+	pub option_id: String,
+	pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedFlag {
+	pub name: String,
+	pub value: String,
+	pub winning_event: FlagWriter,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConditionOperator {
@@ -119,6 +185,8 @@ pub enum InstallWarning {
 	},
 	FomodConflictingFlagValues {
 		flag_name: String,
+		writers: Vec<FlagWriter>,
+		winning_event: FlagWriter,
 		values: Vec<String>,
 		resolved_value: String,
 	},
@@ -163,7 +231,18 @@ pub enum InstallWarning {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConditionEvaluation {
+	pub result: bool,
+	pub children: Vec<Self>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisibleOption {
+	pub condition_evaluation: ConditionEvaluation,
+	pub condition: FomodCondition,
+	pub flag_effects: Vec<FomodFlagWrite>,
+	pub file_effects: Vec<FomodFileEffect>,
+	pub selection_state: OptionSelectionState,
 	pub id: String,
 	pub label: String,
 	pub description: String,
@@ -173,6 +252,8 @@ pub struct VisibleOption {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedGroup {
+	pub condition_evaluation: ConditionEvaluation,
+	pub condition: FomodCondition,
 	pub id: String,
 	pub label: String,
 	pub description: String,
@@ -210,6 +291,7 @@ pub struct PlanCandidateReference {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedCandidate {
+	pub origin_condition_evaluation: Option<ConditionEvaluation>,
 	pub candidate: InstallCandidate,
 	pub current_winner: EffectiveResult,
 	pub proposed_winner: PlanCandidateReference,
@@ -250,6 +332,8 @@ pub struct InstallPlan {
 	pub mod_name: ModName,
 	pub replacement: bool,
 	pub accepted_choices: Vec<AcceptedChoice>,
+	pub automatic_events: Vec<AutomaticChoiceEvent>,
+	pub resolved_flags: Vec<ResolvedFlag>,
 	pub warnings: Vec<InstallWarning>,
 	pub candidates: Vec<PlannedCandidate>,
 	pub projected_state: ProjectedModState,
@@ -262,15 +346,22 @@ pub struct ApprovedInstallation {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdditionalSelectionsRequired {
+	pub archive_identity: ArchiveIdentity,
+	pub mod_name: ModName,
 	pub accepted_choices: Vec<AcceptedChoice>,
+	pub automatic_events: Vec<AutomaticChoiceEvent>,
+	pub resolved_flags: Vec<ResolvedFlag>,
 	pub unresolved_groups: Vec<UnresolvedGroup>,
 	pub warnings: Vec<InstallWarning>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallPreview {
 	pub plan: InstallPlan,
+	pub hypothetical_enabled_conflicts: ListEffectiveConflictsOutput,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledArchive {
+	pub plan: InstallPlan,
+	pub conflicts: ListEffectiveConflictsOutput,
 	pub warnings: Vec<InstallWarning>,
 }

@@ -32,10 +32,10 @@ pub(super) fn plan_candidates(
 	let mut ids = BTreeSet::new();
 	for candidate in &candidates {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 		}
 		if !ids.insert(candidate.candidate_id) {
-			return Err(report!(ErrorMarker::ambiguous_install_plan()));
+			return Err(report!(ErrorMarker::ambiguous_install_plan().with_phase("planning")));
 		}
 	}
 
@@ -48,7 +48,7 @@ pub(super) fn plan_candidates(
 	let mut by_destination = BTreeMap::<String, Vec<usize>>::new();
 	for (index, candidate) in candidates.iter().enumerate() {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 		}
 		by_destination
 			.entry(candidate.destination.comparison_key().to_owned())
@@ -60,12 +60,12 @@ pub(super) fn plan_candidates(
 	let mut warnings = Vec::new();
 	for (key, indexes) in &by_destination {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 		}
 		let mut winner_index = None;
 		for index in indexes {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 			}
 			if winner_index
 				.is_none_or(|winner| precedence(&candidates[*index]) > precedence(&candidates[winner]))
@@ -81,14 +81,14 @@ pub(super) fn plan_candidates(
 		let mut loser_candidate_ids = Vec::new();
 		for index in indexes {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 			}
 			if *index == winner_index {
 				continue;
 			}
 			let candidate_precedence = precedence(&candidates[*index]);
 			if candidate_precedence == winner_precedence {
-				return Err(report!(ErrorMarker::ambiguous_install_plan()));
+				return Err(report!(ErrorMarker::ambiguous_install_plan().with_phase("planning")));
 			}
 			if candidate_precedence.phase == winner_precedence.phase
 				&& candidate_precedence.declared_priority == winner_precedence.declared_priority
@@ -110,14 +110,14 @@ pub(super) fn plan_candidates(
 
 	for destination in winners.keys() {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 		}
 		for (component_boundary, _) in destination.match_indices('/') {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 			}
 			if winners.contains_key(&destination[..component_boundary]) {
-				return Err(report!(ErrorMarker::unsafe_archive()));
+				return Err(report!(ErrorMarker::unsafe_archive().with_phase("planning")));
 			}
 		}
 	}
@@ -126,7 +126,7 @@ pub(super) fn plan_candidates(
 	let mut winner_reasons = BTreeMap::new();
 	for (key, winner_index) in &winners {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 		}
 		let winner = candidates[*winner_index].clone();
 		let winner_precedence = precedence(&winner);
@@ -135,7 +135,7 @@ pub(super) fn plan_candidates(
 		let mut lower_priority = false;
 		for index in indexes {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 			}
 			let candidate_precedence = precedence(&candidates[*index]);
 			lower_phase |= candidate_precedence.phase < winner_precedence.phase;
@@ -157,14 +157,14 @@ pub(super) fn plan_candidates(
 	let mut current_winners_by_key = HashMap::with_capacity(current_winners.len());
 	for (destination, result) in current_winners {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 		}
 		current_winners_by_key.insert(destination.comparison_key(), result);
 	}
 	let mut planned = Vec::with_capacity(candidates.len());
 	for (index, candidate) in candidates.into_iter().enumerate() {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 		}
 		let key = candidate.destination.comparison_key();
 		let winner_index = winners[key];
@@ -200,7 +200,7 @@ pub(super) fn plan_candidates(
 			};
 			for (component_boundary, _) in key.rmatch_indices('/') {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 				}
 				let Some(ancestor_result) = current_winners_by_key.get(&key[..component_boundary])
 				else {
@@ -219,6 +219,7 @@ pub(super) fn plan_candidates(
 			current_winner
 		};
 		planned.push(PlannedCandidate {
+			origin_condition_evaluation: None,
 			candidate,
 			current_winner,
 			proposed_winner,
@@ -227,7 +228,7 @@ pub(super) fn plan_candidates(
 	}
 
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("planning")));
 	}
 	Ok((planned, warnings))
 }

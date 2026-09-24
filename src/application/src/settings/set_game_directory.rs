@@ -1,6 +1,8 @@
 use crate::errors::ErrorCode;
 use crate::ports::CheckSettingsReadiness;
 use crate::ports::PreviewGameBinding;
+use crate::ports::ProgressEvent;
+use crate::ports::ReportProgress;
 use crate::ports::StoreGameBinding;
 use crate::ports::ValidateEffectiveBinding;
 use crate::ports::ValidateGameDirectory;
@@ -16,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct SetGameDirectoryDependencies {
+	pub report_progress: Option<ReportProgress>,
 	pub check_settings_readiness: CheckSettingsReadiness,
 	pub validate_game_directory: ValidateGameDirectory,
 	pub preview_game_binding: PreviewGameBinding,
@@ -54,6 +57,10 @@ pub async fn set_game_directory(
 		.call((cancellation.clone(),))
 		.await
 		.context(SetGameDirectoryError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ValidatingGameBinding,)).await;
+	}
 
 	let stored_binding = dependencies
 		.validate_game_directory
@@ -103,6 +110,10 @@ pub async fn set_game_directory(
 		.call((stored_binding, cancellation))
 		.await
 		.context(SetGameDirectoryError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::GameBindingStored,)).await;
+	}
 
 	Ok(SetGameDirectoryOutput {
 		stored_value: outcome.stored.game_directory().clone(),
@@ -154,6 +165,7 @@ mod tests {
 		let validation_observed_order = Arc::new(AtomicUsize::new(0));
 		let store_observed_order = Arc::new(AtomicUsize::new(0));
 		let dependencies = SetGameDirectoryDependencies {
+			report_progress: None,
 			check_settings_readiness: Arc::new(|_| Box::pin(async { Ok(()) }) as PortFuture<_>),
 			validate_game_directory: Arc::new({
 				let stored = stored.clone();
@@ -300,6 +312,7 @@ mod tests {
 			SteamBuildId::new(2).map_err(|_| "invalid test build ID")?,
 		);
 		let dependencies = SetGameDirectoryDependencies {
+			report_progress: None,
 			check_settings_readiness: Arc::new(|_| Box::pin(async { Ok(()) }) as PortFuture<_>),
 			validate_game_directory: Arc::new({
 				let stored = stored.clone();
@@ -353,6 +366,7 @@ mod tests {
 		let validation_calls = Arc::new(AtomicUsize::new(0));
 		let store_calls = Arc::new(AtomicUsize::new(0));
 		let dependencies = SetGameDirectoryDependencies {
+			report_progress: None,
 			check_settings_readiness: Arc::new(|_| {
 				Box::pin(async { Err(report!(ErrorMarker::manual_cleanup_required())) })
 					as PortFuture<_>

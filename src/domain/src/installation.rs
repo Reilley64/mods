@@ -148,6 +148,7 @@ pub enum InstallCandidateOrigin {
 	},
 	Conditional {
 		pattern_order: u64,
+		condition: FomodCondition,
 	},
 }
 
