@@ -108,3 +108,36 @@ Tests use MSW to intercept the official TypeSafe SDK. They do not call the live 
 ```text
 bun test ./.prime/agent/extensions/coding-style-gate/tests
 ```
+
+## Persistent review receipts
+
+The gate persists `coding-style-gate-receipt` custom entries in the Prime session
+JSONL through `pi.appendEntry`. These entries survive session reloads and do not
+add source patches or review prompts to model context.
+
+Completed tool-result, agent-end, and manual `check` reviews record:
+
+- schema version and timestamp;
+- trigger, repository root, and tool name/call ID when applicable;
+- review fingerprint, model, reviewed files, and finding count;
+- finding file, rule ID, and probability;
+- `cachedFiles`, distinguishing reused results from new requests.
+
+`outcome: "reviewed"` with zero findings is an affirmative clean review, not a
+skipped hook. Calls with no relevant Rust changes do not emit a review receipt.
+A repeated review can emit another receipt while reusing its cached result.
+
+Failures record `outcome: "failed"` and a stage, without provider error bodies or
+credentials. Before-tool snapshot failures are remembered by tool-call ID and
+reported explicitly in that tool's result. After-tool, baseline, and final
+snapshot failures also produce explicit messages. A failed snapshot is never
+represented as a clean review.
+
+Interactive advisory notifications are also persisted as `coding-style-gate`
+session messages. `/coding-style-gate status` still reports the current in-memory
+report/error; use the session receipts for historical coverage. Receipts cannot
+reconstruct reviews that happened before this change was loaded.
+
+Reload the agent extensions (or start a new agent session) to activate changes to
+the extension. Tests use the real extension callbacks with a mocked TypeSafe
+endpoint; passing tests are not evidence of a live Jev review.

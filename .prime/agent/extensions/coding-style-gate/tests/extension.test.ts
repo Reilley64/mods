@@ -84,16 +84,19 @@ afterAll(() => {
 type Handler = (event: any, context: any) => Promise<any> | any;
 
 function fakePrime() {
+	const entries: Array<{ customType: string; data: any }> = [];
 	const userMessages: Array<{ text: string; options: unknown }> = [];
 	const sentMessages: Array<{ message: unknown; options: unknown }> = [];
 	const handlers = new Map<string, Handler>();
 	const commands = new Map<string, any>();
 	return {
+		entries,
 		handlers,
 		commands,
 		userMessages,
 		sentMessages,
 		api: {
+			appendEntry(customType: string, data: unknown) { entries.push({ customType, data }); },
 			on(name: string, handler: Handler) {
 				handlers.set(name, handler);
 			},
@@ -111,6 +114,90 @@ function fakePrime() {
 }
 
 describe("Prime coding style gate", () => {
+
+	test("reports after-tool snapshot failures and manual check failures", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-after-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
+		await prime.handlers.get("session_start")?.({}, context);
+		await prime.handlers.get("tool_call")?.({ toolName: "ipython", toolCallId: "after-failure" }, context);
+		await rm(join(root, ".git"), { recursive: true });
+		const result = await prime.handlers.get("tool_result")?.({ toolName: "ipython", toolCallId: "after-failure", content: [] }, context);
+		expect(result.content[0].text).toContain("after-tool snapshot");
+		expect(prime.entries.at(-1)?.data).toMatchObject({ outcome: "failed", stage: "after_tool_snapshot" });
+		await prime.commands.get("coding-style-gate").handler("check", context);
+		expect(prime.entries.at(-1)?.data).toMatchObject({ trigger: "check", outcome: "failed", stage: "final_snapshot" });
+		expect(JSON.stringify(prime.sentMessages)).toContain("final snapshot");
+	});
+
+
+	test("persists clean tool and cached final review receipts", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-receipt-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+		await prime.handlers.get("session_start")?.({}, context);
+		await prime.handlers.get("tool_call")?.({ toolName: "ipython", toolCallId: "receipt-edit" }, context);
+		await writeFile(join(root, "example.rs"), "fn run() { let ready = true; }\n");
+		const result = await prime.handlers.get("tool_result")?.({ toolName: "ipython", toolCallId: "receipt-edit", content: [] }, context);
+		expect(result).toBeUndefined();
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(reviewedFiles).toEqual(["example.rs"]);
+		const receipts = prime.entries.filter(entry => entry.customType === "coding-style-gate-receipt").map(entry => entry.data);
+		expect(receipts).toHaveLength(2);
+		expect(receipts[0]).toMatchObject({ version: 1, trigger: "tool_result", toolCallId: "receipt-edit", toolName: "ipython", outcome: "reviewed", files: ["example.rs"], findingCount: 0, cachedFiles: 0 });
+		expect(receipts[0].fingerprint).toBeTruthy();
+		expect(receipts[0].model).toBeTruthy();
+		expect(receipts[1]).toMatchObject({ trigger: "agent_end", outcome: "reviewed", cachedFiles: 1 });
+		expect(receipts[1].fingerprint).toEqual(receipts[0].fingerprint);
+		expect(JSON.stringify(receipts)).not.toContain("let ready");
+		await prime.commands.get("coding-style-gate").handler("check", { ...context, waitForIdle: async () => {} });
+		expect(prime.entries.at(-1)?.data).toMatchObject({ trigger: "check", outcome: "reviewed", cachedFiles: 1 });
+	});
+
+	test("reports pre-tool snapshot failures in the result and persists failure receipt", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-failure-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+		await prime.handlers.get("tool_call")?.({ toolName: "ipython", toolCallId: "failed-snapshot" }, { ...context, cwd: join(root, "missing") });
+		const result = await prime.handlers.get("tool_result")?.({ toolName: "ipython", toolCallId: "failed-snapshot", content: [{ type: "text", text: "original" }] }, context);
+		expect(result.content[0].text).toBe("original");
+		expect(result.content[1].text).toContain("before-tool snapshot");
+		expect(result.content[1].text).toContain("not reviewed");
+		expect(prime.entries.at(-1)?.data).toMatchObject({ outcome: "failed", stage: "before_tool_snapshot", toolCallId: "failed-snapshot" });
+		expect(reviewedFiles).toHaveLength(0);
+	});
+
+	test("persists advisory end findings even with an interactive UI", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-ui-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const notifications: string[] = [];
+		const context = { cwd: root, signal: undefined, hasUI: true, ui: { notify(text: string) { notifications.push(text); } } };
+		await prime.handlers.get("session_start")?.({}, context);
+		await writeFile(join(root, "example.rs"), "// Run the function.\nfn run() {}\n");
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.entries.at(-1)?.data).toMatchObject({ outcome: "reviewed", trigger: "agent_end", findingCount: 1 });
+		expect(JSON.stringify(prime.sentMessages)).toContain("likely violation");
+		expect(notifications).toHaveLength(1);
+	});
+
 	test("reviews a worktree created and edited during one tool call", async () => {
 		const container = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(container);
@@ -593,7 +680,7 @@ describe("Prime coding style gate", () => {
 		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
 
 		expect(prime.userMessages).toHaveLength(1);
-		expect(prime.userMessages[0]?.text).toContain("could not review");
+		expect(prime.userMessages[0]?.text).toContain("baseline snapshot");
 	});
 
 });
