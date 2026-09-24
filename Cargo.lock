@@ -574,6 +574,8 @@ dependencies = [
  "domain",
  "rootcause",
  "sha2",
+ "tokio",
+ "tokio-util",
  "windows",
 ]
 
@@ -738,7 +740,11 @@ dependencies = [
  "environment",
  "execution",
  "game-platform",
+ "rootcause",
  "settings",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

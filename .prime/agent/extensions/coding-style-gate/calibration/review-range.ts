@@ -1,6 +1,6 @@
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 
-import { loadConfig } from "../config";
+import { loadConfig, validateRuleThresholds } from "../config";
 import { loadStyleRules } from "../policy";
 import { reviewChanges } from "../reviewer";
 import { findModuleReferencingFiles } from "../snapshot";
@@ -18,16 +18,15 @@ const moduleReferences = new Map(
 	changes.map((change) => [change.path, findModuleReferencingFiles(completeAfter, change.path)]),
 );
 const config = await loadConfig(root);
-const thresholdOverride = process.env.CODING_STYLE_GATE_THRESHOLD;
-const threshold = thresholdOverride === undefined ? config.threshold : Number(thresholdOverride);
-if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-	throw new Error("CODING_STYLE_GATE_THRESHOLD must be between 0 and 1");
+if (process.env.CODING_STYLE_GATE_THRESHOLD !== undefined) {
+	throw new Error("CODING_STYLE_GATE_THRESHOLD is unsupported; configure explicit ruleThresholds instead");
 }
 const allRules = await loadStyleRules(root, config.styleFile);
 const rules = ruleFilter ? allRules.filter((rule) => rule.id === ruleFilter) : allRules;
 if (rules.length === 0) {
 	throw new Error(`unknown rubric rule ${ruleFilter}`);
 }
+validateRuleThresholds(config.ruleThresholds, rules);
 const report = await reviewChanges(
 	new TypeSafeClient({
 		defaultModel: config.model,
@@ -41,8 +40,7 @@ const report = await reviewChanges(
 		maxConcurrency: config.maxConcurrency,
 		moduleReferences,
 		model: config.model,
-		threshold,
-		ruleThresholds: thresholdOverride === undefined ? config.ruleThresholds : {},
+		ruleThresholds: config.ruleThresholds,
 	},
 );
 console.log(
@@ -51,8 +49,7 @@ console.log(
 			range: { requestedBase: base, effectiveBase, head },
 			ruleFilter: ruleFilter ?? null,
 			model: report.model,
-			threshold,
-			ruleThresholds: thresholdOverride === undefined ? config.ruleThresholds : {},
+			ruleThresholds: config.ruleThresholds,
 			filesReviewed: report.filesReviewed,
 			findings: report.findings.map((finding) => ({
 				file: finding.file,

@@ -86,15 +86,15 @@ if value_is_usable {
 
 #### Rule
 
-Add comments for external constraints, safety proofs, compatibility workarounds, and intentionally surprising decisions. Explain why the constraint exists rather than narrating the code.
+Add comments for external constraints, safety proofs, compatibility workarounds, and intentionally surprising decisions. Explain why the constraint exists rather than narrating the code. This applies to ordinary comments and Rustdoc: documentation syntax alone does not justify a comment. Keep API contracts and non-obvious semantics, but omit standalone summaries that only repeat item names, fields, signatures, or implementation steps.
 
 #### Violation
 
-An added comment merely restates the adjacent operation or describes obvious syntax without giving a necessary reason.
+An added ordinary comment or Rustdoc summary only restates the adjacent operation, item name, fields, signature, or obvious syntax. It adds no external constraint, safety proof, caller obligation, non-obvious semantics, or necessary rationale. A tautological Rustdoc summary is still a violation even when formatted correctly.
 
 #### Compliant
 
-The comment explains an external constraint, proof, workaround, or surprising decision that the code alone cannot communicate.
+The comment explains an external constraint, proof, workaround, surprising decision, or API contract that the code alone cannot communicate. Preserve meaningful error conditions, sentinel meanings, ownership and lifetime obligations, and non-obvious return semantics. A concise introductory summary accompanying such a contract is acceptable; do not flag it merely because the item name is descriptive.
 
 #### Bad example
 

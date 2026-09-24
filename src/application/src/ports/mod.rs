@@ -31,6 +31,7 @@ pub use environment::PublishEnvironment;
 pub use environment::ReadConflictContent;
 pub use environment::ScanEnvironmentConflicts;
 pub use environment::WriteInstallationChunk;
+pub use execution::RunManagedProgram;
 pub use game_platform::GameInstallationSource;
 pub use game_platform::LoadProfileSources;
 pub use game_platform::ReadGameVersion;

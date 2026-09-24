@@ -76,6 +76,33 @@ impl SettingsAdapter {
 		Ok(())
 	}
 
+	/// Reads the effective binding while execution owns Profile State validation.
+	///
+	/// # Errors
+	/// Refuses pending work, invalid manifests or overrides, unsafe roots, and cancellation.
+	pub fn load_execution_binding(&self, cancellation: &CancellationToken) -> Result<GameBinding, ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation)?;
+		let (root, text) = open_manifest_root(&self.root)?;
+		refuse_unfinished_operation(&root, SettingsAccess::Mutation)?;
+
+		let (manifest, effective, shadowed) = config_source::read_sources(
+			&text,
+			&self.environment,
+			ErrorMarker::settings_environment_invalid(),
+		)?;
+		let settings = resolved_settings(manifest, effective, shadowed)?;
+
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		Ok(settings.effective_binding)
+	}
+
 	fn load(&self) -> Result<ResolvedSettings, ErrorMarker> {
 		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::ReadOnly)?;
 		let (root, text) = open_bound_root(&self.root)?;
@@ -246,6 +273,12 @@ struct WritableManifest<'a> {
 }
 
 fn open_bound_root(root: &EnvironmentRoot) -> Result<(Dir, String), ErrorMarker> {
+	let (directory, text) = open_manifest_root(root)?;
+	layout::validate(&directory)?;
+	Ok((directory, text))
+}
+
+fn open_manifest_root(root: &EnvironmentRoot) -> Result<(Dir, String), ErrorMarker> {
 	let directory = fs_access::open_ambient_dir(root.as_path()).map_err(|error| {
 		let marker = if error.current_context().kind() == ErrorKind::NotFound {
 			ErrorMarker::environment_not_initialized()
@@ -289,7 +322,6 @@ fn open_bound_root(root: &EnvironmentRoot) -> Result<(Dir, String), ErrorMarker>
 		}
 		fs_access::open_dir(&directory, Path::new(name)).context(ErrorMarker::environment_root_unsafe())?;
 	}
-	layout::validate(&directory)?;
 	Ok((directory, text))
 }
 
@@ -497,6 +529,23 @@ mod tests {
 			),
 		)?;
 		Ok((temp, root))
+	}
+
+	#[test]
+	fn execution_binding_does_not_require_plugin_lists_or_inspect_saves() -> Result<()> {
+		let (temp, root) = fixture()?;
+		fs::remove_file(temp.path().join("profile/plugins.txt"))?;
+		fs::remove_file(temp.path().join("profile/loadorder.txt"))?;
+		let adapter = SettingsAdapter::with_environment(root, Vec::new());
+		let binding = adapter.load_execution_binding(&CancellationToken::new())?;
+		assert_eq!(binding.game_directory().as_path(), Path::new(MANIFEST_GAME_DIR));
+		assert!(!temp.path().join("profile/plugins.txt").exists());
+		fs::create_dir(temp.path().join("temp/pending"))?;
+		let result = adapter.load_execution_binding(&CancellationToken::new());
+		assert!(
+			matches!(result, Err(error) if error.current_context().code() == ErrorCode::ManualCleanupRequired)
+		);
+		Ok(())
 	}
 
 	#[test]

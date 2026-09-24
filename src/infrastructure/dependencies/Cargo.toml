@@ -16,3 +16,7 @@ archive = { path = "../archive", version = "0.0.0" }
 execution = { path = "../execution", version = "0.0.0" }
 application = { workspace = true }
 domain = { workspace = true }
+rootcause = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }

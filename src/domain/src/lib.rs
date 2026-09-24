@@ -2,6 +2,7 @@
 
 mod conflicts;
 mod environment;
+mod execution;
 mod game;
 mod identity;
 mod installation;
@@ -29,6 +30,13 @@ pub use environment::EnvironmentSchemaVersion;
 pub use environment::InvalidEnvironmentName;
 pub use environment::InvalidEnvironmentRoot;
 pub use environment::UnsupportedEnvironmentSchemaVersion;
+pub use execution::InvalidExecutionValue;
+pub use execution::OutputTarget;
+pub use execution::ProcessStatus;
+pub use execution::ProcessStatusOrigin;
+pub use execution::Program;
+pub use execution::ProgramArgument;
+pub use execution::WorkingDirectory;
 pub use game::GameBinding;
 pub use game::GameInstallationPath;
 pub use game::InvalidGameInstallationPath;

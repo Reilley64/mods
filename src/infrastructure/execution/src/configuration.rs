@@ -56,6 +56,7 @@ impl ViewConfiguration {
 		providers: Vec<ProviderRoot>,
 		winners: Vec<ProviderReference>,
 		output_target: Option<ModName>,
+		profile_directories: Vec<PathMapping>,
 		profile_files: Vec<PathMapping>,
 		saves: PathMapping,
 	) -> Result<Self, ExecutionError> {
@@ -125,8 +126,9 @@ impl ViewConfiguration {
 				destination: data_directory.join(relative),
 			});
 		}
+		directories.extend(profile_directories);
 		files.extend(profile_files);
-		for mapping in files.iter().chain([&data_target, &saves]) {
+		for mapping in files.iter().chain(&directories).chain([&data_target, &saves]) {
 			if !valid_path(&mapping.source) || !valid_path(&mapping.destination) {
 				return Err(report!(ExecutionError));
 			}
@@ -251,6 +253,7 @@ mod tests {
 				participation_reason: ParticipationReason::EnabledMod,
 			}],
 			selected,
+			vec![],
 			vec![mapping("profile/game.ini", "user/game.ini")],
 			mapping("profile/saves", "Data/__mods_saves"),
 		)

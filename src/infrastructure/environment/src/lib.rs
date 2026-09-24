@@ -1,5 +1,6 @@
 mod active_code_page;
 mod conflict_scan;
+mod execution_preparation;
 mod hashing;
 mod manifest;
 mod profile;
@@ -44,6 +45,10 @@ use application::ports::ReadConflictContent;
 use application::ports::ScanEnvironmentConflicts;
 use domain::DataRelativePath;
 use domain::EnvironmentRoot;
+pub use execution_preparation::ExecutionProfileText;
+pub use execution_preparation::ExecutionProvider;
+pub use execution_preparation::ExecutionVisibleFile;
+pub use execution_preparation::PreparedExecution;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;

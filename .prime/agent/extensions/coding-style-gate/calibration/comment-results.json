@@ -1,0 +1,1922 @@
+{
+	"model": "jev-1.13.0",
+	"baselineStyleSha256": "0638001d51baaa68b4c010e6eb029e908e518d10d7c07852b48f649a30a71838",
+	"updatedStyleSha256": "92a3988ce3612fef88dd207f7db40327e8d3922a65654e0d41fd433ea6913410",
+	"before": {
+		"model": "jev-1.13.0",
+		"rules": 35,
+		"observedRange": {
+			"badFloor": 0.66,
+			"goodCeiling": 0.33,
+			"recommendedThreshold": 0.49
+		},
+		"configuredThresholds": {
+			"default": 0.86,
+			"rules": {
+				"application-use-cases-and-ports-use-case-local-implementation-modules": 0.45
+			}
+		},
+		"configuredSummary": {
+			"truePositive": 4,
+			"falseNegative": 1,
+			"trueNegative": 10,
+			"falsePositive": 0
+		},
+		"rows": [
+			{
+				"name": "comment-second-interrupt-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.33,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.23
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.33
+				}
+			},
+			{
+				"name": "comment-second-interrupt-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.9,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.9
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.13
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.9
+				}
+			},
+			{
+				"name": "comment-child-status-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.2,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.3
+				},
+				"maxAny": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.3
+				}
+			},
+			{
+				"name": "comment-child-status-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.66,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.35
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.66
+				}
+			},
+			{
+				"name": "comment-real-diagnostic-zero-sentinel",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.21,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.09
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.21
+				}
+			},
+			{
+				"name": "comment-real-thread-affine-worker",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.14,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.14
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.14
+				}
+			},
+			{
+				"name": "comment-real-utf16-command-line",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.25
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.25
+				}
+			},
+			{
+				"name": "comment-real-native-open-safety",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.08,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "unsafe-rust-safety-proofs",
+					"probability": 0.14
+				},
+				"maxAny": {
+					"id": "unsafe-rust-safety-proofs",
+					"probability": 0.14
+				}
+			},
+			{
+				"name": "comment-real-nonrecursive-priority-reason",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.18,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.23
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.23
+				}
+			},
+			{
+				"name": "comment-real-fomod-not-semver",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.06,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "application-use-cases-and-ports-use-case-parameters",
+					"probability": 0.31
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-parameters",
+					"probability": 0.31
+				}
+			},
+			{
+				"name": "comment-real-write-all-control-errors",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.14
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.14
+				}
+			},
+			{
+				"name": "comment-real-publication-cancellation-boundary",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.12,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-cancellation-state-preservation",
+					"probability": 0.18
+				},
+				"maxAny": {
+					"id": "runtime-primitives-cancellation-state-preservation",
+					"probability": 0.18
+				}
+			},
+			{
+				"name": "comment-mutated-thread-affine-worker",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.87,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.87
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.1
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.87
+				}
+			},
+			{
+				"name": "comment-mutated-utf16-command-line",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.86,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.86
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.57
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.86
+				}
+			},
+			{
+				"name": "comment-mutated-nonrecursive-priority-reason",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.89,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.89
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.19
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.89
+				}
+			}
+		],
+		"thresholds": [
+			{
+				"threshold": 0.3,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 7,
+				"falsePositive": 3,
+				"f1": 0.769
+			},
+			{
+				"threshold": 0.35,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.4,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.45,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.5,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.55,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.6,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.65,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.7,
+				"truePositive": 4,
+				"falseNegative": 1,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0.889
+			},
+			{
+				"threshold": 0.75,
+				"truePositive": 4,
+				"falseNegative": 1,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0.889
+			},
+			{
+				"threshold": 0.8,
+				"truePositive": 4,
+				"falseNegative": 1,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0.889
+			},
+			{
+				"threshold": 0.85,
+				"truePositive": 4,
+				"falseNegative": 1,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0.889
+			},
+			{
+				"threshold": 0.9,
+				"truePositive": 0,
+				"falseNegative": 5,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0
+			},
+			{
+				"threshold": 0.95,
+				"truePositive": 0,
+				"falseNegative": 5,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0
+			}
+		],
+		"usage": {
+			"inputTokens": 195043,
+			"outputTokens": 13605
+		}
+	},
+	"afterRubric": {
+		"model": "jev-1.13.0",
+		"rules": 35,
+		"observedRange": {
+			"badFloor": 0.78,
+			"goodCeiling": 0.5,
+			"recommendedThreshold": 0.64
+		},
+		"configuredThresholds": {
+			"default": 0.86,
+			"rules": {
+				"application-use-cases-and-ports-use-case-local-implementation-modules": 0.45
+			}
+		},
+		"configuredSummary": {
+			"truePositive": 4,
+			"falseNegative": 1,
+			"trueNegative": 10,
+			"falsePositive": 0
+		},
+		"rows": [
+			{
+				"name": "comment-second-interrupt-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.5,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.22
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.5
+				}
+			},
+			{
+				"name": "comment-second-interrupt-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.91,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.91
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.12
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.91
+				}
+			},
+			{
+				"name": "comment-child-status-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.2,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.31
+				},
+				"maxAny": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.31
+				}
+			},
+			{
+				"name": "comment-child-status-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.78,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.32
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.78
+				}
+			},
+			{
+				"name": "comment-real-diagnostic-zero-sentinel",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.18,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.07
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.18
+				}
+			},
+			{
+				"name": "comment-real-thread-affine-worker",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.13,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.16
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.16
+				}
+			},
+			{
+				"name": "comment-real-utf16-command-line",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.25
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.25
+				}
+			},
+			{
+				"name": "comment-real-native-open-safety",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.13
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.13
+				}
+			},
+			{
+				"name": "comment-real-nonrecursive-priority-reason",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.18,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.21
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.21
+				}
+			},
+			{
+				"name": "comment-real-fomod-not-semver",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "application-use-cases-and-ports-use-case-parameters",
+					"probability": 0.29
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-parameters",
+					"probability": 0.29
+				}
+			},
+			{
+				"name": "comment-real-write-all-control-errors",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.08,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.15
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.15
+				}
+			},
+			{
+				"name": "comment-real-publication-cancellation-boundary",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.11,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-cancellation-state-preservation",
+					"probability": 0.2
+				},
+				"maxAny": {
+					"id": "runtime-primitives-cancellation-state-preservation",
+					"probability": 0.2
+				}
+			},
+			{
+				"name": "comment-mutated-thread-affine-worker",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.9,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.9
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.1
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.9
+				}
+			},
+			{
+				"name": "comment-mutated-utf16-command-line",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.89,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.89
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.55
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.89
+				}
+			},
+			{
+				"name": "comment-mutated-nonrecursive-priority-reason",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.92,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.92
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.18
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.92
+				}
+			}
+		],
+		"thresholds": [
+			{
+				"threshold": 0.3,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 8,
+				"falsePositive": 2,
+				"f1": 0.833
+			},
+			{
+				"threshold": 0.35,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 9,
+				"falsePositive": 1,
+				"f1": 0.909
+			},
+			{
+				"threshold": 0.4,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 9,
+				"falsePositive": 1,
+				"f1": 0.909
+			},
+			{
+				"threshold": 0.45,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 9,
+				"falsePositive": 1,
+				"f1": 0.909
+			},
+			{
+				"threshold": 0.5,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 9,
+				"falsePositive": 1,
+				"f1": 0.909
+			},
+			{
+				"threshold": 0.55,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.6,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.65,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.7,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.75,
+				"truePositive": 5,
+				"falseNegative": 0,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 1
+			},
+			{
+				"threshold": 0.8,
+				"truePositive": 4,
+				"falseNegative": 1,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0.889
+			},
+			{
+				"threshold": 0.85,
+				"truePositive": 4,
+				"falseNegative": 1,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0.889
+			},
+			{
+				"threshold": 0.9,
+				"truePositive": 2,
+				"falseNegative": 3,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0.571
+			},
+			{
+				"threshold": 0.95,
+				"truePositive": 0,
+				"falseNegative": 5,
+				"trueNegative": 10,
+				"falsePositive": 0,
+				"f1": 0
+			}
+		],
+		"usage": {
+			"inputTokens": 197863,
+			"outputTokens": 13605
+		}
+	},
+	"final": {
+		"model": "jev-1.13.0",
+		"rules": 35,
+		"observedRange": {
+			"badFloor": 0.11,
+			"goodCeiling": 0.79,
+			"recommendedThreshold": 0.45
+		},
+		"configuredThresholds": {
+			"default": 0.86,
+			"rules": {
+				"comments-and-documentation-reason-comments": 0.7,
+				"application-use-cases-and-ports-use-case-local-implementation-modules": 0.45
+			}
+		},
+		"configuredSummary": {
+			"truePositive": 20,
+			"falseNegative": 1,
+			"trueNegative": 26,
+			"falsePositive": 0
+		},
+		"rows": [
+			{
+				"name": "comment-second-interrupt-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.46,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.21
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.46
+				}
+			},
+			{
+				"name": "comment-second-interrupt-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.91,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.91
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.12
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.91
+				}
+			},
+			{
+				"name": "comment-child-status-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.21,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.33
+				},
+				"maxAny": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.33
+				}
+			},
+			{
+				"name": "comment-child-status-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.79,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.79
+					}
+				],
+				"maxUnrelated": {
+					"id": "runtime-primitives-custom-primitive-justification",
+					"probability": 0.38
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.79
+				}
+			},
+			{
+				"name": "comment-real-diagnostic-zero-sentinel",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.18,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.09
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.18
+				}
+			},
+			{
+				"name": "comment-real-thread-affine-worker",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.13,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.17
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.17
+				}
+			},
+			{
+				"name": "comment-real-utf16-command-line",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.29
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.29
+				}
+			},
+			{
+				"name": "comment-real-native-open-safety",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.08,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "unsafe-rust-safety-proofs",
+					"probability": 0.14
+				},
+				"maxAny": {
+					"id": "unsafe-rust-safety-proofs",
+					"probability": 0.14
+				}
+			},
+			{
+				"name": "comment-real-nonrecursive-priority-reason",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.17,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.24
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.24
+				}
+			},
+			{
+				"name": "comment-real-fomod-not-semver",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "application-use-cases-and-ports-use-case-parameters",
+					"probability": 0.29
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-parameters",
+					"probability": 0.29
+				}
+			},
+			{
+				"name": "comment-real-write-all-control-errors",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.08,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.16
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.16
+				}
+			},
+			{
+				"name": "comment-real-publication-cancellation-boundary",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.11,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "runtime-primitives-cancellation-state-preservation",
+					"probability": 0.18
+				},
+				"maxAny": {
+					"id": "runtime-primitives-cancellation-state-preservation",
+					"probability": 0.18
+				}
+			},
+			{
+				"name": "comment-mutated-thread-affine-worker",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.89,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.89
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.1
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.89
+				}
+			},
+			{
+				"name": "comment-mutated-utf16-command-line",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.9,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.9
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.56
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.9
+				}
+			},
+			{
+				"name": "comment-mutated-nonrecursive-priority-reason",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.92,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.92
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.18
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.92
+				}
+			},
+			{
+				"name": "reason-comment-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.96,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.96
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.41
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.96
+				}
+			},
+			{
+				"name": "reason-comment-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-reason-comments",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.7,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.11
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-self-explanatory-code",
+					"probability": 0.11
+				}
+			},
+			{
+				"name": "guard-clause-bad",
+				"expectedViolation": true,
+				"ruleId": "control-flow-guard-clauses",
+				"target": 0.96,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "control-flow-guard-clauses",
+						"probability": 0.96
+					}
+				],
+				"maxUnrelated": {
+					"id": "control-flow-choose-the-narrow-conditional-form",
+					"probability": 0.48
+				},
+				"maxAny": {
+					"id": "control-flow-guard-clauses",
+					"probability": 0.96
+				}
+			},
+			{
+				"name": "guard-clause-good",
+				"expectedViolation": false,
+				"ruleId": "control-flow-guard-clauses",
+				"target": 0.03,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "errors-rootcause-lower-layer-results",
+					"probability": 0.39
+				},
+				"maxAny": {
+					"id": "errors-rootcause-lower-layer-results",
+					"probability": 0.39
+				}
+			},
+			{
+				"name": "simple-match-bad",
+				"expectedViolation": true,
+				"ruleId": "control-flow-match-only-for-multi-way-logic",
+				"target": 0.91,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "control-flow-match-only-for-multi-way-logic",
+						"probability": 0.91
+					}
+				],
+				"maxUnrelated": {
+					"id": "control-flow-choose-the-narrow-conditional-form",
+					"probability": 0.85
+				},
+				"maxAny": {
+					"id": "control-flow-match-only-for-multi-way-logic",
+					"probability": 0.91
+				}
+			},
+			{
+				"name": "simple-match-good",
+				"expectedViolation": false,
+				"ruleId": "control-flow-match-only-for-multi-way-logic",
+				"target": 0.05,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.63
+				},
+				"maxAny": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.63
+				}
+			},
+			{
+				"name": "pointless-helper-bad",
+				"expectedViolation": true,
+				"ruleId": "functions-and-tests-helpers-earn-an-interface",
+				"target": 0.93,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "runtime-primitives-cancellation-propagation-and-checkpoints",
+						"probability": 0.91
+					},
+					{
+						"id": "functions-and-tests-helpers-earn-an-interface",
+						"probability": 0.93
+					}
+				],
+				"maxUnrelated": {
+					"id": "runtime-primitives-cancellation-propagation-and-checkpoints",
+					"probability": 0.91
+				},
+				"maxAny": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.93
+				}
+			},
+			{
+				"name": "meaningful-helper-good",
+				"expectedViolation": false,
+				"ruleId": "functions-and-tests-helpers-earn-an-interface",
+				"target": 0.08,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.79
+				},
+				"maxAny": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.79
+				}
+			},
+			{
+				"name": "discarded-error-bad",
+				"expectedViolation": true,
+				"ruleId": "errors-preserve-causes-at-owned-boundaries",
+				"target": 0.94,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "errors-preserve-causes-at-owned-boundaries",
+						"probability": 0.94
+					}
+				],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.75
+				},
+				"maxAny": {
+					"id": "errors-preserve-causes-at-owned-boundaries",
+					"probability": 0.94
+				}
+			},
+			{
+				"name": "preserved-error-good",
+				"expectedViolation": false,
+				"ruleId": "errors-preserve-causes-at-owned-boundaries",
+				"target": 0.09,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.71
+				},
+				"maxAny": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.71
+				}
+			},
+			{
+				"name": "cancellation-helper-bad",
+				"expectedViolation": true,
+				"ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+				"target": 0.95,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "runtime-primitives-cancellation-propagation-and-checkpoints",
+						"probability": 0.95
+					}
+				],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.79
+				},
+				"maxAny": {
+					"id": "runtime-primitives-cancellation-propagation-and-checkpoints",
+					"probability": 0.95
+				}
+			},
+			{
+				"name": "inline-cancellation-good",
+				"expectedViolation": false,
+				"ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+				"target": 0.76,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.33
+				},
+				"maxAny": {
+					"id": "runtime-primitives-cancellation-propagation-and-checkpoints",
+					"probability": 0.76
+				}
+			},
+			{
+				"name": "unsafe-proof-bad",
+				"expectedViolation": true,
+				"ruleId": "unsafe-rust-safety-proofs",
+				"target": 0.94,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.8
+					},
+					{
+						"id": "unsafe-rust-safety-proofs",
+						"probability": 0.94
+					}
+				],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-reason-comments",
+					"probability": 0.8
+				},
+				"maxAny": {
+					"id": "unsafe-rust-safety-proofs",
+					"probability": 0.94
+				}
+			},
+			{
+				"name": "unsafe-proof-good",
+				"expectedViolation": false,
+				"ruleId": "unsafe-rust-safety-proofs",
+				"target": 0.09,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.24
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.24
+				}
+			},
+			{
+				"name": "parameter-order-bad",
+				"expectedViolation": true,
+				"ruleId": "application-use-cases-and-ports-use-case-parameters",
+				"target": 0.96,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "application-use-cases-and-ports-use-case-parameters",
+						"probability": 0.96
+					}
+				],
+				"maxUnrelated": {
+					"id": "application-use-cases-and-ports-use-case-declaration-order",
+					"probability": 0.64
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-parameters",
+					"probability": 0.96
+				}
+			},
+			{
+				"name": "parameter-order-good",
+				"expectedViolation": false,
+				"ruleId": "application-use-cases-and-ports-use-case-parameters",
+				"target": 0.04,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "application-use-cases-and-ports-use-case-declaration-order",
+					"probability": 0.38
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-declaration-order",
+					"probability": 0.38
+				}
+			},
+			{
+				"name": "raw-report-bad",
+				"expectedViolation": true,
+				"ruleId": "errors-presentation-error-allowlists",
+				"target": 0.96,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "errors-presentation-error-allowlists",
+						"probability": 0.96
+					}
+				],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.7
+				},
+				"maxAny": {
+					"id": "errors-presentation-error-allowlists",
+					"probability": 0.96
+				}
+			},
+			{
+				"name": "allowlisted-report-good",
+				"expectedViolation": false,
+				"ruleId": "errors-presentation-error-allowlists",
+				"target": 0.05,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.75
+				},
+				"maxAny": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.75
+				}
+			},
+			{
+				"name": "semantic-spacing-bad",
+				"expectedViolation": true,
+				"ruleId": "formatting-and-imports-phase-spacing",
+				"target": 0.89,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "formatting-and-imports-phase-spacing",
+						"probability": 0.89
+					}
+				],
+				"maxUnrelated": {
+					"id": "errors-rootcause-lower-layer-results",
+					"probability": 0.2
+				},
+				"maxAny": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.89
+				}
+			},
+			{
+				"name": "semantic-spacing-good",
+				"expectedViolation": false,
+				"ruleId": "formatting-and-imports-phase-spacing",
+				"target": 0.07,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "errors-rootcause-lower-layer-results",
+					"probability": 0.2
+				},
+				"maxAny": {
+					"id": "errors-rootcause-lower-layer-results",
+					"probability": 0.2
+				}
+			},
+			{
+				"name": "use-case-local-module-bad",
+				"expectedViolation": true,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.85,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+						"probability": 0.85
+					}
+				],
+				"maxUnrelated": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.42
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+					"probability": 0.85
+				}
+			},
+			{
+				"name": "use-case-local-module-good",
+				"expectedViolation": false,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.28,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.43
+				},
+				"maxAny": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.43
+				}
+			},
+			{
+				"name": "use-case-local-placeholder-logic-bad",
+				"expectedViolation": true,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.11,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "architecture-and-modules-capability-modules-and-public-apis",
+					"probability": 0.07
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+					"probability": 0.11
+				}
+			},
+			{
+				"name": "use-case-local-empty-placeholder-good",
+				"expectedViolation": false,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.11,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "architecture-and-modules-capability-modules-and-public-apis",
+					"probability": 0.07
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+					"probability": 0.11
+				}
+			},
+			{
+				"name": "use-case-entrypoint-helper-bad",
+				"expectedViolation": true,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.77,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+						"probability": 0.77
+					}
+				],
+				"maxUnrelated": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.16
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+					"probability": 0.77
+				}
+			},
+			{
+				"name": "use-case-entrypoint-good",
+				"expectedViolation": false,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.06,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.49
+				},
+				"maxAny": {
+					"id": "formatting-and-imports-phase-spacing",
+					"probability": 0.49
+				}
+			},
+			{
+				"name": "capability-interface-helper-bad",
+				"expectedViolation": true,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.73,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+						"probability": 0.73
+					}
+				],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.45
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+					"probability": 0.73
+				}
+			},
+			{
+				"name": "capability-interface-types-good",
+				"expectedViolation": false,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.04,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "architecture-and-modules-capability-modules-and-public-apis",
+					"probability": 0.19
+				},
+				"maxAny": {
+					"id": "architecture-and-modules-capability-modules-and-public-apis",
+					"probability": 0.19
+				}
+			},
+			{
+				"name": "rustdoc-format-bad",
+				"expectedViolation": true,
+				"ruleId": "comments-and-documentation-rustdoc-format",
+				"target": 0.96,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "comments-and-documentation-reason-comments",
+						"probability": 0.74
+					},
+					{
+						"id": "comments-and-documentation-rustdoc-format",
+						"probability": 0.96
+					}
+				],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.79
+				},
+				"maxAny": {
+					"id": "comments-and-documentation-rustdoc-format",
+					"probability": 0.96
+				}
+			},
+			{
+				"name": "rustdoc-format-good",
+				"expectedViolation": false,
+				"ruleId": "comments-and-documentation-rustdoc-format",
+				"target": 0.08,
+				"configuredTargetThreshold": 0.86,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.7
+				},
+				"maxAny": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.7
+				}
+			},
+			{
+				"name": "use-case-local-application-scope-bad",
+				"expectedViolation": true,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.72,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": true,
+				"configuredFindings": [
+					{
+						"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+						"probability": 0.72
+					}
+				],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.5
+				},
+				"maxAny": {
+					"id": "application-use-cases-and-ports-use-case-local-implementation-modules",
+					"probability": 0.72
+				}
+			},
+			{
+				"name": "use-case-local-non-application-scope-good",
+				"expectedViolation": false,
+				"ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+				"target": 0.04,
+				"configuredTargetThreshold": 0.45,
+				"configuredTargetDetected": false,
+				"configuredFindings": [],
+				"maxUnrelated": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.47
+				},
+				"maxAny": {
+					"id": "functions-and-tests-helpers-earn-an-interface",
+					"probability": 0.47
+				}
+			}
+		],
+		"thresholds": [
+			{
+				"threshold": 0.3,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 13,
+				"falsePositive": 13,
+				"f1": 0.741
+			},
+			{
+				"threshold": 0.35,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 14,
+				"falsePositive": 12,
+				"f1": 0.755
+			},
+			{
+				"threshold": 0.4,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 16,
+				"falsePositive": 10,
+				"f1": 0.784
+			},
+			{
+				"threshold": 0.45,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 17,
+				"falsePositive": 9,
+				"f1": 0.8
+			},
+			{
+				"threshold": 0.5,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 20,
+				"falsePositive": 6,
+				"f1": 0.851
+			},
+			{
+				"threshold": 0.55,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 20,
+				"falsePositive": 6,
+				"f1": 0.851
+			},
+			{
+				"threshold": 0.6,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 20,
+				"falsePositive": 6,
+				"f1": 0.851
+			},
+			{
+				"threshold": 0.65,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 21,
+				"falsePositive": 5,
+				"f1": 0.87
+			},
+			{
+				"threshold": 0.7,
+				"truePositive": 20,
+				"falseNegative": 1,
+				"trueNegative": 21,
+				"falsePositive": 5,
+				"f1": 0.87
+			},
+			{
+				"threshold": 0.75,
+				"truePositive": 18,
+				"falseNegative": 3,
+				"trueNegative": 23,
+				"falsePositive": 3,
+				"f1": 0.857
+			},
+			{
+				"threshold": 0.8,
+				"truePositive": 16,
+				"falseNegative": 5,
+				"trueNegative": 26,
+				"falsePositive": 0,
+				"f1": 0.865
+			},
+			{
+				"threshold": 0.85,
+				"truePositive": 15,
+				"falseNegative": 6,
+				"trueNegative": 26,
+				"falsePositive": 0,
+				"f1": 0.833
+			},
+			{
+				"threshold": 0.9,
+				"truePositive": 12,
+				"falseNegative": 9,
+				"trueNegative": 26,
+				"falsePositive": 0,
+				"f1": 0.727
+			},
+			{
+				"threshold": 0.95,
+				"truePositive": 6,
+				"falseNegative": 15,
+				"trueNegative": 26,
+				"falsePositive": 0,
+				"f1": 0.444
+			}
+		],
+		"usage": {
+			"inputTokens": 616848,
+			"outputTokens": 42629
+		}
+	},
+	"ambiguousObservations": [
+		{
+			"name": "validated-input-summary",
+			"probability": 0.54,
+			"label": "ambiguous\u2014not scored"
+		},
+		{
+			"name": "visible-file-summary",
+			"probability": 0.65,
+			"label": "ambiguous\u2014not scored"
+		},
+		{
+			"name": "profile-input-summary",
+			"probability": 0.36,
+			"label": "ambiguous\u2014not scored"
+		},
+		{
+			"name": "provider-root-summary",
+			"probability": 0.47,
+			"label": "ambiguous\u2014not scored"
+		},
+		{
+			"name": "execution-error-summary",
+			"probability": 0.53,
+			"label": "ambiguous\u2014not scored"
+		},
+		{
+			"name": "native-failure-summary",
+			"probability": 0.54,
+			"label": "ambiguous\u2014not scored"
+		}
+	]
+}

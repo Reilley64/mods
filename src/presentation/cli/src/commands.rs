@@ -158,6 +158,7 @@ mod tests {
 	use super::SettingKeyArgument;
 	use super::parse_from;
 	use std::error::Error;
+	use std::ffi::OsString;
 
 	#[test]
 	fn parses_environment_log_level_and_issue_twenty_seven_commands() {
@@ -288,6 +289,28 @@ mod tests {
 	fn rejects_json_and_unknown_setting_keys() {
 		assert!(parse_from(["mods", "--json", "config", "list"]).is_err());
 		assert!(parse_from(["mods", "config", "get", "unknown"]).is_err());
+	}
+
+	#[test]
+	fn exec_preserves_every_child_value_and_requires_a_program() -> Result<(), Box<dyn Error>> {
+		let values = [
+			"tool.exe",
+			"",
+			" ",
+			"a\"b",
+			"tail\\",
+			"雪",
+			"--",
+			"--environment",
+			"child",
+		];
+		let parsed = parse_from(["mods", "exec", "--"].into_iter().chain(values))?;
+		let Command::Exec(arguments) = parsed.command else {
+			return Err("exec command must parse".into());
+		};
+		assert_eq!(arguments.command, values.map(OsString::from));
+		assert!(parse_from(["mods", "exec", "--"]).is_err());
+		Ok(())
 	}
 
 	#[test]

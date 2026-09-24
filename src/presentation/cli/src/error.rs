@@ -11,6 +11,17 @@ pub(crate) fn exit_status(code: ErrorCode) -> u32 {
 	}
 }
 
+pub(crate) fn execution_exit_status(code: ErrorCode) -> u32 {
+	match code {
+		ErrorCode::OperationCancelled => 0xC000_013A,
+		ErrorCode::ProgramNotFound => 127,
+		ErrorCode::ProgramUnsupported | ErrorCode::ProgramLaunchFailed | ErrorCode::InvalidWorkingDirectory => {
+			126
+		}
+		_ => 125,
+	}
+}
+
 pub(crate) fn application_error<C>(report: &Report<C>) -> String {
 	application_marker(report).map_or_else(|| "error: operation failed\n".to_owned(), marker)
 }
@@ -48,11 +59,23 @@ pub(crate) fn marker(marker: &ErrorMarker) -> String {
 mod tests {
 	use super::application_error;
 	use super::application_marker;
+	use super::execution_exit_status;
 	use super::marker;
 	use application::ErrorCode;
 	use application::ErrorMarker;
 	use application::settings::ListSettingsError;
 	use rootcause::report;
+
+	#[test]
+	fn execution_statuses_distinguish_lookup_launch_management_and_cancellation() {
+		assert_eq!(execution_exit_status(ErrorCode::ProgramNotFound), 127);
+		assert_eq!(execution_exit_status(ErrorCode::ProgramUnsupported), 126);
+		assert_eq!(execution_exit_status(ErrorCode::ProgramLaunchFailed), 126);
+		assert_eq!(execution_exit_status(ErrorCode::VfsFailed), 125);
+		assert_eq!(execution_exit_status(ErrorCode::ExecutionSupervisionFailed), 125);
+		assert_eq!(execution_exit_status(ErrorCode::EnvironmentInvalid), 125);
+		assert_eq!(execution_exit_status(ErrorCode::OperationCancelled), 0xC000_013A);
+	}
 
 	#[test]
 	fn application_error_uses_the_safe_marker_below_the_use_case_context() {

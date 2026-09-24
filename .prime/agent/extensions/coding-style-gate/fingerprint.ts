@@ -26,7 +26,6 @@ export function reviewFingerprint(
 ): string {
 	return hash([
 		config.model,
-		String(config.threshold),
 		...Object.entries(config.ruleThresholds)
 			.sort(([left], [right]) => left.localeCompare(right))
 			.flatMap(([id, threshold]) => [id, String(threshold)]),

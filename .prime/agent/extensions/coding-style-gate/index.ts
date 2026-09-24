@@ -2,7 +2,7 @@ import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 
-import { type GateConfig, loadConfig } from "./config";
+import { type GateConfig, loadConfig, validateRuleThresholds } from "./config";
 import { reviewFingerprint, snapshotFingerprint } from "./fingerprint";
 import { formatReview } from "./format";
 import { reviewChanges, type StyleReviewReport } from "./reviewer";
@@ -19,6 +19,11 @@ import {
 } from "./snapshot";
 
 const MESSAGE_TYPE = "coding-style-gate";
+const RECEIPT_TYPE = "coding-style-gate-receipt";
+const BEFORE_SNAPSHOT_FAILED = "coding-style-gate could not capture the before-tool snapshot; this tool's Rust changes were not reviewed. Use /coding-style-gate status for details.";
+const AFTER_SNAPSHOT_FAILED = "coding-style-gate could not capture the after-tool snapshot; this tool's Rust changes were not reviewed. Use /coding-style-gate status for details.";
+const FINAL_SNAPSHOT_FAILED = "coding-style-gate could not capture the final snapshot; full-task Rust changes were not reviewed. Use /coding-style-gate status for details.";
+const BASELINE_SNAPSHOT_FAILED = "coding-style-gate could not capture the session baseline snapshot; full-task review is unavailable. Use /coding-style-gate status for details.";
 const REVIEW_FAILED = "coding-style-gate could not review the Rust changes. Use /coding-style-gate status for details.";
 
 interface PendingSnapshot {
@@ -36,6 +41,14 @@ interface PreparedReview {
 interface CompletedReview {
 	fingerprint: string;
 	report: StyleReviewReport;
+	files: string[];
+	cachedFiles: number;
+}
+
+interface ReviewTrigger {
+	trigger: "tool_result" | "agent_end" | "check" | "session_start" | "tool_call";
+	toolCallId?: string;
+	toolName?: string;
 }
 
 interface BlockedState {
@@ -90,6 +103,7 @@ function runWasAborted(messages: readonly unknown[]): boolean {
 
 export default function codingStyleGate(pi: ExtensionAPI): void {
 	const pendingSnapshots = new Map<string, PendingSnapshot>();
+	const failedSnapshots = new Set<string>();
 	const reviewCache = new Map<string, Promise<StyleReviewReport>>();
 	const state: GateState = {};
 	let reviewTail = Promise.resolve();
@@ -115,6 +129,7 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 			return undefined;
 		}
 		const rules = await loadStyleRules(root, config.styleFile);
+		validateRuleThresholds(config.ruleThresholds, rules);
 		const moduleReferences = new Map(
 			changes.map((change) => [change.path, findModuleReferencingFiles(after, change.path)]),
 		);
@@ -139,6 +154,7 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 		}
 
 		let request = reviewCache.get(prepared.fingerprint);
+		const cached = request !== undefined;
 		if (request === undefined) {
 			const client = new TypeSafeClient({
 				defaultModel: config.model,
@@ -150,7 +166,6 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 				maxConcurrency: config.maxConcurrency,
 				moduleReferences: prepared.moduleReferences,
 				model: config.model,
-				threshold: config.threshold,
 				ruleThresholds: config.ruleThresholds,
 				signal,
 			});
@@ -158,7 +173,12 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 		}
 
 		try {
-			return { fingerprint: prepared.fingerprint, report: await request };
+			return {
+				fingerprint: prepared.fingerprint,
+				report: await request,
+				files: prepared.changes.map((change) => change.path),
+				cachedFiles: cached ? prepared.changes.length : 0,
+			};
 		} catch (error) {
 			reviewCache.delete(prepared.fingerprint);
 			throw new ReviewFailure(errorText(error), prepared.fingerprint);
@@ -241,6 +261,10 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 		}
 
 		return {
+			files: completed.flatMap(({ root, review }) =>
+				review.files.map((file) => root === after.primaryRoot ? file : join(root, file)),
+			),
+			cachedFiles: completed.reduce((total, { review }) => total + review.cachedFiles, 0),
 			fingerprint: snapshotFingerprint(new Map(completed.map(({ root, review }) => [root, review.fingerprint]))),
 			report: {
 				model: [...new Set(completed.map(({ review }) => review.report.model))].join(", "),
@@ -290,12 +314,43 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 		)}`;
 	}
 
+	function recordReview(ctx: ExtensionContext, trigger: ReviewTrigger, completed: CompletedReview): void {
+		pi.appendEntry(RECEIPT_TYPE, {
+			version: 1,
+			timestamp: new Date().toISOString(),
+			root: ctx.cwd,
+			...trigger,
+			outcome: "reviewed",
+			fingerprint: completed.fingerprint,
+			model: completed.report.model,
+			files: completed.files,
+			filesReviewed: completed.report.filesReviewed,
+			cachedFiles: completed.cachedFiles,
+			findingCount: completed.report.findings.length,
+			findings: completed.report.findings.map((finding) => ({
+				file: finding.file,
+				rule: finding.rule.id,
+				probability: finding.probability,
+			})),
+		});
+	}
+
+	function recordFailure(ctx: ExtensionContext, trigger: ReviewTrigger, stage: string): void {
+		// Error text can contain provider responses. Keep receipts metadata-only.
+		pi.appendEntry(RECEIPT_TYPE, {
+			version: 1,
+			timestamp: new Date().toISOString(),
+			root: ctx.cwd,
+			...trigger,
+			outcome: "failed",
+			stage,
+		});
+	}
+
 	function reportToUser(ctx: ExtensionContext, text: string, level: "info" | "warning" | "error" = "info"): void {
-		if (ctx.hasUI) {
-			ctx.ui.notify(text, level);
-			return;
-		}
-		pi.sendMessage({ customType: MESSAGE_TYPE, content: text, display: true });
+		// Persist the message even when the interactive UI renders it as a toast.
+		pi.sendMessage({ customType: MESSAGE_TYPE, content: text, display: !ctx.hasUI });
+		if (ctx.hasUI) ctx.ui.notify(text, level);
 	}
 
 	function clearBlock(): void {
@@ -333,6 +388,8 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		pendingSnapshots.clear();
+		failedSnapshots.clear();
 		state.taskBaseline = undefined;
 		state.baselineCaptureFailed = false;
 		state.followUps = 0;
@@ -340,10 +397,13 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 		try {
 			const config = await loadConfig(ctx.cwd);
 			state.activeConfig = config;
+			if (!config.enabled) return;
 			state.taskBaseline = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
 		} catch (error) {
 			state.baselineCaptureFailed = true;
 			state.lastError = errorText(error);
+			recordFailure(ctx, { trigger: "session_start" }, "baseline_snapshot");
+			reportToUser(ctx, BASELINE_SNAPSHOT_FAILED, "warning");
 		}
 	});
 
@@ -359,20 +419,28 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 			});
 		} catch (error) {
 			state.lastError = errorText(error);
+			failedSnapshots.add(event.toolCallId);
+			recordFailure(ctx, { trigger: "tool_call", toolCallId: event.toolCallId, toolName: event.toolName }, "before_tool_snapshot");
 		}
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
 		const pending = pendingSnapshots.get(event.toolCallId);
 		pendingSnapshots.delete(event.toolCallId);
+		if (failedSnapshots.delete(event.toolCallId)) {
+			return { content: [...event.content, resultMessage(BEFORE_SNAPSHOT_FAILED)] };
+		}
 		if (pending === undefined) {
 			return;
 		}
 
 		return serial(async () => {
+			const trigger: ReviewTrigger = { trigger: "tool_result", toolCallId: event.toolCallId, toolName: event.toolName };
+			let stage = "after_tool_snapshot";
 			try {
 				const config = await activeConfig(ctx.cwd);
 				const after = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
+				stage = "review";
 				const completed = await inspectWorkspace(
 					pending.snapshot,
 					after,
@@ -385,13 +453,15 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				}
 				state.lastError = undefined;
 				state.lastReport = completed.report;
+				recordReview(ctx, trigger, completed);
 				if (completed.report.findings.length === 0) {
 					return;
 				}
 				return { content: [...event.content, resultMessage(formatReview(completed.report))] };
 			} catch (error) {
 				state.lastError = errorText(error);
-				return { content: [...event.content, resultMessage(REVIEW_FAILED)] };
+				recordFailure(ctx, trigger, stage);
+				return { content: [...event.content, resultMessage(stage === "after_tool_snapshot" ? AFTER_SNAPSHOT_FAILED : REVIEW_FAILED)] };
 			}
 		});
 	});
@@ -419,6 +489,7 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				}
 				state.lastError = undefined;
 				state.lastReport = completed.report;
+				recordReview(ctx, { trigger: "agent_end" }, completed);
 				if (completed.report.findings.length === 0) {
 					clearBlock();
 					return;
@@ -431,15 +502,17 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				}
 			} catch (error) {
 				state.lastError = errorText(error);
+				recordFailure(ctx, { trigger: "agent_end" }, current === undefined ? "final_snapshot" : state.taskBaseline === undefined ? "baseline_unavailable" : "review");
 				const errorFingerprint =
 					error instanceof ReviewFailure
 						? `error:${error.fingerprint}`
 						: fallbackFailureFingerprint(current, config);
 				const fallbackConfig = config ?? (await activeConfig(ctx.cwd).catch(() => undefined));
+				const message = current === undefined ? FINAL_SNAPSHOT_FAILED : state.taskBaseline === undefined ? BASELINE_SNAPSHOT_FAILED : REVIEW_FAILED;
 				if (fallbackConfig?.mode === "enforce") {
-					blockCompletion(errorFingerprint, REVIEW_FAILED, fallbackConfig);
+					blockCompletion(errorFingerprint, message, fallbackConfig);
 				} else if (fallbackConfig?.enabled) {
-					reportToUser(ctx, REVIEW_FAILED, "warning");
+					reportToUser(ctx, message, "warning");
 				}
 			}
 		});
@@ -461,6 +534,7 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 					const config = await activeConfig(ctx.cwd);
 					const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
 					pendingSnapshots.clear();
+					failedSnapshots.clear();
 					state.taskBaseline = current;
 					state.baselineCaptureFailed = false;
 					state.followUps = 0;
@@ -476,19 +550,30 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 			if (action === "check") {
 				await ctx.waitForIdle();
 				await serial(async () => {
-					const config = await activeConfig(ctx.cwd);
-					const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
-					if (state.taskBaseline === undefined) {
-						throw new Error("coding-style-gate: task baseline is unavailable; use /coding-style-gate reset");
+					let stage = "final_snapshot";
+					try {
+						const config = await activeConfig(ctx.cwd);
+						const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
+						stage = "baseline_unavailable";
+						if (state.taskBaseline === undefined) {
+							throw new Error("coding-style-gate: task baseline is unavailable; use /coding-style-gate reset");
+						}
+						stage = "review";
+						const completed = await inspectWorkspace(state.taskBaseline, current, config, ctx.signal);
+						if (completed === undefined) {
+							reportToUser(ctx, "coding-style-gate found no task-local Rust changes.");
+							return;
+						}
+						state.lastError = undefined;
+						state.lastReport = completed.report;
+						recordReview(ctx, { trigger: "check" }, completed);
+						reportToUser(ctx, formatReview(completed.report), completed.report.findings.length ? "warning" : "info");
+					} catch (error) {
+						state.lastError = errorText(error);
+						recordFailure(ctx, { trigger: "check" }, stage);
+						const message = stage === "final_snapshot" ? FINAL_SNAPSHOT_FAILED : stage === "baseline_unavailable" ? BASELINE_SNAPSHOT_FAILED : REVIEW_FAILED;
+						reportToUser(ctx, message, "warning");
 					}
-					const completed = await inspectWorkspace(state.taskBaseline, current, config, ctx.signal);
-					if (completed === undefined) {
-						reportToUser(ctx, "coding-style-gate found no task-local Rust changes.");
-						return;
-					}
-					state.lastError = undefined;
-					state.lastReport = completed.report;
-					reportToUser(ctx, formatReview(completed.report), completed.report.findings.length ? "warning" : "info");
 				});
 				return;
 			}
@@ -503,10 +588,14 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				await serial(async () => {
 					const config = await activeConfig(ctx.cwd);
 					const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
-					const normalFingerprint =
-						state.taskBaseline === undefined
+					let normalFingerprint: string | undefined;
+					try {
+						normalFingerprint = state.taskBaseline === undefined
 							? undefined
 							: await prepareWorkspaceFingerprint(state.taskBaseline, current, config);
+					} catch (error) {
+						state.lastError = errorText(error);
+					}
 					const errorFingerprint =
 						normalFingerprint === undefined
 							? fallbackFailureFingerprint(current, config)
@@ -536,7 +625,7 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 			const override = state.override ? ` Override: ${state.override.reason}` : "";
 			reportToUser(
 				ctx,
-				`coding-style-gate is ${config.enabled ? "enabled" : "disabled"} in ${config.mode} mode; TypeSafe credentials ${process.env.TYPESAFE_API_KEY ? "available" : "missing"}; model ${config.model}; threshold ${config.threshold.toFixed(2)}; ${Object.keys(config.ruleThresholds).length} calibrated rule override(s). ${summary}${state.lastError ? ` Last error: ${state.lastError}` : ""}${override}`,
+				`coding-style-gate is ${config.enabled ? "enabled" : "disabled"} in ${config.mode} mode; TypeSafe credentials ${process.env.TYPESAFE_API_KEY ? "available" : "missing"}; model ${config.model}; ${Object.keys(config.ruleThresholds).length} explicit rule threshold(s). ${summary}${state.lastError ? ` Last error: ${state.lastError}` : ""}${override}`,
 				state.lastError || state.blocked ? "warning" : "info",
 			);
 		},

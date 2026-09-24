@@ -2,6 +2,7 @@ use crate::manifest::manifest_game_binding;
 use crate::manifest::validate_manifest;
 use crate::profile::MAX_PROFILE_BYTES;
 use crate::profile::is_activatable_plugin_name;
+use crate::profile::validate_execution_profile;
 use crate::profile::validate_profile_files;
 use crate::profile_activation::ProfileActivation;
 use crate::publication::OPERATION_DIRECTORY;
@@ -66,14 +67,27 @@ pub(crate) fn load(
 	access: InstallationStateAccess,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, SnapshotLoad::Installation(access), cancellation)
+	load_inner(root_path, SnapshotLoad::Installation(access), None, cancellation)
 }
 
 pub(crate) fn load_during_publication(
 	root_path: &Path,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, SnapshotLoad::Publication, cancellation)
+	load_inner(root_path, SnapshotLoad::Publication, None, cancellation)
+}
+
+pub(crate) fn load_execution(
+	root_path: &Path,
+	binding: &GameBinding,
+	cancellation: &CancellationToken,
+) -> Result<EnvironmentSnapshotData, ErrorMarker> {
+	load_inner(
+		root_path,
+		SnapshotLoad::Installation(InstallationStateAccess::Mutation),
+		Some(binding),
+		cancellation,
+	)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +99,7 @@ enum SnapshotLoad {
 fn load_inner(
 	root_path: &Path,
 	load: SnapshotLoad,
+	effective_binding: Option<&GameBinding>,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
 	if cancellation.is_cancelled() {
@@ -170,7 +185,11 @@ fn load_inner(
 	let overwrite = root
 		.open_dir("overwrite")
 		.context(ErrorMarker::environment_invalid(None))?;
-	validate_profile_files(&profile_dir, false, cancellation)?;
+	if effective_binding.is_some() {
+		validate_execution_profile(&profile_dir, cancellation)?;
+	} else {
+		validate_profile_files(&profile_dir, false, cancellation)?;
+	}
 	validate_provider(&overwrite, ProviderKind::Overwrite, cancellation)?;
 
 	let mut directories = HashMap::new();
@@ -246,9 +265,17 @@ fn load_inner(
 	if !directories.is_empty() {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
-	let game_binding = manifest_game_binding(&root, cancellation)?;
-	let current_winners = current_winners(&root, &mods, &installed_mods, cancellation)?;
-	let file_dependencies = file_dependencies(&profile_dir, &current_winners, cancellation)?;
+	let game_binding = if let Some(binding) = effective_binding {
+		binding.clone()
+	} else {
+		manifest_game_binding(&root, cancellation)?
+	};
+	let current_winners = current_winners(&root, &mods, &installed_mods, &game_binding, cancellation)?;
+	let file_dependencies = if effective_binding.is_some() {
+		HashMap::new()
+	} else {
+		file_dependencies(&profile_dir, &current_winners, cancellation)?
+	};
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
@@ -606,11 +633,12 @@ fn current_winners(
 	root: &SafeDir,
 	mods: &SafeDir,
 	installed: &[InstalledMod],
+	binding: &GameBinding,
 	cancellation: &CancellationToken,
 ) -> Result<HashMap<DataRelativePath, EffectiveResult>, ErrorMarker> {
 	let mut namespace = HashMap::new();
 	let mut winners = HashMap::new();
-	let game = SafeDir::open_absolute(manifest_game_binding(root, cancellation)?.game_directory().as_path())
+	let game = SafeDir::open_absolute(binding.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(None))?;
 	match game.open_dir("Data") {
 		Ok(data) => {
