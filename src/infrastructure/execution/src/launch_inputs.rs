@@ -60,8 +60,6 @@ mod windows_inputs;
 pub use windows_inputs::CallerSnapshot;
 #[cfg(windows)]
 pub use windows_inputs::InheritedStreams;
-#[cfg(windows)]
-pub use windows_inputs::ResolvedLaunch;
 
 #[cfg(test)]
 mod tests {
