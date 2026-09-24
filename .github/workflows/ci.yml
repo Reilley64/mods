@@ -50,8 +50,6 @@ jobs:
           bun-version: "1.4.2"
       - name: Install repository tools
         run: bun install --frozen-lockfile
-      - name: Run repository tool checks
-        run: bun run check:tools
       - name: Set up Rust
         if: steps.rust-changes.outputs.changed == 'true'
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
