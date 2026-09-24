@@ -2,6 +2,26 @@
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+## Claim before working
+
+Before starting work on an issue, assign it to the driving developer. Use
+`gh issue edit <number> --add-assignee @me` when working as the authenticated
+GitHub user, then verify the assignment with
+`gh issue view <number> --json assignees`. If another developer already owns the
+issue, confirm the handoff before proceeding. If assignment fails, report the
+blocker before starting implementation.
+
+## Close through the PR
+
+End each issue-resolving PR description with `Closes #<number>` on its own line.
+For multiple resolved issues, add one closing line per issue at the end. Verify
+that each referenced issue's acceptance criteria are complete; partial work uses
+`Refs #<number>` instead and leaves the issue open. For work without an associated
+issue, state that explicitly rather than inventing a closing reference.
+
+Use GitHub's closing keyword `Closes`, not `Implements`, so merging into the
+default branch closes the issue automatically.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.

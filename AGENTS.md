@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+Before starting issue work or writing a PR description, read `docs/agents/issue-tracker.md` for assignment and closing-reference requirements.
 
 ### Triage labels
 
