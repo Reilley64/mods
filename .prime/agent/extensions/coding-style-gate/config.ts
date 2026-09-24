@@ -8,7 +8,6 @@ export interface GateConfig {
 	enabled: boolean;
 	mode: GateMode;
 	model: string;
-	threshold: number;
 	ruleThresholds: Record<string, number>;
 	styleFile: string;
 	tools: string[];
@@ -23,10 +22,7 @@ export const DEFAULT_CONFIG: GateConfig = {
 	enabled: true,
 	mode: "advisory",
 	model: "jev-1.13.0",
-	threshold: 0.86,
-	ruleThresholds: {
-		"application-use-cases-and-ports-use-case-local-implementation-modules": 0.45,
-	},
+	ruleThresholds: {},
 	styleFile: "CODING_STYLE.md",
 	tools: ["ipython", "edit", "bash"],
 	timeoutMs: 10_000,
@@ -47,24 +43,16 @@ export async function loadConfig(root: string): Promise<GateConfig> {
 		}
 	}
 
+	if (Object.hasOwn(value, "threshold")) {
+		throw new Error("coding-style-gate: legacy threshold is unsupported; migrate to explicit ruleThresholds for every style rule");
+	}
+
 	const config = { ...DEFAULT_CONFIG, ...value };
 	const normalizedStyleFile = typeof config.styleFile === "string" ? normalize(config.styleFile) : "";
 	if (config.mode !== "advisory" && config.mode !== "enforce") {
 		throw new Error(`coding-style-gate: invalid mode ${String(config.mode)}`);
 	}
-	if (!Number.isFinite(config.threshold) || config.threshold < 0 || config.threshold > 1) {
-		throw new Error("coding-style-gate: threshold must be between 0 and 1");
-	}
-	if (
-		typeof config.ruleThresholds !== "object" ||
-		config.ruleThresholds === null ||
-		Array.isArray(config.ruleThresholds) ||
-		Object.entries(config.ruleThresholds).some(
-			([id, threshold]) => !id || typeof threshold !== "number" || !Number.isFinite(threshold) || threshold < 0 || threshold > 1,
-		)
-	) {
-		throw new Error("coding-style-gate: ruleThresholds must map rule IDs to thresholds between 0 and 1");
-	}
+	validateRuleThresholds(config.ruleThresholds);
 	if (typeof config.enabled !== "boolean") {
 		throw new Error("coding-style-gate: enabled must be a boolean");
 	}
@@ -103,4 +91,23 @@ export async function loadConfig(root: string): Promise<GateConfig> {
 	}
 
 	return config;
+}
+
+export function validateRuleThresholds(
+	thresholds: unknown,
+	rules: readonly { id: string }[] = [],
+): asserts thresholds is Readonly<Record<string, number>> {
+	if (typeof thresholds !== "object" || thresholds === null || Array.isArray(thresholds)) {
+		throw new Error("coding-style-gate: ruleThresholds must map rule IDs to numeric thresholds between 0 and 1");
+	}
+	for (const [id, threshold] of Object.entries(thresholds)) {
+		if (!id || typeof threshold !== "number" || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+			throw new Error(`coding-style-gate: invalid threshold for rule ${id}; expected a finite number between 0 and 1`);
+		}
+	}
+	for (const rule of rules) {
+		if (!Object.hasOwn(thresholds, rule.id)) {
+			throw new Error(`coding-style-gate: missing threshold for rule ${rule.id}; add an explicit ruleThresholds entry`);
+		}
+	}
 }

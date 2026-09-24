@@ -42,6 +42,18 @@ run();
 run();
 \`\`\`
 `;
+const ruleThresholds = { "comments-and-documentation-reason-comments": 0.86 };
+
+async function writeStyleFixture(root: string): Promise<void> {
+	await writeFile(join(root, "CODING_STYLE.md"), style);
+	await mkdir(join(root, ".prime", "agent"), { recursive: true });
+	try {
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds }), { flag: "wx" });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+	}
+}
+
 const reviewedFiles: string[] = [];
 
 const server = setupServer(
@@ -115,11 +127,65 @@ function fakePrime() {
 
 describe("Prime coding style gate", () => {
 
+	test("allows missing-threshold overrides and invalidates them on source or config changes", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-missing-override-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		await writeStyleFixture(root);
+		const configPath = join(root, ".prime", "agent", "coding-style-gate.json");
+		const config = { mode: "enforce", ruleThresholds: {}, maxFollowUps: 4 };
+		await writeFile(configPath, JSON.stringify(config));
+		await writeFile(join(root, "example.rs"), "fn run() {}\n");
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
+		await prime.handlers.get("session_start")?.({}, context);
+		await writeFile(join(root, "example.rs"), "// Run the function.\nfn run() {}\n");
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(1);
+		await prime.commands.get("coding-style-gate").handler("override thresholds need calibration", context);
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(1);
+		await writeFile(join(root, "example.rs"), "// Run the function again.\nfn run() {}\n");
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(2);
+		await prime.commands.get("coding-style-gate").handler("override current state accepted", context);
+		await writeFile(configPath, JSON.stringify({ ...config, ruleThresholds: { unrelated: 0.4 } }));
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(3);
+		expect(reviewedFiles).toHaveLength(0);
+	});
+
+
+	for (const mode of ["advisory", "enforce"]) {
+		test(`rejects missing thresholds without API requests in ${mode} mode`, async () => {
+			const root = await mkdtemp(join(tmpdir(), "coding-style-threshold-"));
+			temporaryDirectories.push(root);
+			await Bun.$`git init -q ${root}`;
+			await writeStyleFixture(root);
+			await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode, ruleThresholds: {} }));
+			await writeFile(join(root, "example.rs"), "fn run() {}\n");
+			const prime = fakePrime();
+			codingStyleGate(prime.api as never);
+			const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
+			await prime.handlers.get("session_start")?.({}, context);
+			await prime.handlers.get("tool_call")?.({ toolName: "ipython", toolCallId: "missing-threshold" }, context);
+			await writeFile(join(root, "example.rs"), "// Run the function.\nfn run() {}\n");
+			const result = await prime.handlers.get("tool_result")?.({ toolName: "ipython", toolCallId: "missing-threshold", content: [] }, context);
+			expect(result.content[0].text).toContain("could not review");
+			await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+			expect(reviewedFiles).toHaveLength(0);
+			expect(prime.userMessages).toHaveLength(mode === "enforce" ? 1 : 0);
+			await prime.commands.get("coding-style-gate").handler("status", context);
+			expect(JSON.stringify(prime.sentMessages)).toContain("missing threshold for rule comments-and-documentation-reason-comments");
+		});
+	}
+
 	test("reports after-tool snapshot failures and manual check failures", async () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-after-"));
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -140,7 +206,7 @@ describe("Prime coding style gate", () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-receipt-"));
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -184,7 +250,7 @@ describe("Prime coding style gate", () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-ui-"));
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -205,9 +271,9 @@ describe("Prime coding style gate", () => {
 		const worktree = join(container, "created-worktree");
 		await mkdir(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -241,9 +307,9 @@ describe("Prime coding style gate", () => {
 		const worktree = join(container, "unchanged-worktree");
 		await mkdir(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
 		await Bun.$`git -C ${root} worktree add -q -b unchanged-test ${worktree}`;
 		await Bun.$`mkdir -p ${join(worktree, ".prime", "agent")}`;
@@ -279,9 +345,9 @@ describe("Prime coding style gate", () => {
 		const worktree = join(container, "external-worktree");
 		await mkdir(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
 		await Bun.$`git -C ${root} worktree add -q -b external-test ${worktree}`;
 		const prime = fakePrime();
@@ -318,15 +384,15 @@ describe("Prime coding style gate", () => {
 		const worktree = join(container, "edit-only-worktree");
 		await mkdir(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
 		await Bun.$`git -C ${root} worktree add -q -b edit-only-test ${worktree}`;
 		await Bun.$`mkdir -p ${join(worktree, ".prime", "agent")}`;
 		await writeFile(
 			join(worktree, ".prime", "agent", "coding-style-gate.json"),
-			JSON.stringify({ tools: ["edit"] }),
+			JSON.stringify({ ruleThresholds, tools: ["edit"] }),
 		);
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -358,22 +424,22 @@ describe("Prime coding style gate", () => {
 		const worktree = join(container, "configured-worktree");
 		await mkdir(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
 		await Bun.$`git -C ${root} worktree add -q -b configured-test ${worktree}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
 		await writeFile(
 			join(root, ".prime", "agent", "coding-style-gate.json"),
-			JSON.stringify({ tools: ["edit"] }),
+			JSON.stringify({ ruleThresholds, tools: ["edit"] }),
 		);
 		await rm(join(worktree, "CODING_STYLE.md"));
 		await Bun.$`mkdir -p ${join(worktree, ".prime", "agent")}`;
 		await writeFile(join(worktree, "WORKTREE_STYLE.md"), style);
 		await writeFile(
 			join(worktree, ".prime", "agent", "coding-style-gate.json"),
-			JSON.stringify({ styleFile: "WORKTREE_STYLE.md" }),
+			JSON.stringify({ ruleThresholds, styleFile: "WORKTREE_STYLE.md" }),
 		);
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -412,14 +478,14 @@ describe("Prime coding style gate", () => {
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
 		await writeFile(
 			join(root, ".prime", "agent", "coding-style-gate.json"),
-			JSON.stringify({ additionalRoots: [additionalRoot] }),
+			JSON.stringify({ ruleThresholds, additionalRoots: [additionalRoot] }),
 		);
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "session.rs"), "fn session() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md session.rs`;
-		await writeFile(join(additionalRoot, "CODING_STYLE.md"), style);
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md session.rs`;
+		await writeStyleFixture(additionalRoot);
 		await writeFile(join(additionalRoot, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${additionalRoot} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${additionalRoot} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
@@ -448,9 +514,9 @@ describe("Prime coding style gate", () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
@@ -482,10 +548,10 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
@@ -507,11 +573,11 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode: "enforce", model: "jev-test" }));
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test" }));
+		await writeStyleFixture(root);
 		await writeFile(join(root, "a.rs"), "fn a() {}\n");
 		await writeFile(join(root, "b.rs"), "fn b() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md a.rs b.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md a.rs b.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
@@ -544,10 +610,10 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
@@ -570,8 +636,8 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
+		await writeStyleFixture(root);
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
@@ -593,10 +659,10 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
@@ -612,7 +678,7 @@ describe("Prime coding style gate", () => {
 
 		await writeFile(
 			join(root, ".prime", "agent", "coding-style-gate.json"),
-			JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 2, threshold: 0.81 }),
+			JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 2, ruleThresholds: { "comments-and-documentation-reason-comments": 0.81 } }),
 		);
 		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
 		expect(prime.userMessages).toHaveLength(2);
@@ -623,9 +689,9 @@ describe("Prime coding style gate", () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
@@ -644,10 +710,10 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
+		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
@@ -667,15 +733,15 @@ describe("Prime coding style gate", () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
-		await writeFile(join(root, "CODING_STYLE.md"), style);
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
+		await writeStyleFixture(root);
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
 		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} } };
 		await prime.handlers.get("session_start")?.({ reason: "startup" }, context);
 		await Bun.$`git init -q ${root}`;
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
-		await Bun.$`git -C ${root} add CODING_STYLE.md example.rs`;
+		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
 
 		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
 

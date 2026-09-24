@@ -2,7 +2,7 @@ import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 
-import { type GateConfig, loadConfig } from "./config";
+import { type GateConfig, loadConfig, validateRuleThresholds } from "./config";
 import { reviewFingerprint, snapshotFingerprint } from "./fingerprint";
 import { formatReview } from "./format";
 import { reviewChanges, type StyleReviewReport } from "./reviewer";
@@ -129,6 +129,7 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 			return undefined;
 		}
 		const rules = await loadStyleRules(root, config.styleFile);
+		validateRuleThresholds(config.ruleThresholds, rules);
 		const moduleReferences = new Map(
 			changes.map((change) => [change.path, findModuleReferencingFiles(after, change.path)]),
 		);
@@ -165,7 +166,6 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 				maxConcurrency: config.maxConcurrency,
 				moduleReferences: prepared.moduleReferences,
 				model: config.model,
-				threshold: config.threshold,
 				ruleThresholds: config.ruleThresholds,
 				signal,
 			});
@@ -588,10 +588,14 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				await serial(async () => {
 					const config = await activeConfig(ctx.cwd);
 					const current = await captureRustWorkspaceSnapshot(ctx.cwd, workspaceOptions(config));
-					const normalFingerprint =
-						state.taskBaseline === undefined
+					let normalFingerprint: string | undefined;
+					try {
+						normalFingerprint = state.taskBaseline === undefined
 							? undefined
 							: await prepareWorkspaceFingerprint(state.taskBaseline, current, config);
+					} catch (error) {
+						state.lastError = errorText(error);
+					}
 					const errorFingerprint =
 						normalFingerprint === undefined
 							? fallbackFailureFingerprint(current, config)
@@ -621,7 +625,7 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 			const override = state.override ? ` Override: ${state.override.reason}` : "";
 			reportToUser(
 				ctx,
-				`coding-style-gate is ${config.enabled ? "enabled" : "disabled"} in ${config.mode} mode; TypeSafe credentials ${process.env.TYPESAFE_API_KEY ? "available" : "missing"}; model ${config.model}; threshold ${config.threshold.toFixed(2)}; ${Object.keys(config.ruleThresholds).length} calibrated rule override(s). ${summary}${state.lastError ? ` Last error: ${state.lastError}` : ""}${override}`,
+				`coding-style-gate is ${config.enabled ? "enabled" : "disabled"} in ${config.mode} mode; TypeSafe credentials ${process.env.TYPESAFE_API_KEY ? "available" : "missing"}; model ${config.model}; ${Object.keys(config.ruleThresholds).length} explicit rule threshold(s). ${summary}${state.lastError ? ` Last error: ${state.lastError}` : ""}${override}`,
 				state.lastError || state.blocked ? "warning" : "info",
 			);
 		},

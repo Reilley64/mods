@@ -1,0 +1,3384 @@
+{
+  "model": "jev-1.13.0",
+  "timestamp": "2026-09-24T01:35:06.202Z",
+  "rubricSha256": "92a3988ce3612fef88dd207f7db40327e8d3922a65654e0d41fd433ea6913410",
+  "fixtureSha256": "44c7ecf2f4dff9fbc88fee9c684e9085df6e05ad1f9c9948c570aa39c18ec11e",
+  "method": "Training only; minimize 2*FP+FN, then fewer FP, then largest observed margin, then larger threshold. Per-rule held-out validation uses all production rubric questions. Training and legacy regression score only their labeled rule with the production question builder.",
+  "results": {
+    "comments-and-documentation-readability-before-secondary-cleanup": {
+      "threshold": 0.475,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "comments-and-documentation-self-explanatory-code": {
+      "threshold": 0.395,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "comments-and-documentation-reason-comments": {
+      "threshold": 0.52,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 6,
+        "falseNegative": 0,
+        "trueNegative": 11,
+        "falsePositive": 0
+      }
+    },
+    "comments-and-documentation-rustdoc-format": {
+      "threshold": 0.35,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "formatting-and-imports-import-placement-and-use": {
+      "threshold": 0.315,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "formatting-and-imports-phase-spacing": {
+      "threshold": 0.20500000000000002,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "architecture-and-modules-dependency-direction-and-composition-roots": {
+      "threshold": 0.16,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "architecture-and-modules-capability-modules-and-public-apis": {
+      "threshold": 0.47,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "dependencies-prefer-established-crates": {
+      "threshold": 0.39999999999999997,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "dependencies-narrow-custom-implementations": {
+      "threshold": 0.16499999999999998,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "application-use-cases-and-ports-use-case-declaration-order": {
+      "threshold": 0.075,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "application-use-cases-and-ports-use-case-parameters": {
+      "threshold": 0.08499999999999999,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "application-use-cases-and-ports-callable-port-invocation": {
+      "threshold": 0.435,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "application-use-cases-and-ports-focused-use-case-orchestration": {
+      "threshold": 0.315,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "application-use-cases-and-ports-use-case-local-implementation-modules": {
+      "threshold": 0.5750000000000001,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 4,
+        "falseNegative": 1,
+        "trueNegative": 5,
+        "falsePositive": 0
+      }
+    },
+    "errors-rootcause-lower-layer-results": {
+      "threshold": 0.45,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "errors-preserve-causes-at-owned-boundaries": {
+      "threshold": 0.445,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "errors-context-propagation": {
+      "threshold": 0.55,
+      "separable": false,
+      "training": {
+        "truePositive": 1,
+        "falseNegative": 1,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "errors-presentation-error-allowlists": {
+      "threshold": 0.42500000000000004,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "runtime-primitives-primitive-selection-order": {
+      "threshold": 0.32999999999999996,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 1
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "runtime-primitives-custom-primitive-justification": {
+      "threshold": 0.555,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 0,
+        "falseNegative": 1,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "runtime-primitives-cancellation-propagation-and-checkpoints": {
+      "threshold": 0.405,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 1
+      }
+    },
+    "runtime-primitives-cancellation-state-preservation": {
+      "threshold": 0.485,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 0,
+        "falseNegative": 1,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "runtime-primitives-separate-progress-reporting": {
+      "threshold": 0.51,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "control-flow-choose-the-narrow-conditional-form": {
+      "threshold": 0.365,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "control-flow-guard-clauses": {
+      "threshold": 0.45999999999999996,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "control-flow-match-only-for-multi-way-logic": {
+      "threshold": 0.525,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "functions-and-tests-cohesive-orchestration": {
+      "threshold": 0.44,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "functions-and-tests-helpers-earn-an-interface": {
+      "threshold": 0.7,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 0,
+        "falseNegative": 1,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "functions-and-tests-pre-mvp-test-placement": {
+      "threshold": 0.27,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "functions-and-tests-test-public-behavior": {
+      "threshold": 0.255,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "unsafe-rust-unsafe-layer-confinement": {
+      "threshold": 0.42000000000000004,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "unsafe-rust-safety-proofs": {
+      "threshold": 0.585,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      }
+    },
+    "linux-review-principles-retained-language-neutral-review-priorities": {
+      "threshold": 0.41,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    },
+    "linux-review-principles-retained-rust-conventions-over-linux-c-idioms": {
+      "threshold": 0.395,
+      "separable": true,
+      "training": {
+        "truePositive": 2,
+        "falseNegative": 0,
+        "trueNegative": 2,
+        "falsePositive": 0
+      },
+      "validation": {
+        "truePositive": 1,
+        "falseNegative": 0,
+        "trueNegative": 1,
+        "falsePositive": 0
+      },
+      "regression": {
+        "truePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 0,
+        "falsePositive": 0
+      }
+    }
+  },
+  "rows": [
+    {
+      "name": "allowlisted-report-good",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 679,
+      "outputTokens": 27
+    },
+    {
+      "name": "application-anyhow-return-compliant",
+      "ruleId": "errors-rootcause-lower-layer-results",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.12,
+      "inputTokens": 733,
+      "outputTokens": 28
+    },
+    {
+      "name": "application-anyhow-return-violation",
+      "ruleId": "errors-rootcause-lower-layer-results",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 713,
+      "outputTokens": 28
+    },
+    {
+      "name": "application-filesystem-handle-violation",
+      "ruleId": "architecture-and-modules-dependency-direction-and-composition-roots",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.25,
+      "inputTokens": 776,
+      "outputTokens": 35
+    },
+    {
+      "name": "application-provider-error-compliant",
+      "ruleId": "architecture-and-modules-dependency-direction-and-composition-roots",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 13104,
+      "outputTokens": 907
+    },
+    {
+      "name": "application-provider-error-violation",
+      "ruleId": "architecture-and-modules-dependency-direction-and-composition-roots",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.5,
+      "inputTokens": 13078,
+      "outputTokens": 907
+    },
+    {
+      "name": "application-unchecked-index-compliant",
+      "ruleId": "unsafe-rust-unsafe-layer-confinement",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.02,
+      "inputTokens": 13073,
+      "outputTokens": 907
+    },
+    {
+      "name": "application-unchecked-index-violation",
+      "ruleId": "unsafe-rust-unsafe-layer-confinement",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 13077,
+      "outputTokens": 907
+    },
+    {
+      "name": "boolean-dispatch-compliant",
+      "ruleId": "control-flow-choose-the-narrow-conditional-form",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 698,
+      "outputTokens": 32
+    },
+    {
+      "name": "boolean-dispatch-violation",
+      "ruleId": "control-flow-choose-the-narrow-conditional-form",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.92,
+      "inputTokens": 705,
+      "outputTokens": 32
+    },
+    {
+      "name": "boolean-side-effect-match-compliant",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.17,
+      "inputTokens": 742,
+      "outputTokens": 29
+    },
+    {
+      "name": "boolean-side-effect-match-violation",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.91,
+      "inputTokens": 734,
+      "outputTokens": 29
+    },
+    {
+      "name": "borrowed-dependency-bundle-compliant",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 747,
+      "outputTokens": 31
+    },
+    {
+      "name": "borrowed-dependency-bundle-violation",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.09,
+      "inputTokens": 748,
+      "outputTokens": 31
+    },
+    {
+      "name": "business-values-in-dependency-bag-compliant",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 779,
+      "outputTokens": 31
+    },
+    {
+      "name": "business-values-in-dependency-bag-violation",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.3,
+      "inputTokens": 788,
+      "outputTokens": 31
+    },
+    {
+      "name": "callback-cancels-copy-compliant",
+      "ruleId": "runtime-primitives-separate-progress-reporting",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.17,
+      "inputTokens": 777,
+      "outputTokens": 30
+    },
+    {
+      "name": "callback-cancels-copy-violation",
+      "ruleId": "runtime-primitives-separate-progress-reporting",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.93,
+      "inputTokens": 764,
+      "outputTokens": 30
+    },
+    {
+      "name": "cancel-after-final-publication-compliant",
+      "ruleId": "runtime-primitives-cancellation-state-preservation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 792,
+      "outputTokens": 31
+    },
+    {
+      "name": "cancel-after-final-publication-violation",
+      "ruleId": "runtime-primitives-cancellation-state-preservation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.84,
+      "inputTokens": 790,
+      "outputTokens": 31
+    },
+    {
+      "name": "cancellation-helper-bad",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.95,
+      "inputTokens": 779,
+      "outputTokens": 35
+    },
+    {
+      "name": "cancellation-in-middle-compliant",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 13077,
+      "outputTokens": 907
+    },
+    {
+      "name": "cancellation-in-middle-violation",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.69,
+      "inputTokens": 13077,
+      "outputTokens": 907
+    },
+    {
+      "name": "capability-interface-helper-bad",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.74,
+      "inputTokens": 1312,
+      "outputTokens": 36
+    },
+    {
+      "name": "capability-interface-types-good",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 1326,
+      "outputTokens": 36
+    },
+    {
+      "name": "cleanup-label-emulation-compliant",
+      "ruleId": "linux-review-principles-retained-rust-conventions-over-linux-c-idioms",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 13104,
+      "outputTokens": 907
+    },
+    {
+      "name": "cleanup-label-emulation-violation",
+      "ruleId": "linux-review-principles-retained-rust-conventions-over-linux-c-idioms",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.82,
+      "inputTokens": 13147,
+      "outputTokens": 907
+    },
+    {
+      "name": "colocated-profile-unit-test",
+      "ruleId": "functions-and-tests-pre-mvp-test-placement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 752,
+      "outputTokens": 27
+    },
+    {
+      "name": "combined-control-port-compliant",
+      "ruleId": "runtime-primitives-separate-progress-reporting",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.11,
+      "inputTokens": 767,
+      "outputTokens": 30
+    },
+    {
+      "name": "combined-control-port-violation",
+      "ruleId": "runtime-primitives-separate-progress-reporting",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.85,
+      "inputTokens": 711,
+      "outputTokens": 30
+    },
+    {
+      "name": "comment-child-status-bad",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.76,
+      "inputTokens": 1020,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-child-status-good",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.2,
+      "inputTokens": 1024,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-mutated-nonrecursive-priority-reason",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.92,
+      "inputTokens": 1024,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-mutated-thread-affine-worker",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.89,
+      "inputTokens": 1020,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-mutated-utf16-command-line",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.89,
+      "inputTokens": 1038,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-diagnostic-zero-sentinel",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.21,
+      "inputTokens": 1019,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-fomod-not-semver",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 1037,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-native-open-safety",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 1058,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-nonrecursive-priority-reason",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.17,
+      "inputTokens": 1033,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-publication-cancellation-boundary",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.11,
+      "inputTokens": 1061,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-thread-affine-worker",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.13,
+      "inputTokens": 1041,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-utf16-command-line",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 1062,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-real-write-all-control-errors",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 982,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-second-interrupt-bad",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.91,
+      "inputTokens": 927,
+      "outputTokens": 27
+    },
+    {
+      "name": "comment-second-interrupt-good",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.5,
+      "inputTokens": 922,
+      "outputTokens": 27
+    },
+    {
+      "name": "competing-use-case-contexts-compliant",
+      "ruleId": "errors-context-propagation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.23,
+      "inputTokens": 793,
+      "outputTokens": 24
+    },
+    {
+      "name": "competing-use-case-contexts-violation",
+      "ruleId": "errors-context-propagation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.16,
+      "inputTokens": 753,
+      "outputTokens": 24
+    },
+    {
+      "name": "compress-recovery-compliant",
+      "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 13129,
+      "outputTokens": 907
+    },
+    {
+      "name": "compress-recovery-violation",
+      "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.8,
+      "inputTokens": 13128,
+      "outputTokens": 907
+    },
+    {
+      "name": "conditional-block-import-compliant",
+      "ruleId": "formatting-and-imports-import-placement-and-use",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 13088,
+      "outputTokens": 907
+    },
+    {
+      "name": "conditional-block-import-violation",
+      "ruleId": "formatting-and-imports-import-placement-and-use",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.95,
+      "inputTokens": 13095,
+      "outputTokens": 907
+    },
+    {
+      "name": "cross-file-test-module",
+      "ruleId": "functions-and-tests-pre-mvp-test-placement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.46,
+      "inputTokens": 716,
+      "outputTokens": 27
+    },
+    {
+      "name": "custom-async-notification-compliant",
+      "ruleId": "runtime-primitives-primitive-selection-order",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.5,
+      "inputTokens": 13102,
+      "outputTokens": 907
+    },
+    {
+      "name": "custom-async-notification-violation",
+      "ruleId": "runtime-primitives-primitive-selection-order",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.75,
+      "inputTokens": 13139,
+      "outputTokens": 907
+    },
+    {
+      "name": "custom-counting-permit-compliant",
+      "ruleId": "runtime-primitives-primitive-selection-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 783,
+      "outputTokens": 28
+    },
+    {
+      "name": "custom-counting-permit-violation",
+      "ruleId": "runtime-primitives-primitive-selection-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.57,
+      "inputTokens": 796,
+      "outputTokens": 28
+    },
+    {
+      "name": "custom-one-shot-signal-compliant",
+      "ruleId": "runtime-primitives-primitive-selection-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.09,
+      "inputTokens": 755,
+      "outputTokens": 28
+    },
+    {
+      "name": "custom-one-shot-signal-violation",
+      "ruleId": "runtime-primitives-primitive-selection-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.77,
+      "inputTokens": 782,
+      "outputTokens": 28
+    },
+    {
+      "name": "custom-retry-suite-compliant",
+      "ruleId": "dependencies-narrow-custom-implementations",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.09,
+      "inputTokens": 13159,
+      "outputTokens": 907
+    },
+    {
+      "name": "custom-retry-suite-violation",
+      "ruleId": "dependencies-narrow-custom-implementations",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.66,
+      "inputTokens": 13154,
+      "outputTokens": 907
+    },
+    {
+      "name": "decode-cryptic-profile-flags-compliant",
+      "ruleId": "comments-and-documentation-self-explanatory-code",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 740,
+      "outputTokens": 29
+    },
+    {
+      "name": "decode-cryptic-profile-flags-violation",
+      "ruleId": "comments-and-documentation-self-explanatory-code",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.78,
+      "inputTokens": 745,
+      "outputTokens": 29
+    },
+    {
+      "name": "dedicated-infrastructure-ffi-wrapper",
+      "ruleId": "unsafe-rust-unsafe-layer-confinement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 776,
+      "outputTokens": 28
+    },
+    {
+      "name": "deduplicate-state-decisions-compliant",
+      "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 792,
+      "outputTokens": 33
+    },
+    {
+      "name": "deduplicate-state-decisions-violation",
+      "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 778,
+      "outputTokens": 33
+    },
+    {
+      "name": "delete-completed-success-guard-compliant",
+      "ruleId": "runtime-primitives-cancellation-state-preservation",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 13131,
+      "outputTokens": 907
+    },
+    {
+      "name": "delete-completed-success-guard-violation",
+      "ruleId": "runtime-primitives-cancellation-state-preservation",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.11,
+      "inputTokens": 13131,
+      "outputTokens": 907
+    },
+    {
+      "name": "delete-immediate-safety-proof-compliant",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 13156,
+      "outputTokens": 907
+    },
+    {
+      "name": "delete-immediate-safety-proof-violation",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.91,
+      "inputTokens": 13157,
+      "outputTokens": 907
+    },
+    {
+      "name": "delete-old-capability-helper",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 13127,
+      "outputTokens": 907
+    },
+    {
+      "name": "delete-separate-test-target",
+      "ruleId": "functions-and-tests-pre-mvp-test-placement",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 13065,
+      "outputTokens": 907
+    },
+    {
+      "name": "dependency-collection-suite-compliant",
+      "ruleId": "functions-and-tests-test-public-behavior",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 784,
+      "outputTokens": 27
+    },
+    {
+      "name": "dependency-collection-suite-violation",
+      "ruleId": "functions-and-tests-test-public-behavior",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.43,
+      "inputTokens": 852,
+      "outputTokens": 27
+    },
+    {
+      "name": "dependency-toml-syntax-suite-compliant",
+      "ruleId": "functions-and-tests-test-public-behavior",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 13120,
+      "outputTokens": 907
+    },
+    {
+      "name": "dependency-toml-syntax-suite-violation",
+      "ruleId": "functions-and-tests-test-public-behavior",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.44,
+      "inputTokens": 13163,
+      "outputTokens": 907
+    },
+    {
+      "name": "discarded-error-bad",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.95,
+      "inputTokens": 748,
+      "outputTokens": 29
+    },
+    {
+      "name": "doc-struct-fields-compliant",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.13,
+      "inputTokens": 13091,
+      "outputTokens": 907
+    },
+    {
+      "name": "doc-struct-fields-violation",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.76,
+      "inputTokens": 13073,
+      "outputTokens": 907
+    },
+    {
+      "name": "domain-transport-type-compliant",
+      "ruleId": "architecture-and-modules-dependency-direction-and-composition-roots",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 779,
+      "outputTokens": 35
+    },
+    {
+      "name": "domain-transport-type-violation",
+      "ruleId": "architecture-and-modules-dependency-direction-and-composition-roots",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 775,
+      "outputTokens": 35
+    },
+    {
+      "name": "domain-unchecked-string-compliant",
+      "ruleId": "unsafe-rust-unsafe-layer-confinement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 755,
+      "outputTokens": 28
+    },
+    {
+      "name": "domain-unchecked-string-violation",
+      "ruleId": "unsafe-rust-unsafe-layer-confinement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.86,
+      "inputTokens": 740,
+      "outputTokens": 28
+    },
+    {
+      "name": "dumping-ground-module-compliant",
+      "ruleId": "architecture-and-modules-capability-modules-and-public-apis",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.24,
+      "inputTokens": 698,
+      "outputTokens": 34
+    },
+    {
+      "name": "dumping-ground-module-violation",
+      "ruleId": "architecture-and-modules-capability-modules-and-public-apis",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.76,
+      "inputTokens": 689,
+      "outputTokens": 34
+    },
+    {
+      "name": "else-after-continue-compliant",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 753,
+      "outputTokens": 26
+    },
+    {
+      "name": "else-after-continue-violation",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.86,
+      "inputTokens": 751,
+      "outputTokens": 26
+    },
+    {
+      "name": "else-after-return-compliant",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 13086,
+      "outputTokens": 907
+    },
+    {
+      "name": "else-after-return-violation",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.89,
+      "inputTokens": 13094,
+      "outputTokens": 907
+    },
+    {
+      "name": "erase-io-cause-compliant",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 789,
+      "outputTokens": 29
+    },
+    {
+      "name": "erase-io-cause-violation",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.81,
+      "inputTokens": 783,
+      "outputTokens": 29
+    },
+    {
+      "name": "errno-return-convention-compliant",
+      "ruleId": "linux-review-principles-retained-rust-conventions-over-linux-c-idioms",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 745,
+      "outputTokens": 37
+    },
+    {
+      "name": "errno-return-convention-violation",
+      "ruleId": "linux-review-principles-retained-rust-conventions-over-linux-c-idioms",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.76,
+      "inputTokens": 740,
+      "outputTokens": 37
+    },
+    {
+      "name": "explain-opaque-retry-number-compliant",
+      "ruleId": "comments-and-documentation-self-explanatory-code",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.27,
+      "inputTokens": 781,
+      "outputTokens": 29
+    },
+    {
+      "name": "explain-opaque-retry-number-violation",
+      "ruleId": "comments-and-documentation-self-explanatory-code",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.52,
+      "inputTokens": 754,
+      "outputTokens": 29
+    },
+    {
+      "name": "export-leaf-parser-compliant",
+      "ruleId": "architecture-and-modules-capability-modules-and-public-apis",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 701,
+      "outputTokens": 34
+    },
+    {
+      "name": "export-leaf-parser-violation",
+      "ruleId": "architecture-and-modules-capability-modules-and-public-apis",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.7,
+      "inputTokens": 691,
+      "outputTokens": 34
+    },
+    {
+      "name": "expose-parser-internals-compliant",
+      "ruleId": "architecture-and-modules-capability-modules-and-public-apis",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.11,
+      "inputTokens": 13093,
+      "outputTokens": 907
+    },
+    {
+      "name": "expose-parser-internals-violation",
+      "ruleId": "architecture-and-modules-capability-modules-and-public-apis",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.6,
+      "inputTokens": 13096,
+      "outputTokens": 907
+    },
+    {
+      "name": "expose-report-as-json-detail-compliant",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 13094,
+      "outputTokens": 907
+    },
+    {
+      "name": "expose-report-as-json-detail-violation",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.92,
+      "inputTokens": 13079,
+      "outputTokens": 907
+    },
+    {
+      "name": "extract-numbered-steps-compliant",
+      "ruleId": "functions-and-tests-cohesive-orchestration",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 13080,
+      "outputTokens": 907
+    },
+    {
+      "name": "extract-numbered-steps-violation",
+      "ruleId": "functions-and-tests-cohesive-orchestration",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.85,
+      "inputTokens": 13163,
+      "outputTokens": 907
+    },
+    {
+      "name": "fold-validation-into-publication-compliant",
+      "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 773,
+      "outputTokens": 33
+    },
+    {
+      "name": "fold-validation-into-publication-violation",
+      "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 787,
+      "outputTokens": 33
+    },
+    {
+      "name": "fragment-one-use-queueing-compliant",
+      "ruleId": "functions-and-tests-cohesive-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.1,
+      "inputTokens": 839,
+      "outputTokens": 28
+    },
+    {
+      "name": "fragment-one-use-queueing-violation",
+      "ruleId": "functions-and-tests-cohesive-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.78,
+      "inputTokens": 889,
+      "outputTokens": 28
+    },
+    {
+      "name": "fragment-single-use-label-flow-compliant",
+      "ruleId": "functions-and-tests-cohesive-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 814,
+      "outputTokens": 28
+    },
+    {
+      "name": "fragment-single-use-label-flow-violation",
+      "ruleId": "functions-and-tests-cohesive-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.78,
+      "inputTokens": 916,
+      "outputTokens": 28
+    },
+    {
+      "name": "generic-child-helper",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.82,
+      "inputTokens": 1344,
+      "outputTokens": 36
+    },
+    {
+      "name": "guard-clause-bad",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.97,
+      "inputTokens": 750,
+      "outputTokens": 26
+    },
+    {
+      "name": "guard-clause-good",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 744,
+      "outputTokens": 26
+    },
+    {
+      "name": "handwritten-asynchronous-delay-compliant",
+      "ruleId": "dependencies-prefer-established-crates",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.19,
+      "inputTokens": 13087,
+      "outputTokens": 907
+    },
+    {
+      "name": "handwritten-asynchronous-delay-violation",
+      "ruleId": "dependencies-prefer-established-crates",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.49,
+      "inputTokens": 13115,
+      "outputTokens": 907
+    },
+    {
+      "name": "handwritten-text-decoder-compliant",
+      "ruleId": "dependencies-prefer-established-crates",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 785,
+      "outputTokens": 25
+    },
+    {
+      "name": "handwritten-text-decoder-violation",
+      "ruleId": "dependencies-prefer-established-crates",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.84,
+      "inputTokens": 957,
+      "outputTokens": 25
+    },
+    {
+      "name": "handwritten-toml-table-compliant",
+      "ruleId": "dependencies-prefer-established-crates",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.09,
+      "inputTokens": 778,
+      "outputTokens": 25
+    },
+    {
+      "name": "handwritten-toml-table-violation",
+      "ruleId": "dependencies-prefer-established-crates",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.71,
+      "inputTokens": 823,
+      "outputTokens": 25
+    },
+    {
+      "name": "helper-checkpoint-compliant",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.17,
+      "inputTokens": 812,
+      "outputTokens": 35
+    },
+    {
+      "name": "helper-checkpoint-violation",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.92,
+      "inputTokens": 858,
+      "outputTokens": 35
+    },
+    {
+      "name": "ignore-durable-write-failure-compliant",
+      "ruleId": "linux-review-principles-retained-language-neutral-review-priorities",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.1,
+      "inputTokens": 779,
+      "outputTokens": 32
+    },
+    {
+      "name": "ignore-durable-write-failure-violation",
+      "ruleId": "linux-review-principles-retained-language-neutral-review-priorities",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.85,
+      "inputTokens": 753,
+      "outputTokens": 32
+    },
+    {
+      "name": "infrastructure-eyre-return-compliant",
+      "ruleId": "errors-rootcause-lower-layer-results",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.16,
+      "inputTokens": 13091,
+      "outputTokens": 907
+    },
+    {
+      "name": "infrastructure-eyre-return-violation",
+      "ruleId": "errors-rootcause-lower-layer-results",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.85,
+      "inputTokens": 13078,
+      "outputTokens": 907
+    },
+    {
+      "name": "infrastructure-filesystem-handle-exception",
+      "ruleId": "architecture-and-modules-dependency-direction-and-composition-roots",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 779,
+      "outputTokens": 35
+    },
+    {
+      "name": "inline-cancellation-good",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.73,
+      "inputTokens": 789,
+      "outputTokens": 35
+    },
+    {
+      "name": "integration-test-target",
+      "ruleId": "functions-and-tests-pre-mvp-test-placement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.9,
+      "inputTokens": 731,
+      "outputTokens": 27
+    },
+    {
+      "name": "kernel-doc-item-comment-compliant",
+      "ruleId": "linux-review-principles-retained-rust-conventions-over-linux-c-idioms",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 745,
+      "outputTokens": 37
+    },
+    {
+      "name": "kernel-doc-item-comment-violation",
+      "ruleId": "linux-review-principles-retained-rust-conventions-over-linux-c-idioms",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 770,
+      "outputTokens": 37
+    },
+    {
+      "name": "load-transform-save-compliant",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.15,
+      "inputTokens": 805,
+      "outputTokens": 27
+    },
+    {
+      "name": "load-transform-save-violation",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.89,
+      "inputTokens": 800,
+      "outputTokens": 27
+    },
+    {
+      "name": "local-tree-import-compliant",
+      "ruleId": "formatting-and-imports-import-placement-and-use",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 778,
+      "outputTokens": 29
+    },
+    {
+      "name": "local-tree-import-violation",
+      "ruleId": "formatting-and-imports-import-placement-and-use",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.88,
+      "inputTokens": 778,
+      "outputTokens": 29
+    },
+    {
+      "name": "match-only-error-pattern-compliant",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 733,
+      "outputTokens": 29
+    },
+    {
+      "name": "match-only-error-pattern-violation",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.88,
+      "inputTokens": 741,
+      "outputTokens": 29
+    },
+    {
+      "name": "meaningful-helper-good",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.09,
+      "inputTokens": 813,
+      "outputTokens": 29
+    },
+    {
+      "name": "missing-custom-decoder-gap-compliant",
+      "ruleId": "dependencies-narrow-custom-implementations",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.1,
+      "inputTokens": 905,
+      "outputTokens": 28
+    },
+    {
+      "name": "missing-custom-decoder-gap-violation",
+      "ruleId": "dependencies-narrow-custom-implementations",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.21,
+      "inputTokens": 772,
+      "outputTokens": 28
+    },
+    {
+      "name": "missing-output-declaration-compliant",
+      "ruleId": "application-use-cases-and-ports-use-case-declaration-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 799,
+      "outputTokens": 32
+    },
+    {
+      "name": "missing-output-declaration-violation",
+      "ruleId": "application-use-cases-and-ports-use-case-declaration-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.82,
+      "inputTokens": 761,
+      "outputTokens": 32
+    },
+    {
+      "name": "missing-pointer-proof-compliant",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.41,
+      "inputTokens": 839,
+      "outputTokens": 27
+    },
+    {
+      "name": "missing-pointer-proof-violation",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.91,
+      "inputTokens": 799,
+      "outputTokens": 27
+    },
+    {
+      "name": "module-doc-form-compliant",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.13,
+      "inputTokens": 975,
+      "outputTokens": 28
+    },
+    {
+      "name": "module-doc-form-violation",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.57,
+      "inputTokens": 984,
+      "outputTokens": 28
+    },
+    {
+      "name": "narrate-tangled-refresh-compliant",
+      "ruleId": "comments-and-documentation-self-explanatory-code",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 13089,
+      "outputTokens": 907
+    },
+    {
+      "name": "narrate-tangled-refresh-violation",
+      "ruleId": "comments-and-documentation-self-explanatory-code",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.88,
+      "inputTokens": 13092,
+      "outputTokens": 907
+    },
+    {
+      "name": "narrated-clear-compliant",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.21,
+      "inputTokens": 902,
+      "outputTokens": 27
+    },
+    {
+      "name": "narrated-clear-violation",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.94,
+      "inputTokens": 894,
+      "outputTokens": 27
+    },
+    {
+      "name": "nested-single-owner-helper",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.34,
+      "inputTokens": 1350,
+      "outputTokens": 36
+    },
+    {
+      "name": "nested-writable-success-compliant",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 756,
+      "outputTokens": 26
+    },
+    {
+      "name": "nested-writable-success-violation",
+      "ruleId": "control-flow-guard-clauses",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.86,
+      "inputTokens": 762,
+      "outputTokens": 26
+    },
+    {
+      "name": "one-argument-callable-port-compliant",
+      "ruleId": "application-use-cases-and-ports-callable-port-invocation",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 13103,
+      "outputTokens": 907
+    },
+    {
+      "name": "one-argument-callable-port-violation",
+      "ruleId": "application-use-cases-and-ports-callable-port-invocation",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.84,
+      "inputTokens": 13102,
+      "outputTokens": 907
+    },
+    {
+      "name": "one-use-condition-wrapper-compliant",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.62,
+      "inputTokens": 771,
+      "outputTokens": 29
+    },
+    {
+      "name": "one-use-condition-wrapper-violation",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 792,
+      "outputTokens": 29
+    },
+    {
+      "name": "optional-notification-match-compliant",
+      "ruleId": "control-flow-choose-the-narrow-conditional-form",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 13072,
+      "outputTokens": 907
+    },
+    {
+      "name": "optional-notification-match-violation",
+      "ruleId": "control-flow-choose-the-narrow-conditional-form",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.88,
+      "inputTokens": 13080,
+      "outputTokens": 907
+    },
+    {
+      "name": "ordinary-api-contract-compliant",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 967,
+      "outputTokens": 28
+    },
+    {
+      "name": "ordinary-api-contract-violation",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.94,
+      "inputTokens": 952,
+      "outputTokens": 28
+    },
+    {
+      "name": "panic-expected-cache-miss-compliant",
+      "ruleId": "linux-review-principles-retained-language-neutral-review-priorities",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 772,
+      "outputTokens": 32
+    },
+    {
+      "name": "panic-expected-cache-miss-violation",
+      "ruleId": "linux-review-principles-retained-language-neutral-review-priorities",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.72,
+      "inputTokens": 743,
+      "outputTokens": 32
+    },
+    {
+      "name": "parameter-order-bad",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.96,
+      "inputTokens": 740,
+      "outputTokens": 31
+    },
+    {
+      "name": "parameter-order-good",
+      "ruleId": "application-use-cases-and-ports-use-case-parameters",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 741,
+      "outputTokens": 31
+    },
+    {
+      "name": "path-attribute-test-module",
+      "ruleId": "functions-and-tests-pre-mvp-test-placement",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.78,
+      "inputTokens": 13062,
+      "outputTokens": 907
+    },
+    {
+      "name": "pointless-helper-bad",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.94,
+      "inputTokens": 806,
+      "outputTokens": 29
+    },
+    {
+      "name": "presentation-ffi-call",
+      "ruleId": "unsafe-rust-unsafe-layer-confinement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.79,
+      "inputTokens": 736,
+      "outputTokens": 28
+    },
+    {
+      "name": "preserved-error-good",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 748,
+      "outputTokens": 29
+    },
+    {
+      "name": "private-container-layout-test-compliant",
+      "ruleId": "functions-and-tests-test-public-behavior",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 757,
+      "outputTokens": 27
+    },
+    {
+      "name": "private-container-layout-test-violation",
+      "ruleId": "functions-and-tests-test-public-behavior",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.43,
+      "inputTokens": 771,
+      "outputTokens": 27
+    },
+    {
+      "name": "progress-event-returns-stop-command-compliant",
+      "ruleId": "runtime-primitives-separate-progress-reporting",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.21,
+      "inputTokens": 13095,
+      "outputTokens": 907
+    },
+    {
+      "name": "progress-event-returns-stop-command-violation",
+      "ruleId": "runtime-primitives-separate-progress-reporting",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.89,
+      "inputTokens": 13077,
+      "outputTokens": 907
+    },
+    {
+      "name": "qualified-call-sites-compliant",
+      "ruleId": "formatting-and-imports-import-placement-and-use",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.22,
+      "inputTokens": 791,
+      "outputTokens": 29
+    },
+    {
+      "name": "qualified-call-sites-violation",
+      "ruleId": "formatting-and-imports-import-placement-and-use",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.41,
+      "inputTokens": 791,
+      "outputTokens": 29
+    },
+    {
+      "name": "raw-report-bad",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.96,
+      "inputTokens": 675,
+      "outputTokens": 27
+    },
+    {
+      "name": "reason-comment-bad",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.96,
+      "inputTokens": 899,
+      "outputTokens": 27
+    },
+    {
+      "name": "reason-comment-good",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 904,
+      "outputTokens": 27
+    },
+    {
+      "name": "remove-child-semantic-marker-compliant",
+      "ruleId": "errors-context-propagation",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 13134,
+      "outputTokens": 907
+    },
+    {
+      "name": "remove-child-semantic-marker-violation",
+      "ruleId": "errors-context-propagation",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.88,
+      "inputTokens": 13126,
+      "outputTokens": 907
+    },
+    {
+      "name": "remove-custom-invariants-compliant",
+      "ruleId": "runtime-primitives-custom-primitive-justification",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 13157,
+      "outputTokens": 907
+    },
+    {
+      "name": "remove-custom-invariants-violation",
+      "ruleId": "runtime-primitives-custom-primitive-justification",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.32,
+      "inputTokens": 13139,
+      "outputTokens": 907
+    },
+    {
+      "name": "remove-instrumentation-compliant",
+      "ruleId": "application-use-cases-and-ports-use-case-declaration-order",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.03,
+      "inputTokens": 13147,
+      "outputTokens": 907
+    },
+    {
+      "name": "remove-instrumentation-violation",
+      "ruleId": "application-use-cases-and-ports-use-case-declaration-order",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.37,
+      "inputTokens": 13108,
+      "outputTokens": 907
+    },
+    {
+      "name": "remove-owned-context-compliant",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 13131,
+      "outputTokens": 907
+    },
+    {
+      "name": "remove-owned-context-violation",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.79,
+      "inputTokens": 13125,
+      "outputTokens": 907
+    },
+    {
+      "name": "repeated-owner-capability-helper",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.27,
+      "inputTokens": 1363,
+      "outputTokens": 36
+    },
+    {
+      "name": "replace-incoming-token-compliant",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.25,
+      "inputTokens": 13087,
+      "outputTokens": 907
+    },
+    {
+      "name": "replace-incoming-token-violation",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.84,
+      "inputTokens": 13090,
+      "outputTokens": 907
+    },
+    {
+      "name": "replace-ordinary-collection-compliant",
+      "ruleId": "runtime-primitives-custom-primitive-justification",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.43,
+      "inputTokens": 784,
+      "outputTokens": 31
+    },
+    {
+      "name": "replace-ordinary-collection-violation",
+      "ruleId": "runtime-primitives-custom-primitive-justification",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.75,
+      "inputTokens": 826,
+      "outputTokens": 31
+    },
+    {
+      "name": "replace-recovery-with-default-compliant",
+      "ruleId": "linux-review-principles-retained-language-neutral-review-priorities",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 13114,
+      "outputTokens": 907
+    },
+    {
+      "name": "replace-recovery-with-default-violation",
+      "ruleId": "linux-review-principles-retained-language-neutral-review-priorities",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.58,
+      "inputTokens": 13081,
+      "outputTokens": 907
+    },
+    {
+      "name": "required-id-nested-match-compliant",
+      "ruleId": "control-flow-choose-the-narrow-conditional-form",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.05,
+      "inputTokens": 720,
+      "outputTokens": 32
+    },
+    {
+      "name": "required-id-nested-match-violation",
+      "ruleId": "control-flow-choose-the-narrow-conditional-form",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.66,
+      "inputTokens": 724,
+      "outputTokens": 32
+    },
+    {
+      "name": "reuse-moved-to-helpers-compliant",
+      "ruleId": "application-use-cases-and-ports-focused-use-case-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 810,
+      "outputTokens": 32
+    },
+    {
+      "name": "reuse-moved-to-helpers-violation",
+      "ruleId": "application-use-cases-and-ports-focused-use-case-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.55,
+      "inputTokens": 794,
+      "outputTokens": 32
+    },
+    {
+      "name": "rollback-partial-copy-compliant",
+      "ruleId": "runtime-primitives-cancellation-state-preservation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.13,
+      "inputTokens": 779,
+      "outputTokens": 31
+    },
+    {
+      "name": "rollback-partial-copy-violation",
+      "ruleId": "runtime-primitives-cancellation-state-preservation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.89,
+      "inputTokens": 790,
+      "outputTokens": 31
+    },
+    {
+      "name": "rustdoc-format-bad",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.95,
+      "inputTokens": 970,
+      "outputTokens": 28
+    },
+    {
+      "name": "rustdoc-format-good",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 998,
+      "outputTokens": 28
+    },
+    {
+      "name": "rustdoc-obvious-count-compliant",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.19,
+      "inputTokens": 921,
+      "outputTokens": 27
+    },
+    {
+      "name": "rustdoc-obvious-count-violation",
+      "ruleId": "comments-and-documentation-reason-comments",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.83,
+      "inputTokens": 896,
+      "outputTokens": 27
+    },
+    {
+      "name": "semantic-spacing-bad",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.91,
+      "inputTokens": 786,
+      "outputTokens": 27
+    },
+    {
+      "name": "semantic-spacing-good",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 788,
+      "outputTokens": 27
+    },
+    {
+      "name": "shared-decoder-kept-in-export-compliant",
+      "ruleId": "application-use-cases-and-ports-focused-use-case-orchestration",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 13136,
+      "outputTokens": 907
+    },
+    {
+      "name": "shared-decoder-kept-in-export-violation",
+      "ruleId": "application-use-cases-and-ports-focused-use-case-orchestration",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.75,
+      "inputTokens": 13186,
+      "outputTokens": 907
+    },
+    {
+      "name": "shared-sort-in-use-case-compliant",
+      "ruleId": "application-use-cases-and-ports-focused-use-case-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 813,
+      "outputTokens": 32
+    },
+    {
+      "name": "shared-sort-in-use-case-violation",
+      "ruleId": "application-use-cases-and-ports-focused-use-case-orchestration",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.72,
+      "inputTokens": 858,
+      "outputTokens": 32
+    },
+    {
+      "name": "simple-match-bad",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.91,
+      "inputTokens": 726,
+      "outputTokens": 29
+    },
+    {
+      "name": "simple-match-good",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 718,
+      "outputTokens": 29
+    },
+    {
+      "name": "single-expression-transform-helper-compliant",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.48,
+      "inputTokens": 13068,
+      "outputTokens": 907
+    },
+    {
+      "name": "single-expression-transform-helper-violation",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.69,
+      "inputTokens": 13086,
+      "outputTokens": 907
+    },
+    {
+      "name": "single-forwarder-without-seam-compliant",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.37,
+      "inputTokens": 868,
+      "outputTokens": 29
+    },
+    {
+      "name": "single-forwarder-without-seam-violation",
+      "ruleId": "functions-and-tests-helpers-earn-an-interface",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.78,
+      "inputTokens": 793,
+      "outputTokens": 29
+    },
+    {
+      "name": "single-owner-capability-helper",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.81,
+      "inputTokens": 1353,
+      "outputTokens": 36
+    },
+    {
+      "name": "single-owner-label-helper",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.84,
+      "inputTokens": 13145,
+      "outputTokens": 907
+    },
+    {
+      "name": "single-relevant-enum-variant-compliant",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 13073,
+      "outputTokens": 907
+    },
+    {
+      "name": "single-relevant-enum-variant-violation",
+      "ruleId": "control-flow-match-only-for-multi-way-logic",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.82,
+      "inputTokens": 13081,
+      "outputTokens": 907
+    },
+    {
+      "name": "split-single-buffer-operation-compliant",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.17,
+      "inputTokens": 784,
+      "outputTokens": 27
+    },
+    {
+      "name": "split-single-buffer-operation-violation",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.24,
+      "inputTokens": 786,
+      "outputTokens": 27
+    },
+    {
+      "name": "string-domain-error-compliant",
+      "ruleId": "errors-rootcause-lower-layer-results",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.22,
+      "inputTokens": 760,
+      "outputTokens": 28
+    },
+    {
+      "name": "string-domain-error-violation",
+      "ruleId": "errors-rootcause-lower-layer-results",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.68,
+      "inputTokens": 734,
+      "outputTokens": 28
+    },
+    {
+      "name": "stringify-provider-cause-compliant",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.1,
+      "inputTokens": 777,
+      "outputTokens": 29
+    },
+    {
+      "name": "stringify-provider-cause-violation",
+      "ruleId": "errors-preserve-causes-at-owned-boundaries",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.79,
+      "inputTokens": 785,
+      "outputTokens": 29
+    },
+    {
+      "name": "swapped-output-dependencies-compliant",
+      "ruleId": "application-use-cases-and-ports-use-case-declaration-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 775,
+      "outputTokens": 32
+    },
+    {
+      "name": "swapped-output-dependencies-violation",
+      "ruleId": "application-use-cases-and-ports-use-case-declaration-order",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.09,
+      "inputTokens": 775,
+      "outputTokens": 32
+    },
+    {
+      "name": "terminal-debug-report-compliant",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 709,
+      "outputTokens": 27
+    },
+    {
+      "name": "terminal-debug-report-violation",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.92,
+      "inputTokens": 692,
+      "outputTokens": 27
+    },
+    {
+      "name": "test-fixture-inside-unit-module",
+      "ruleId": "functions-and-tests-pre-mvp-test-placement",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.08,
+      "inputTokens": 776,
+      "outputTokens": 27
+    },
+    {
+      "name": "transform-owned-boundary-compliant",
+      "ruleId": "errors-context-propagation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 775,
+      "outputTokens": 24
+    },
+    {
+      "name": "transform-owned-boundary-violation",
+      "ruleId": "errors-context-propagation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 765,
+      "outputTokens": 24
+    },
+    {
+      "name": "transport-display-report-compliant",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 740,
+      "outputTokens": 27
+    },
+    {
+      "name": "transport-display-report-violation",
+      "ruleId": "errors-presentation-error-allowlists",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.81,
+      "inputTokens": 700,
+      "outputTokens": 27
+    },
+    {
+      "name": "two-argument-callable-port-compliant",
+      "ruleId": "application-use-cases-and-ports-callable-port-invocation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 756,
+      "outputTokens": 32
+    },
+    {
+      "name": "two-argument-callable-port-violation",
+      "ruleId": "application-use-cases-and-ports-callable-port-invocation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.83,
+      "inputTokens": 752,
+      "outputTokens": 32
+    },
+    {
+      "name": "unbounded-compatibility-framework-compliant",
+      "ruleId": "dependencies-narrow-custom-implementations",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.12,
+      "inputTokens": 801,
+      "outputTokens": 28
+    },
+    {
+      "name": "unbounded-compatibility-framework-violation",
+      "ruleId": "dependencies-narrow-custom-implementations",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.53,
+      "inputTokens": 866,
+      "outputTokens": 28
+    },
+    {
+      "name": "unjustified-custom-latch-compliant",
+      "ruleId": "runtime-primitives-custom-primitive-justification",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.12,
+      "inputTokens": 873,
+      "outputTokens": 31
+    },
+    {
+      "name": "unjustified-custom-latch-violation",
+      "ruleId": "runtime-primitives-custom-primitive-justification",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.68,
+      "inputTokens": 826,
+      "outputTokens": 31
+    },
+    {
+      "name": "unsafe-api-without-caller-contract-compliant",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.18,
+      "inputTokens": 889,
+      "outputTokens": 27
+    },
+    {
+      "name": "unsafe-api-without-caller-contract-violation",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.76,
+      "inputTokens": 814,
+      "outputTokens": 27
+    },
+    {
+      "name": "unsafe-proof-bad",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.95,
+      "inputTokens": 789,
+      "outputTokens": 27
+    },
+    {
+      "name": "unsafe-proof-good",
+      "ruleId": "unsafe-rust-safety-proofs",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 836,
+      "outputTokens": 27
+    },
+    {
+      "name": "unstructured-panic-contract-compliant",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.07,
+      "inputTokens": 13095,
+      "outputTokens": 907
+    },
+    {
+      "name": "unstructured-panic-contract-violation",
+      "ruleId": "comments-and-documentation-rustdoc-format",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.41,
+      "inputTokens": 13083,
+      "outputTokens": 907
+    },
+    {
+      "name": "use-case-entrypoint-good",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 1376,
+      "outputTokens": 36
+    },
+    {
+      "name": "use-case-entrypoint-helper-bad",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.78,
+      "inputTokens": 1344,
+      "outputTokens": 36
+    },
+    {
+      "name": "use-case-local-application-scope-bad",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.76,
+      "inputTokens": 1305,
+      "outputTokens": 36
+    },
+    {
+      "name": "use-case-local-empty-placeholder-good",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.06,
+      "inputTokens": 1233,
+      "outputTokens": 36
+    },
+    {
+      "name": "use-case-local-module-bad",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.83,
+      "inputTokens": 1326,
+      "outputTokens": 36
+    },
+    {
+      "name": "use-case-local-module-good",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.27,
+      "inputTokens": 1318,
+      "outputTokens": 36
+    },
+    {
+      "name": "use-case-local-non-application-scope-good",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 1319,
+      "outputTokens": 36
+    },
+    {
+      "name": "use-case-local-placeholder-logic-bad",
+      "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+      "split": "validation",
+      "cohort": "regression",
+      "expectedViolation": true,
+      "probability": 0.44,
+      "inputTokens": 1304,
+      "outputTokens": 36
+    },
+    {
+      "name": "validate-acquire-publish-compliant",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.13,
+      "inputTokens": 13117,
+      "outputTokens": 907
+    },
+    {
+      "name": "validate-acquire-publish-violation",
+      "ruleId": "formatting-and-imports-phase-spacing",
+      "split": "validation",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.87,
+      "inputTokens": 13114,
+      "outputTokens": 907
+    },
+    {
+      "name": "wrapped-port-cancellation-compliant",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.14,
+      "inputTokens": 779,
+      "outputTokens": 35
+    },
+    {
+      "name": "wrapped-port-cancellation-violation",
+      "ruleId": "runtime-primitives-cancellation-propagation-and-checkpoints",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.64,
+      "inputTokens": 805,
+      "outputTokens": 35
+    },
+    {
+      "name": "zero-argument-callable-port-compliant",
+      "ruleId": "application-use-cases-and-ports-callable-port-invocation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": false,
+      "probability": 0.04,
+      "inputTokens": 737,
+      "outputTokens": 32
+    },
+    {
+      "name": "zero-argument-callable-port-violation",
+      "ruleId": "application-use-cases-and-ports-callable-port-invocation",
+      "split": "train",
+      "cohort": "per-rule",
+      "expectedViolation": true,
+      "probability": 0.83,
+      "inputTokens": 737,
+      "outputTokens": 32
+    }
+  ],
+  "usage": {
+    "inputTokens": 1088752,
+    "outputTokens": 69964
+  },
+  "corrections": [
+    {
+      "reason": "Deleted files have no current module-reference evidence. Re-evaluated this one held-out case with an empty reference list; thresholds stayed frozen.",
+      "previous": {
+        "name": "delete-old-capability-helper",
+        "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+        "split": "validation",
+        "cohort": "per-rule",
+        "expectedViolation": false,
+        "probability": 0.06,
+        "inputTokens": 13146,
+        "outputTokens": 907
+      },
+      "corrected": {
+        "name": "delete-old-capability-helper",
+        "ruleId": "application-use-cases-and-ports-use-case-local-implementation-modules",
+        "split": "validation",
+        "cohort": "per-rule",
+        "expectedViolation": false,
+        "probability": 0.04,
+        "inputTokens": 13127,
+        "outputTokens": 907
+      }
+    }
+  ],
+  "apiCaseEvaluations": 258,
+  "reviewerSha256": "e35474fbc47be7d2dfc10676082579b6ec00f18337a5924da75bcd15080c6ca0",
+  "calibrationInputSha256": "7838202a8f029cad7abc51715ff09c2fc0f34e67c8d863d3a76390f405772857",
+  "fittingSha256": "5ec4b312403da8424afaf765325266bfc3ac394a8e78cbd635f504cf64cf43fe"
+}

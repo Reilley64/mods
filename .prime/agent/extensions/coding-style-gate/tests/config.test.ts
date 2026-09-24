@@ -45,17 +45,32 @@ describe("coding style gate configuration", () => {
 		await expect(loadConfig(root)).rejects.toThrow("at most 16");
 	});
 
-	test("uses the calibrated threshold by default", async () => {
+	test("has no implicit thresholds", async () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
 
 		const config = await loadConfig(root);
-		expect(config.threshold).toBe(0.86);
-		expect(config.ruleThresholds).toEqual({
-			"application-use-cases-and-ports-use-case-local-implementation-modules": 0.45,
-		});
+		expect(config.ruleThresholds).toEqual({});
 		expect(config.worktreeScope).toBe("registered");
 		expect(config.additionalRoots).toEqual([]);
+	});
+
+	test("rejects legacy scalar thresholds with migration instructions", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(root);
+		await mkdir(join(root, ".prime", "agent"), { recursive: true });
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ threshold: 0.8 }));
+		await expect(loadConfig(root)).rejects.toThrow("ruleThresholds");
+	});
+
+	test("rejects invalid per-rule config thresholds", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(root);
+		await mkdir(join(root, ".prime", "agent"), { recursive: true });
+		for (const threshold of [null, "0.8", -0.1, 1.1]) {
+			await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds: { rule: threshold } }));
+			await expect(loadConfig(root)).rejects.toThrow("threshold");
+		}
 	});
 
 });

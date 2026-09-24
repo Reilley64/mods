@@ -74,6 +74,29 @@ const rules: StyleRule[] = [
 ];
 
 describe("Jev coding style review", () => {
+	test("validates all thresholds before any API request", async () => {
+		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		for (const invalid of [undefined, NaN, Infinity, -0.1, 1.1, "0.8"]) {
+			const ruleThresholds = { [rules[0]!.id]: 0.8, [rules[1]!.id]: invalid };
+			await expect(reviewChanges(client, changes, rules, {
+				model: "jev-test", ruleThresholds: ruleThresholds as Record<string, number>,
+			})).rejects.toThrow("threshold");
+		}
+		await expect(reviewChanges(client, changes, rules, {
+			model: "jev-test", ruleThresholds: { [rules[0]!.id]: 0.8 },
+		})).rejects.toThrow(rules[1]!.id);
+		expect(requests).toHaveLength(0);
+	});
+
+	test("accepts a full threshold map when reviewing a rule subset", async () => {
+		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const report = await reviewChanges(client, changes, [rules[0]!], {
+			model: "jev-test",
+			ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])),
+		});
+		expect(report.findings).toHaveLength(1);
+	});
+
 	test("sends changed hunks through the official SDK and reports threshold violations", async () => {
 		const client = new TypeSafeClient({
 			apiKey: "test-key",
@@ -83,7 +106,7 @@ describe("Jev coding style review", () => {
 
 		const report = await reviewChanges(client, changes, rules, {
 			model: "jev-test",
-			threshold: 0.8,
+			ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])),
 			moduleReferences: new Map([["src/application/src/example.rs", ["src/application/src/caller.rs"]]]),
 		});
 
@@ -141,7 +164,7 @@ describe("Jev coding style review", () => {
 			goodExamples: [`good ${index}`],
 		}));
 
-		const report = await reviewChanges(client, changes, manyRules, { model: "jev-test", threshold: 0.8 });
+		const report = await reviewChanges(client, changes, manyRules, { model: "jev-test", ruleThresholds: Object.fromEntries(manyRules.map((rule) => [rule.id, 0.8])) });
 
 		expect(requests).toHaveLength(1);
 		expect(Object.keys((requests[0] as { questions: Record<string, unknown> }).questions)).toHaveLength(33);
@@ -164,7 +187,7 @@ describe("Jev coding style review", () => {
 		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
 		for (const malformed of [undefined, { type: "choice", choice: "yes", confidence: 1 }, { type: "noul", noul: null }, { type: "noul", noul: -0.1 }, { type: "noul", noul: 1.1 }]) {
 			answer = malformed;
-			await expect(reviewChanges(client, changes, rules, { model: "jev-test", threshold: 0.8 })).rejects.toThrow(
+			await expect(reviewChanges(client, changes, rules, { model: "jev-test", ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])) })).rejects.toThrow(
 				"no valid Noul answer",
 			);
 		}
@@ -174,7 +197,7 @@ describe("Jev coding style review", () => {
 		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
 		const oversized = [{ ...changes[0]!, patch: "x".repeat(100_001) }];
 
-		await expect(reviewChanges(client, oversized, rules, { model: "jev-test", threshold: 0.8 })).rejects.toThrow(
+		await expect(reviewChanges(client, oversized, rules, { model: "jev-test", ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])) })).rejects.toThrow(
 			"review limit",
 		);
 	});
@@ -185,12 +208,10 @@ describe("Jev coding style review", () => {
 
 		const report = await reviewChanges(client, changes, rules, {
 			model: "jev-test",
-			threshold: 0.9,
-			ruleThresholds: { "control-flow-guard-clauses": 0.05 },
+			ruleThresholds: { "comments-and-documentation-narrative-comments": 0.95, "control-flow-guard-clauses": 0.05 },
 		});
 
 		expect(report.findings.map((finding) => finding.rule.id)).toEqual([
-			"comments-and-documentation-narrative-comments",
 			"control-flow-guard-clauses",
 		]);
 	});
@@ -212,7 +233,7 @@ describe("Jev coding style review", () => {
 		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
 
 		expect(
-			reviewChanges(client, changes, rules, { model: "jev-test", threshold: 0.8 }),
+			reviewChanges(client, changes, rules, { model: "jev-test", ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])) }),
 		).rejects.toThrow("unexpected model");
 	});
 

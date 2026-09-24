@@ -1,5 +1,6 @@
 import { type NoulResponse, TypeSafeClient, noul } from "@typesafe-ai/sdk";
 
+import { validateRuleThresholds } from "./config";
 import type { StyleRule } from "./rules";
 import { declaresFileNamedEntryPoint, type RustChange } from "./snapshot";
 
@@ -7,8 +8,7 @@ const MAX_PATCH_CHARS = 100_000;
 
 export interface ReviewOptions {
 	model: string;
-	threshold: number;
-	ruleThresholds?: Readonly<Record<string, number>>;
+	ruleThresholds: Readonly<Record<string, number>>;
 	maxConcurrency?: number;
 	moduleReferences?: ReadonlyMap<string, readonly string[]>;
 	signal?: AbortSignal;
@@ -75,6 +75,8 @@ export async function reviewChanges(
 	rules: readonly StyleRule[],
 	options: ReviewOptions,
 ): Promise<StyleReviewReport> {
+	validateRuleThresholds(options.ruleThresholds, rules);
+
 	for (const change of changes) {
 		if (change.patch.length > MAX_PATCH_CHARS) {
 			throw new Error(
@@ -125,7 +127,7 @@ export async function reviewChanges(
 		outputTokens += validateUsage(response.usage?.output_tokens, "output token usage");
 		for (const rule of rules) {
 			const answer = validateAnswer((response.answers as Record<string, unknown>)[rule.id], rule);
-			const threshold = options.ruleThresholds?.[rule.id] ?? options.threshold;
+			const threshold = options.ruleThresholds[rule.id]!;
 			if (answer.noul >= threshold) {
 				findings.push({ file: change.path, probability: answer.noul, rule });
 			}
