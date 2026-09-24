@@ -27,6 +27,15 @@ pub enum ErrorCode {
 	ModNotFound,
 	IoFailure,
 	TransactionFailure,
+	InvalidOutputTarget,
+	OutputTargetNotFound,
+	OutputTargetDisabled,
+	InvalidWorkingDirectory,
+	ProgramNotFound,
+	ProgramUnsupported,
+	ProgramLaunchFailed,
+	VfsFailed,
+	ExecutionSupervisionFailed,
 	OperationCancelled,
 }
 
@@ -58,6 +67,15 @@ impl ErrorCode {
 			Self::ModNotFound => "mod_not_found",
 			Self::IoFailure => "io_failure",
 			Self::TransactionFailure => "transaction_failure",
+			Self::InvalidOutputTarget => "invalid_output_target",
+			Self::OutputTargetNotFound => "output_target_not_found",
+			Self::OutputTargetDisabled => "output_target_disabled",
+			Self::InvalidWorkingDirectory => "invalid_working_directory",
+			Self::ProgramNotFound => "program_not_found",
+			Self::ProgramUnsupported => "program_unsupported",
+			Self::ProgramLaunchFailed => "program_launch_failed",
+			Self::VfsFailed => "vfs_failed",
+			Self::ExecutionSupervisionFailed => "execution_supervision_failed",
 			Self::OperationCancelled => "operation_cancelled",
 		}
 	}
@@ -215,6 +233,41 @@ impl ErrorMarker {
 	pub fn transaction_failure() -> Self {
 		Self::simple(ErrorCode::TransactionFailure)
 	}
+	pub fn invalid_output_target() -> Self {
+		Self::simple(ErrorCode::InvalidOutputTarget)
+	}
+	pub fn output_target_not_found() -> Self {
+		Self::simple(ErrorCode::OutputTargetNotFound)
+	}
+	pub fn output_target_disabled() -> Self {
+		Self::simple(ErrorCode::OutputTargetDisabled)
+	}
+	pub fn invalid_working_directory() -> Self {
+		Self::simple(ErrorCode::InvalidWorkingDirectory)
+	}
+	pub fn program_not_found() -> Self {
+		Self::simple(ErrorCode::ProgramNotFound)
+	}
+	pub fn program_unsupported() -> Self {
+		Self::simple(ErrorCode::ProgramUnsupported)
+	}
+	pub fn program_launch_failed() -> Self {
+		Self::simple(ErrorCode::ProgramLaunchFailed)
+	}
+	pub fn vfs_failed() -> Self {
+		Self::simple(ErrorCode::VfsFailed)
+	}
+	pub fn execution_supervision_failed() -> Self {
+		Self::simple(ErrorCode::ExecutionSupervisionFailed)
+	}
+	pub fn elevation_required() -> Self {
+		Self {
+			message_override: Some(
+				"elevation is required; rerun the whole mods exec command at the required integrity level",
+			),
+			..Self::program_launch_failed()
+		}
+	}
 	pub fn operation_cancelled() -> Self {
 		Self::simple(ErrorCode::OperationCancelled)
 	}
@@ -291,6 +344,15 @@ impl ErrorMarker {
 			ErrorCode::ModNotFound => "mod was not found",
 			ErrorCode::IoFailure => "input/output operation failed",
 			ErrorCode::TransactionFailure => "installation transaction failed",
+			ErrorCode::InvalidOutputTarget => "output target is invalid",
+			ErrorCode::OutputTargetNotFound => "output target was not found",
+			ErrorCode::OutputTargetDisabled => "output target is disabled",
+			ErrorCode::InvalidWorkingDirectory => "working directory is invalid",
+			ErrorCode::ProgramNotFound => "program was not found",
+			ErrorCode::ProgramUnsupported => "program is unsupported",
+			ErrorCode::ProgramLaunchFailed => "program could not be launched",
+			ErrorCode::VfsFailed => "Virtual Game View setup failed",
+			ErrorCode::ExecutionSupervisionFailed => "process supervision failed",
 			ErrorCode::OperationCancelled => "operation cancelled",
 		}
 	}

@@ -13,9 +13,29 @@ use rootcause::report;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::path::Path;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 impl GamePlatformAdapter {
+	/// Resolves the game's Documents and Local AppData destinations using Known Folders.
+	///
+	/// # Errors
+	/// Returns a platform error when either destination cannot be resolved.
+	pub fn execution_profile_directories(&self) -> Result<(PathBuf, PathBuf), ErrorMarker> {
+		let folders = match &self.known_folders {
+			KnownFolderSource::System => known_folders::current()?,
+			#[cfg(test)]
+			KnownFolderSource::Fixed(folders) => folders.clone(),
+		};
+		if !folders.documents.is_absolute() || !folders.local_app_data.is_absolute() {
+			return Err(report!(ErrorMarker::game_install_invalid()));
+		}
+		Ok((
+			folders.documents.join("My Games").join("FalloutNV"),
+			folders.local_app_data.join("FalloutNV"),
+		))
+	}
+
 	pub(crate) fn load_profile_sources(
 		&self,
 		binding: &GameBinding,

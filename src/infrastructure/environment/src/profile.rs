@@ -127,6 +127,22 @@ pub(crate) fn validate_profile_files(
 	require_empty: bool,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
+	validate_profile_mode(profile, require_empty, false, cancellation)
+}
+
+pub(crate) fn validate_execution_profile(
+	profile: &SafeDir,
+	cancellation: &CancellationToken,
+) -> Result<(), ErrorMarker> {
+	validate_profile_mode(profile, false, true, cancellation)
+}
+
+fn validate_profile_mode(
+	profile: &SafeDir,
+	require_empty: bool,
+	execution: bool,
+	cancellation: &CancellationToken,
+) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
@@ -172,7 +188,7 @@ pub(crate) fn validate_profile_files(
 		}
 	}
 	for required in ["Fallout.ini", "plugins.txt", "loadorder.txt", "modlist.txt", "saves"] {
-		if expected.contains(required) {
+		if expected.contains(required) && !(execution && matches!(required, "plugins.txt" | "loadorder.txt")) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
@@ -190,7 +206,9 @@ pub(crate) fn validate_profile_files(
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
-	validate_saves(&saves, cancellation)?;
+	if !execution {
+		validate_saves(&saves, cancellation)?;
+	}
 	let fallout = read_regular_file(profile, "Fallout.ini", cancellation)?;
 	let text = decode(&fallout)?.0;
 	let keys = archive_values(&text);
@@ -218,8 +236,11 @@ pub(crate) fn validate_profile_files(
 			}
 		}
 	}
-	validate_plugin_list(profile, "plugins.txt", false, cancellation)?;
-	validate_plugin_list(profile, "loadorder.txt", true, cancellation)?;
+	for (name, utf8) in [("plugins.txt", false), ("loadorder.txt", true)] {
+		if !execution || profile.exists(name).context(ErrorMarker::environment_invalid(None))? {
+			validate_plugin_list(profile, name, utf8, !execution, cancellation)?;
+		}
+	}
 	let modlist = read_regular_file(profile, "modlist.txt", cancellation)?;
 	if require_empty && !modlist.is_empty() {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
@@ -393,6 +414,7 @@ fn validate_plugin_list(
 	profile: &SafeDir,
 	name: &str,
 	utf8: bool,
+	allow_light_plugins: bool,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	let bytes = read_regular_file(profile, name, cancellation)?;
@@ -418,6 +440,7 @@ fn validate_plugin_list(
 				matches!(character, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*')
 			}) || is_reserved_name(line)
 			|| !is_activatable_plugin_name(line)
+			|| (!allow_light_plugins && case_fold_key(line).ends_with(".esl"))
 		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
@@ -647,13 +670,13 @@ fn section_name(line: &str) -> Option<&str> {
 }
 
 #[derive(Clone, Copy)]
-enum Encoding {
+pub(crate) enum Encoding {
 	Utf8,
 	Utf8Bom,
 	Utf16Le,
 	Windows1252,
 }
-fn decode(bytes: &[u8]) -> Result<(String, Encoding), ErrorMarker> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Encoding), ErrorMarker> {
 	if let Some(bytes) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
 		return String::from_utf8(bytes.to_vec())
 			.map(|text| (text, Encoding::Utf8Bom))

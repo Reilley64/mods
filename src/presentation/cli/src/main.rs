@@ -17,16 +17,21 @@ use std::ffi::OsString;
 use std::io::stderr;
 use std::io::stdout;
 use std::process::exit;
+use tokio_util::sync::CancellationToken;
 
 const BUILD_COMMIT: &str = env!("BUILD_COMMIT");
 
 #[tokio::main]
 async fn main() {
 	let arguments: Vec<OsString> = args_os().collect();
-	let result = runner::run_current_process(arguments, |root| {
+	let result = runner::run_current_process(arguments, |root, startup| {
 		let resources = Resources::system(root.clone());
 		let install_archive = resources.install_archive_dependencies();
+		let execution_force_cancellation = CancellationToken::new();
 		Ok(runner::Dependencies {
+			execute_program: resources
+				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
+			execution_force_cancellation,
 			initialize_environment: resources.initialize_environment_dependencies(),
 			list_settings: resources.list_settings_dependencies(),
 			get_setting: resources.get_setting_dependencies(),

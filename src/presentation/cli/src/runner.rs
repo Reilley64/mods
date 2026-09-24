@@ -21,6 +21,9 @@ use application::conflicts::inspect_mod_conflicts;
 use application::conflicts::list_effective_conflicts;
 use application::environment::InitializeEnvironmentDependencies;
 use application::environment::initialize_environment;
+use application::execution::ExecuteProgramDependencies;
+use application::execution::ExecutionWarning;
+use application::execution::execute_program;
 use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
 use application::installation::install_archive;
@@ -38,6 +41,10 @@ use domain::EnvironmentRoot;
 use domain::FomodChoice;
 use domain::GameInstallationPath;
 use domain::ModName;
+use domain::OutputTarget;
+use domain::Program;
+use domain::ProgramArgument;
+use domain::WorkingDirectory;
 use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
@@ -45,9 +52,12 @@ use std::env;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub(crate) struct Dependencies {
+	pub(crate) execution_force_cancellation: CancellationToken,
+	pub(crate) execute_program: ExecuteProgramDependencies,
 	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
 	pub(crate) list_settings: ListSettingsDependencies,
 	pub(crate) get_setting: GetSettingDependencies,
@@ -369,11 +379,86 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				}
 			}
 		},
-		Command::Exec(_) => RunOutcome {
-			status: 1,
-			stdout: String::new(),
-			stderr: "error: command is not implemented in this product slice\n".to_owned(),
-		},
+		Command::Exec(arguments) => {
+			let output_target = if let Some(name) = arguments.output_target {
+				let Ok(name) = ModName::new(name) else {
+					return execution_report_outcome(
+						&report!(ErrorMarker::invalid_output_target()),
+					);
+				};
+				OutputTarget::DataMod(name)
+			} else {
+				OutputTarget::Overwrite
+			};
+			let working_directory = match arguments
+				.cwd
+				.map(|path| {
+					WorkingDirectory::new(path).and_then(|path| {
+						WorkingDirectory::new(resolve_path(path.as_path(), &startup))
+					})
+				})
+				.transpose()
+			{
+				Ok(directory) => directory,
+				Err(_) => {
+					return execution_report_outcome(&report!(
+						ErrorMarker::invalid_working_directory()
+					));
+				}
+			};
+			let mut command = arguments.command.into_iter();
+			let Some(program) = command.next() else {
+				return execution_report_outcome(&report!(ErrorMarker::program_not_found()));
+			};
+			let Ok(program) = Program::new(program) else {
+				return execution_report_outcome(&report!(ErrorMarker::program_not_found()));
+			};
+			let Ok(arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() else {
+				return execution_report_outcome(&report!(ErrorMarker::program_launch_failed()));
+			};
+
+			let signals = operation::ExecutionSignals::new(dependencies.execution_force_cancellation);
+			match execute_program(
+				dependencies.execute_program,
+				output_target,
+				working_directory,
+				program,
+				arguments,
+				signals.cancellation.clone(),
+			)
+			.await
+			{
+				Ok(output) => {
+					let mut stderr = String::new();
+					for warning in output.warnings {
+						let message = match warning {
+                            ExecutionWarning::LoadOrderNotEnforced => "warning [load_order_not_enforced]: upstream does not enforce game-visible plugin timestamps or load order\n".to_owned(),
+                            ExecutionWarning::StalePluginEntry { name } => format!("warning [stale_plugin_entry]: ignoring unavailable plugin {}\n", output::quote(&name)),
+                            ExecutionWarning::StaleLoadOrderEntry { name } => format!("warning [stale_load_order_entry]: ignoring unavailable load-order entry {}\n", output::quote(&name)),
+                            ExecutionWarning::DuplicatePluginEntry { file, name } => format!("warning [duplicate_plugin_entry]: using first occurrence of {} in {}\n", output::quote(&name), output::quote(&file)),
+                            ExecutionWarning::UnlistedPlugin { name } => format!("warning [unlisted_plugin]: using modification-time fallback for {}\n", output::quote(&name)),
+                            ExecutionWarning::ProfileStateInvalid => "warning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n".to_owned(),
+                        };
+						stderr.push_str(&message);
+					}
+					RunOutcome {
+						status: output.status.value(),
+						stdout: String::new(),
+						stderr,
+					}
+				}
+				Err(report) => execution_report_outcome(&report),
+			}
+		}
+	}
+}
+
+fn execution_report_outcome<E>(report: &Report<E>) -> RunOutcome {
+	RunOutcome {
+		status: error::application_marker(report)
+			.map_or(125, |marker| error::execution_exit_status(marker.code())),
+		stdout: String::new(),
+		stderr: error::application_error(report),
 	}
 }
 
@@ -427,11 +512,15 @@ pub(crate) async fn run(
 
 pub(crate) async fn run_current_process(
 	arguments: impl IntoIterator<Item = OsString>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<Dependencies, ErrorMarker>,
+	dependency_factory: impl FnOnce(&EnvironmentRoot, &Path) -> Result<Dependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let startup_directory = env::current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-	run(arguments, startup_directory, local_app_data, dependency_factory).await
+	let factory_startup = startup_directory.clone();
+	run(arguments, startup_directory, local_app_data, |root| {
+		dependency_factory(root, &factory_startup)
+	})
+	.await
 }
 
 #[cfg(test)]
@@ -452,6 +541,8 @@ mod tests {
 	use application::conflicts::ListEffectiveConflictsDependencies;
 	use application::conflicts::ScannedConflictProvider;
 	use application::environment::InitializeEnvironmentDependencies;
+	use application::execution::ExecuteProgramDependencies;
+	use application::execution::ExecuteProgramOutput;
 	use application::installation::InstallArchiveDependencies;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
@@ -470,7 +561,9 @@ mod tests {
 	use domain::GameInstallationPath;
 	use domain::ModName;
 	use domain::ModPriority;
+	use domain::OutputTarget;
 	use domain::ParticipationReason;
+	use domain::ProcessStatus;
 	use domain::ProviderIdentity;
 	use domain::ProviderReference;
 	use domain::SteamBuildId;
@@ -480,7 +573,10 @@ mod tests {
 	use std::fs;
 	use std::path::Path;
 	use std::sync::Arc;
+	use std::sync::atomic::AtomicBool;
+	use std::sync::atomic::Ordering;
 	use tempfile::TempDir;
+	use tokio_util::sync::CancellationToken;
 
 	macro_rules! arguments {
 		($($value:expr),* $(,)?) => {
@@ -595,6 +691,12 @@ mod tests {
 		};
 		let install_archive = unavailable_install_archive_dependencies();
 		Dependencies {
+			execution_force_cancellation: CancellationToken::new(),
+			execute_program: ExecuteProgramDependencies {
+				run_managed_program: Arc::new(|_, _, _, _, _| {
+					Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
+				}),
+			},
 			initialize_environment: InitializeEnvironmentDependencies {
 				assess_target: Arc::new(|_, _| {
 					Box::pin(async { Ok(InitializationTargetAssessment::Available) })
@@ -698,6 +800,73 @@ mod tests {
 				}),
 			},
 		))
+	}
+
+	#[tokio::test]
+	async fn exec_dispatch_preserves_child_status_and_does_not_capture_streams() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for status in [0, 1, 125, 126, 127, 256, 259, 0xC000_0005] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.execute_program.run_managed_program =
+				Arc::new(move |target, cwd, program, arguments, _| {
+					assert_eq!(target, OutputTarget::Overwrite);
+					assert!(cwd.is_none());
+					assert_eq!(program.as_os_str(), "tool.exe");
+					assert_eq!(
+						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
+						["", "--", "雪"]
+					);
+					Box::pin(async move {
+						Ok(ExecuteProgramOutput {
+							status: ProcessStatus::new(status),
+							warnings: Vec::new(),
+						})
+					}) as PortFuture<_>
+				});
+			let outcome = run(
+				arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe", "", "--", "雪"],
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_| Ok(dependencies),
+			)
+			.await?;
+			assert_eq!(outcome.status, status);
+			assert!(outcome.stdout.is_empty());
+			assert!(outcome.stderr.is_empty());
+		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn exec_rejects_reserved_output_target_before_calling_port() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let called = Arc::new(AtomicBool::new(false));
+		let observed = called.clone();
+		dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _| {
+			observed.store(true, Ordering::SeqCst);
+			Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
+		});
+		let outcome = run(
+			arguments![
+				"mods",
+				"--log-level",
+				"off",
+				"exec",
+				"--output-target",
+				"overwrite",
+				"--",
+				"tool.exe"
+			],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+		assert_eq!(outcome.status, 125);
+		assert!(outcome.stderr.contains("invalid_output_target"));
+		assert!(!called.load(Ordering::SeqCst));
+		Ok(())
 	}
 
 	#[test]
