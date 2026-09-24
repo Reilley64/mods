@@ -11,6 +11,8 @@ use rootcause::report;
 use std::io::Error as IoError;
 use std::path::Path;
 #[cfg(windows)]
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 #[cfg(windows)]
 use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
@@ -77,7 +79,7 @@ pub(super) fn require_directory(metadata: &Metadata) -> Result<(), IoError> {
 
 #[cfg(windows)]
 fn is_reparse(metadata: &Metadata) -> bool {
-	metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+	metadata.file_type().is_symlink() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
 }
 
 #[cfg(not(windows))]

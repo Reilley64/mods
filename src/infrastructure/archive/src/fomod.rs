@@ -545,12 +545,16 @@ fn validate_declared_encoding(source: SourceEncoding, declared: Option<&str>) ->
 		return Ok(());
 	};
 	let declared = declared.to_ascii_lowercase().replace('_', "-");
-	let matches = match source {
+	let encoding_matches = match source {
 		SourceEncoding::Utf8 => matches!(declared.as_str(), "utf-8" | "us-ascii"),
 		SourceEncoding::Utf16Le => matches!(declared.as_str(), "utf-16" | "utf-16le"),
 		SourceEncoding::Utf16Be => matches!(declared.as_str(), "utf-16" | "utf-16be"),
 	};
-	matches.then_some(()).ok_or_else(|| report!(ArchiveError::InvalidXml))
+	if !encoding_matches {
+		return Err(report!(ArchiveError::InvalidXml));
+	}
+
+	Ok(())
 }
 
 fn normalize_declaration(xml: &mut String) -> Result<(), ArchiveError> {

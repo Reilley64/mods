@@ -95,6 +95,7 @@ impl EnvironmentAdapter {
 			root: root.as_path().join("overwrite"),
 			enabled: true,
 		});
+
 		let mut winners: Vec<_> = snapshot
 			.current_winners
 			.values()
@@ -182,6 +183,7 @@ impl EnvironmentAdapter {
 			}
 			consumed_bytes.push((profile_directory.join(name), bytes));
 		}
+
 		let manifest = read_bounded(
 			&root_directory,
 			"mods.toml",
@@ -190,6 +192,7 @@ impl EnvironmentAdapter {
 			cancellation,
 		)?;
 		consumed_bytes.push((root.as_path().join("mods.toml"), manifest));
+
 		for provider in &providers {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));

@@ -206,7 +206,7 @@ where
 	F: FnMut(&ArchiveMember) -> Result<Box<dyn Write>, ArchiveError>,
 {
 	let archive = open_rar(&index.source, index.sha256, cancellation, started)?;
-	let current = Cell::new(0_usize);
+	let next_ordinal = Cell::new(0_usize);
 	let written = Rc::new(RefCell::new(BTreeMap::new()));
 	// The backend callback cannot return a Report, so retain it until the backend gives ownership back.
 	let callback_error = Rc::new(RefCell::new(None));
@@ -223,8 +223,8 @@ where
 				*error_for_callback.borrow_mut() = Some(report!(ArchiveError::WorkLimit));
 				return Err(IoError::other("archive callback stopped").into());
 			}
-			let ordinal = current.get();
-			current.set(ordinal.saturating_add(1));
+			let ordinal = next_ordinal.get();
+			next_ordinal.set(ordinal.saturating_add(1));
 			let Some(member) = index.members.get(ordinal) else {
 				*error_for_callback.borrow_mut() = Some(report!(ArchiveError::IdentityChanged));
 				return Err(IoError::other("archive callback stopped").into());
@@ -472,6 +472,7 @@ mod tests {
 	use super::extract_seven_zip;
 	use crate::error::ArchiveError;
 	use crate::index::ArchiveIndexCore;
+	use crate::index::ArchiveMember;
 	use crate::index::index_archive;
 	use crate::limits::MAX_ARCHIVE_MEMBERS;
 	use crate::path::SafeArchivePath;
@@ -609,7 +610,7 @@ mod tests {
 			.collect();
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
-		let mut open_output = |_: &crate::index::ArchiveMember| -> Result<Box<dyn Write>, ArchiveError> {
+		let mut open_output = |_: &ArchiveMember| -> Result<Box<dyn Write>, ArchiveError> {
 			Err(report!(ArchiveError::InvalidArchive))
 		};
 

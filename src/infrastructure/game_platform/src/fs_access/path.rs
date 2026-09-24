@@ -61,10 +61,10 @@ fn absolute_anchor(path: &Path) -> Result<(Dir, Vec<OsString>), IoError> {
 	}
 	let mut names = Vec::new();
 	for component in components {
-		match component {
-			Component::Normal(name) => names.push(name.to_owned()),
-			_ => return Err(report!(IoError::other("path contains an unsafe component"))),
-		}
+		let Component::Normal(name) = component else {
+			return Err(report!(IoError::other("path contains an unsafe component")));
+		};
+		names.push(name.to_owned());
 	}
 	let file = File::open_ambient_with(&root, &directory_options(), ambient_authority())?;
 	require_directory(&file.metadata()?)?;

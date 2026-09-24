@@ -131,12 +131,14 @@ impl SettingsAdapter {
 		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation)?;
 		let (root, text) = open_bound_root(&self.root)?;
 		refuse_unfinished_operation(&root, SettingsAccess::Mutation)?;
+
 		let (manifest, _, _) = config_source::read_sources(
 			&text,
 			&self.environment,
 			ErrorMarker::settings_environment_invalid(),
 		)?;
 		validate_manifest(&manifest)?;
+
 		let game_dir = binding
 			.game_directory()
 			.as_path()
@@ -150,6 +152,7 @@ impl SettingsAdapter {
 			observed_build_id: binding.observed_build_id().get(),
 		})
 		.context(ErrorMarker::setting_value_invalid())?;
+
 		let (replacement_manifest, replacement_effective, shadowed) = config_source::read_sources(
 			&replacement,
 			&self.environment,
@@ -167,6 +170,7 @@ impl SettingsAdapter {
 			source: game_record.source.clone(),
 			shadowed: game_record.shadowed,
 		};
+
 		Ok(PreparedGameBinding {
 			root,
 			replacement,
@@ -592,9 +596,8 @@ mod tests {
 		let load = SettingsAdapter::with_environment(root, Vec::new()).load_port();
 		let mut future = load.call(());
 		let context = &mut Context::from_waker(Waker::noop());
-		let result = match future.as_mut().poll(context) {
-			Poll::Ready(result) => result,
-			Poll::Pending => return Err(report!(ErrorMarker::environment_invalid(None)).into()),
+		let Poll::Ready(result) = future.as_mut().poll(context) else {
+			return Err(report!(ErrorMarker::environment_invalid(None)).into());
 		};
 
 		assert!(matches!(

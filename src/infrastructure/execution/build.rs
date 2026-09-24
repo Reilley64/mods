@@ -1,3 +1,5 @@
+use bindgen::Builder;
+use cc::Build;
 use sha2::Digest;
 use sha2::Sha256;
 use std::env;
@@ -18,7 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 	}
 	let upstream = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?).join("../../../native/usvfs/include");
 	let output = PathBuf::from(env::var("OUT_DIR")?);
-	let bindings = bindgen::Builder::default()
+	let bindings = Builder::default()
 		.header_contents(
 			"mods_usvfs_bindings.hpp",
 			"#include \"barrier.h\"\n#include <usvfs/usvfs.h>\n",
@@ -37,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 		.parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
 		.generate()?;
 	bindings.write_to_file(output.join("bindings.rs"))?;
-	cc::Build::new()
+	Build::new()
 		.cpp(true)
 		.file("native/barrier.cpp")
 		.include(upstream)

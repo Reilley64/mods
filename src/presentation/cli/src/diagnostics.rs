@@ -35,16 +35,16 @@ impl DiagnosticSession {
 		}
 
 		let id = Uuid::new_v4();
-		let appender = match RollingFileAppender::builder()
+		let Ok(appender) = RollingFileAppender::builder()
 			.rotation(Rotation::NEVER)
 			.filename_prefix(format!("{id}.jsonl"))
 			.build(root.join("logs"))
-		{
-			Ok(appender) => appender,
-			Err(_) => return SessionStart::SetupFailed,
+		else {
+			return SessionStart::SetupFailed;
 		};
 		let layer = fmt::layer().json().with_writer(appender).with_filter(filter(level));
 		let subscriber = Dispatch::new(Registry::default().with(layer));
+
 		with_default(&subscriber, || {
 			tracing::info!(
 				target: "mods::diagnostics",
@@ -140,13 +140,14 @@ mod tests {
 	use serde_json::Value;
 	use serde_json::from_str;
 	use std::error::Error;
-	use std::fs;
+	use std::fs::read_dir;
+	use std::fs::read_to_string;
 	use std::path::Path;
 	use tempfile::TempDir;
 	use uuid::Uuid;
 
 	fn records(root: &Path) -> Result<(Uuid, Vec<Value>), Box<dyn Error>> {
-		let files = fs::read_dir(root.join("logs"))?.collect::<Result<Vec<_>, _>>()?;
+		let files = read_dir(root.join("logs"))?.collect::<Result<Vec<_>, _>>()?;
 		assert_eq!(files.len(), 1);
 		let id = Uuid::parse_str(
 			files[0].path()
@@ -154,7 +155,7 @@ mod tests {
 				.and_then(|stem| stem.to_str())
 				.ok_or("diagnostic file stem")?,
 		)?;
-		let records = fs::read_to_string(files[0].path())?
+		let records = read_to_string(files[0].path())?
 			.lines()
 			.map(from_str::<Value>)
 			.collect::<Result<Vec<_>, _>>()?;
@@ -176,11 +177,10 @@ mod tests {
 	#[test]
 	fn normal_session_creates_one_uuid_file_with_boundary_events() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let session = match DiagnosticSession::start(temp.path(), LogLevel::Error, "config.list") {
-			SessionStart::FileBacked(session) => session,
-			SessionStart::Disabled | SessionStart::SetupFailed => {
-				return Err("expected file-backed session".into());
-			}
+		let SessionStart::FileBacked(session) =
+			DiagnosticSession::start(temp.path(), LogLevel::Error, "config.list")
+		else {
+			return Err("expected file-backed session".into());
 		};
 		let expected_id = session.id();
 		session.finish("success");
@@ -198,11 +198,10 @@ mod tests {
 	#[tokio::test]
 	async fn configured_log_level_filters_captured_project_events() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let session = match DiagnosticSession::start(temp.path(), LogLevel::Info, "config.list") {
-			SessionStart::FileBacked(session) => session,
-			SessionStart::Disabled | SessionStart::SetupFailed => {
-				return Err("expected file-backed session".into());
-			}
+		let SessionStart::FileBacked(session) =
+			DiagnosticSession::start(temp.path(), LogLevel::Info, "config.list")
+		else {
+			return Err("expected file-backed session".into());
 		};
 		session.capture(async {
 			tracing::debug!(target: "application::diagnostic_test", event = "project.debug", "debug event");

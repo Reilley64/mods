@@ -326,49 +326,51 @@ fn validate_provider(
 	{
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
-	if provider
+	if !provider
 		.exists("meta.toml")
 		.context(ErrorMarker::environment_invalid(None))?
 	{
-		let tombstones = validate_metadata(provider, cancellation)?;
-		let mut directory_tombstones = HashSet::new();
-		for (tombstone, directory) in &tombstones {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			if *directory {
-				directory_tombstones.insert(tombstone.comparison_key());
-			}
-		}
+		return Ok(());
+	}
 
-		for (tombstone, _) in &tombstones {
+	let tombstones = validate_metadata(provider, cancellation)?;
+	let mut directory_tombstones = HashSet::new();
+	for (tombstone, directory) in &tombstones {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		if *directory {
+			directory_tombstones.insert(tombstone.comparison_key());
+		}
+	}
+
+	for (tombstone, _) in &tombstones {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		if paths.contains(tombstone.comparison_key()) {
+			return Err(report!(ErrorMarker::environment_invalid(None)));
+		}
+		for (boundary, _) in tombstone.comparison_key().match_indices('/') {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			if paths.contains(tombstone.comparison_key()) {
+			if directory_tombstones.contains(&tombstone.comparison_key()[..boundary]) {
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
-			for (boundary, _) in tombstone.comparison_key().match_indices('/') {
-				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
-				}
-				if directory_tombstones.contains(&tombstone.comparison_key()[..boundary]) {
-					return Err(report!(ErrorMarker::environment_invalid(None)));
-				}
-			}
 		}
+	}
 
-		for path in &paths {
+	for path in &paths {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		for (boundary, _) in path.match_indices('/') {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			for (boundary, _) in path.match_indices('/') {
-				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
-				}
-				if directory_tombstones.contains(&path[..boundary]) {
-					return Err(report!(ErrorMarker::environment_invalid(None)));
-				}
+			if directory_tombstones.contains(&path[..boundary]) {
+				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
 		}
 	}
@@ -508,40 +510,42 @@ fn validate_metadata(
 	let metadata_identity = case_fold_key("meta.toml");
 	let invalidation_archive_identity = case_fold_key(INVALIDATION_ARCHIVE);
 	let mut result = Vec::new();
-	if let Some(tombstones) = table.get("tombstones") {
-		let tombstones = tombstones
-			.as_table()
+	let Some(tombstones) = table.get("tombstones") else {
+		return Ok(result);
+	};
+
+	let tombstones = tombstones
+		.as_table()
+		.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
+	if tombstones
+		.keys()
+		.any(|key| !matches!(key.as_str(), "files" | "directories"))
+	{
+		return Err(report!(ErrorMarker::environment_invalid(None)));
+	}
+	let mut seen = HashSet::new();
+	for (key, directory) in [("files", false), ("directories", true)] {
+		let Some(values) = tombstones.get(key) else {
+			continue;
+		};
+		let values = values
+			.as_array()
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-		if tombstones
-			.keys()
-			.any(|key| !matches!(key.as_str(), "files" | "directories"))
-		{
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		let mut seen = HashSet::new();
-		for (key, directory) in [("files", false), ("directories", true)] {
-			let Some(values) = tombstones.get(key) else {
-				continue;
-			};
-			let values = values
-				.as_array()
+		for value in values {
+			let path = value
+				.as_str()
 				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-			for value in values {
-				let path = value
-					.as_str()
-					.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-				let canonical = DataRelativePath::new(path.to_owned())
-					.context(ErrorMarker::environment_invalid(None))?;
-				let reserved_root = canonical.components().count() == 1
-					&& (canonical.comparison_key() == metadata_identity
-						|| canonical.comparison_key() == invalidation_archive_identity);
-				if path != canonical.as_str()
-					|| reserved_root || !seen.insert(canonical.comparison_key().to_owned())
-				{
-					return Err(report!(ErrorMarker::environment_invalid(None)));
-				}
-				result.push((canonical, directory));
+			let canonical = DataRelativePath::new(path.to_owned())
+				.context(ErrorMarker::environment_invalid(None))?;
+			let reserved_root = canonical.components().count() == 1
+				&& (canonical.comparison_key() == metadata_identity
+					|| canonical.comparison_key() == invalidation_archive_identity);
+			if path != canonical.as_str()
+				|| reserved_root || !seen.insert(canonical.comparison_key().to_owned())
+			{
+				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
+			result.push((canonical, directory));
 		}
 	}
 	Ok(result)
@@ -720,66 +724,68 @@ fn apply_provider(
 			winners.insert(key, (path, EffectiveResult::File(provider)));
 		}
 	}
-	if directory
+	if !directory
 		.exists("meta.toml")
 		.context(ErrorMarker::environment_invalid(None))?
 	{
-		let mut path_tombstones = HashMap::new();
-		let mut directory_tombstones = HashMap::new();
-		for (path, directory_scope) in validate_metadata(directory, cancellation)? {
+		return Ok(());
+	}
+
+	let mut path_tombstones = HashMap::new();
+	let mut directory_tombstones = HashMap::new();
+	for (path, directory_scope) in validate_metadata(directory, cancellation)? {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let owner = provider_reference(class, mod_name.clone(), priority, path.clone())?;
+		let tombstone = TombstoneReference {
+			scope: if directory_scope {
+				TombstoneScope::DirectorySubtree
+			} else {
+				TombstoneScope::ExactFile
+			},
+			owner,
+		};
+		let key = path.comparison_key().to_owned();
+		if directory_scope {
+			directory_tombstones.insert(key.clone(), tombstone.clone());
+		}
+		path_tombstones.insert(key, (path, tombstone));
+	}
+
+	for (key, (_, effective)) in winners.iter_mut() {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let mut controlling_tombstone = path_tombstones.get(key).map(|(_, tombstone)| tombstone);
+		for (boundary, _) in key.match_indices('/') {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			let owner = provider_reference(class, mod_name.clone(), priority, path.clone())?;
-			let tombstone = TombstoneReference {
-				scope: if directory_scope {
-					TombstoneScope::DirectorySubtree
-				} else {
-					TombstoneScope::ExactFile
-				},
-				owner,
+			if controlling_tombstone.is_none() {
+				controlling_tombstone = directory_tombstones.get(&key[..boundary]);
+			}
+		}
+		if let Some(tombstone) = controlling_tombstone {
+			*effective = EffectiveResult::Absent {
+				controlling_tombstone: Some(tombstone.clone()),
 			};
-			let key = path.comparison_key().to_owned();
-			if directory_scope {
-				directory_tombstones.insert(key.clone(), tombstone.clone());
-			}
-			path_tombstones.insert(key, (path, tombstone));
 		}
+	}
 
-		for (key, (_, effective)) in winners.iter_mut() {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			let mut controlling_tombstone = path_tombstones.get(key).map(|(_, tombstone)| tombstone);
-			for (boundary, _) in key.match_indices('/') {
-				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
-				}
-				if controlling_tombstone.is_none() {
-					controlling_tombstone = directory_tombstones.get(&key[..boundary]);
-				}
-			}
-			if let Some(tombstone) = controlling_tombstone {
-				*effective = EffectiveResult::Absent {
-					controlling_tombstone: Some(tombstone.clone()),
-				};
-			}
+	for (key, (path, tombstone)) in path_tombstones {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-
-		for (key, (path, tombstone)) in path_tombstones {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			winners.insert(
-				key,
-				(
-					path,
-					EffectiveResult::Absent {
-						controlling_tombstone: Some(tombstone),
-					},
-				),
-			);
-		}
+		winners.insert(
+			key,
+			(
+				path,
+				EffectiveResult::Absent {
+					controlling_tombstone: Some(tombstone),
+				},
+			),
+		);
 	}
 	Ok(())
 }
@@ -1394,13 +1400,6 @@ fn add_root_plugins(
 	Ok(())
 }
 
-#[derive(Debug)]
-struct ModlistEntry {
-	name: ModName,
-	priority: ModPriority,
-	enabled: bool,
-}
-
 pub(crate) fn parse_modlist(bytes: &[u8]) -> Result<Vec<InstalledMod>, ErrorMarker> {
 	let text = from_utf8(bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes))
 		.context(ErrorMarker::environment_invalid(None))?;
@@ -1426,20 +1425,13 @@ pub(crate) fn parse_modlist(bytes: &[u8]) -> Result<Vec<InstalledMod>, ErrorMark
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 		let priority = u32::try_from(entries.len()).context(ErrorMarker::environment_invalid(None))?;
-		entries.push(ModlistEntry {
+		entries.push(InstalledMod {
 			name,
 			priority: ModPriority::new(priority),
 			enabled,
 		});
 	}
-	Ok(entries
-		.into_iter()
-		.map(|entry| InstalledMod {
-			name: entry.name,
-			priority: entry.priority,
-			enabled: entry.enabled,
-		})
-		.collect())
+	Ok(entries)
 }
 
 pub(crate) fn append_disabled_mod(bytes: &[u8], name: &ModName) -> Result<Vec<u8>, ErrorMarker> {
@@ -1485,6 +1477,7 @@ mod tests {
 	use super::load;
 	use super::validate_provider;
 	use super::validate_provider_directory;
+	use super::visible_plugins;
 	use crate::EnvironmentAdapter;
 	use crate::profile::PROFILE_FILES;
 	use crate::safe_fs::EntryBudget;
@@ -1789,7 +1782,7 @@ mod tests {
 				.expect("fixture environment root must canonicalize"),
 		)
 		.expect("fixture environment root must open");
-		let visible = super::visible_plugins(&safe_root, None, &CancellationToken::new())
+		let visible = visible_plugins(&safe_root, None, &CancellationToken::new())
 			.expect("visible plugins must load");
 		assert_eq!(visible.get("éσ.esp").map(String::as_str), Some("éς.ESP"));
 		let profile = root.as_path().join("profile");

@@ -5,6 +5,18 @@ const steps = workflow.jobs.check.steps as any[];
 const named = (name: string) => steps.find(step => step.name === name);
 
 describe("native CI cache policy", () => {
+	test("repository tool checks run independently of native CI", async () => {
+		const tools = Bun.YAML.parse(await Bun.file(".github/workflows/tools.yml").text()) as any;
+		expect(named("Run repository tool checks")).toBeUndefined();
+		expect(tools.on).toHaveProperty("pull_request");
+		expect(tools.on.push.branches).toEqual(["main"]);
+		expect(tools.on).toHaveProperty("workflow_dispatch");
+		expect(tools.on.schedule).toEqual(workflow.on.schedule);
+		expect(tools.jobs.tools.needs).toBeUndefined();
+		expect(tools.jobs.tools.steps.some((step: any) => step.run === "bun run check:tools")).toBe(true);
+		expect(tools.jobs.tools.steps.some((step: any) => step.run === "bun install --frozen-lockfile")).toBe(true);
+	});
+
 	test("requires an exact bundle key and validates before Rust consumes it", () => {
 		const restore = named("Restore exact native bundle");
 		const save = named("Save verified native bundle");

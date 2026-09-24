@@ -62,16 +62,15 @@ pub(crate) fn discover(
 					continue;
 				}
 			};
-			let Some((_, install_dir, _)) = manifest::fields(&text)
-				.map_err(|error| {
+			let (_, install_dir, _) = match manifest::fields(&text) {
+				Ok(fields) => fields,
+				Err(error) => {
 					if first_invalid.is_none() {
 						first_invalid =
 							Some(error.context(ErrorMarker::game_install_invalid()));
 					}
-				})
-				.ok()
-			else {
-				continue;
+					continue;
+				}
 			};
 			if !manifest::is_install_directory_name(&install_dir) {
 				if first_invalid.is_none() {

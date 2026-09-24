@@ -9,6 +9,10 @@ use crate::limits::MAX_ARCHIVE_WORK;
 use crate::limits::MAX_COMPRESSION_RATIO;
 use crate::limits::MAX_DICTIONARY_BYTES;
 use crate::path::SafeArchivePath;
+use crc32fast::Hasher as Crc32Hasher;
+use crc32fast::hash as crc32_hash;
+use lzma_rust2::Lzma2Reader;
+use lzma_rust2::LzmaReader;
 use rootcause::Report;
 use rootcause::Result;
 use rootcause::report;
@@ -20,6 +24,7 @@ use std::fs::File;
 use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
+use std::result::Result as StdResult;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -153,7 +158,7 @@ fn preflight_header(source: &mut File, cancellation: &CancellationToken, started
 			.try_into()
 			.map_err(|_| report!(ArchiveError::InvalidArchive))?,
 	);
-	if crc32fast::hash(&signature_header[12..]) != expected_start_header_crc {
+	if crc32_hash(&signature_header[12..]) != expected_start_header_crc {
 		return Err(report!(ArchiveError::InvalidArchive));
 	}
 
@@ -200,7 +205,7 @@ fn preflight_header(source: &mut File, cancellation: &CancellationToken, started
 			.map_err(|error| report!(error).context(ArchiveError::Io))?;
 		bytes_read = chunk_end;
 	}
-	if crc32fast::hash(&next_header) != expected_next_header_crc {
+	if crc32_hash(&next_header) != expected_next_header_crc {
 		return Err(report!(ArchiveError::InvalidArchive));
 	}
 
@@ -226,7 +231,7 @@ fn preflight_header(source: &mut File, cancellation: &CancellationToken, started
 	if let Some(expected_crc) = plan.packed_crc {
 		source.seek(SeekFrom::Start(plan.packed_start))
 			.map_err(|error| report!(error).context(ArchiveError::Io))?;
-		let mut hasher = crc32fast::Hasher::new();
+		let mut hasher = Crc32Hasher::new();
 		let mut remaining = plan.packed_size;
 		let mut buffer = [0_u8; 64 * 1024];
 		while remaining > 0 {
@@ -282,7 +287,7 @@ fn preflight_encoded_header(
 	next_header_end: u64,
 	cancellation: &CancellationToken,
 	started: Instant,
-) -> std::result::Result<EncodedHeaderPlan, ArchiveError> {
+) -> StdResult<EncodedHeaderPlan, ArchiveError> {
 	let mut header = HeaderCursor::new(header);
 	if header.read_byte()? != K_PACK_INFO {
 		return Err(ArchiveError::InvalidArchive);
@@ -562,17 +567,11 @@ fn decode_encoded_header(
 		decoder = match coder.decoder {
 			EncodedHeaderDecoder::Copy => decoder,
 			EncodedHeaderDecoder::Lzma { properties, dictionary } => Box::new(
-				lzma_rust2::LzmaReader::new_with_props(
-					decoder,
-					coder.unpacked_size,
-					properties,
-					dictionary,
-					None,
-				)
-				.map_err(|error| report!(error).context(ArchiveError::InvalidArchive))?,
+				LzmaReader::new_with_props(decoder, coder.unpacked_size, properties, dictionary, None)
+					.map_err(|error| report!(error).context(ArchiveError::InvalidArchive))?,
 			),
 			EncodedHeaderDecoder::Lzma2 { dictionary } => {
-				Box::new(lzma_rust2::Lzma2Reader::new(decoder, dictionary, None))
+				Box::new(Lzma2Reader::new(decoder, dictionary, None))
 			}
 		};
 	}
@@ -604,7 +603,7 @@ fn decode_encoded_header(
 		return Err(report!(ArchiveError::InvalidArchive));
 	}
 	if plan.unpacked_crc
-		.is_some_and(|expected_crc| crc32fast::hash(&decoded) != expected_crc)
+		.is_some_and(|expected_crc| crc32_hash(&decoded) != expected_crc)
 	{
 		return Err(report!(ArchiveError::InvalidArchive));
 	}
@@ -622,7 +621,7 @@ fn validate_raw_header(
 	header: &[u8],
 	cancellation: &CancellationToken,
 	started: Instant,
-) -> std::result::Result<(), ArchiveError> {
+) -> StdResult<(), ArchiveError> {
 	let mut header = HeaderCursor::new(header);
 	if header.read_byte()? != K_HEADER {
 		return Err(ArchiveError::InvalidArchive);
@@ -687,7 +686,7 @@ fn validate_raw_streams_info(
 	header: &mut HeaderCursor<'_>,
 	cancellation: &CancellationToken,
 	started: Instant,
-) -> std::result::Result<(), ArchiveError> {
+) -> StdResult<(), ArchiveError> {
 	let mut marker = header.read_byte()?;
 	if marker == K_PACK_INFO {
 		header.read_variable_u64()?;
@@ -968,7 +967,7 @@ fn read_defined_crcs(
 	count: usize,
 	cancellation: &CancellationToken,
 	started: Instant,
-) -> std::result::Result<Vec<Option<u32>>, ArchiveError> {
+) -> StdResult<Vec<Option<u32>>, ArchiveError> {
 	if count > MAX_ARCHIVE_MEMBERS {
 		return Err(ArchiveError::ExpansionLimit);
 	}
@@ -1002,20 +1001,20 @@ impl<'a> HeaderCursor<'a> {
 		Self { bytes, position: 0 }
 	}
 
-	fn read_byte(&mut self) -> std::result::Result<u8, ArchiveError> {
+	fn read_byte(&mut self) -> StdResult<u8, ArchiveError> {
 		let byte = *self.bytes.get(self.position).ok_or(ArchiveError::InvalidArchive)?;
 		self.position += 1;
 		Ok(byte)
 	}
 
-	fn read_bytes(&mut self, length: usize) -> std::result::Result<&'a [u8], ArchiveError> {
+	fn read_bytes(&mut self, length: usize) -> StdResult<&'a [u8], ArchiveError> {
 		let end = self.position.checked_add(length).ok_or(ArchiveError::InvalidArchive)?;
 		let bytes = self.bytes.get(self.position..end).ok_or(ArchiveError::InvalidArchive)?;
 		self.position = end;
 		Ok(bytes)
 	}
 
-	fn read_u32(&mut self) -> std::result::Result<u32, ArchiveError> {
+	fn read_u32(&mut self) -> StdResult<u32, ArchiveError> {
 		let bytes: [u8; 4] = self
 			.read_bytes(4)?
 			.try_into()
@@ -1023,7 +1022,7 @@ impl<'a> HeaderCursor<'a> {
 		Ok(u32::from_le_bytes(bytes))
 	}
 
-	fn read_variable_u64(&mut self) -> std::result::Result<u64, ArchiveError> {
+	fn read_variable_u64(&mut self) -> StdResult<u64, ArchiveError> {
 		let first = u64::from(self.read_byte()?);
 		let mut mask = 0x80_u64;
 		let mut value = 0_u64;
@@ -1037,7 +1036,7 @@ impl<'a> HeaderCursor<'a> {
 		Ok(value)
 	}
 
-	fn read_limited_count(&mut self, maximum: usize) -> std::result::Result<usize, ArchiveError> {
+	fn read_limited_count(&mut self, maximum: usize) -> StdResult<usize, ArchiveError> {
 		let value = self.read_variable_u64()?;
 		if value > maximum as u64 {
 			return Err(ArchiveError::ExpansionLimit);
@@ -1235,9 +1234,11 @@ mod tests {
 	use super::K_MAIN_STREAMS_INFO;
 	use super::K_PACK_INFO;
 	use super::K_SIZE;
+	use super::K_SUB_STREAMS_INFO;
 	use super::K_UNPACK_INFO;
 	use super::SEVEN_ZIP_AES_METHOD;
 	use super::SEVEN_ZIP_LZMA_METHOD;
+	use super::SEVEN_ZIP_SIGNATURE;
 	use super::index;
 	use super::open_controlled;
 	use super::preflight_encoded_header;
@@ -1248,6 +1249,7 @@ mod tests {
 	use crate::limits::MAX_ARCHIVE_METADATA_BYTES;
 	use crate::limits::MAX_COMPRESSION_RATIO;
 	use crate::limits::MAX_DICTIONARY_BYTES;
+	use crc32fast::hash as crc32_hash;
 	use sevenz_rust2::ArchiveEntry;
 	use sevenz_rust2::ArchiveWriter;
 	use sevenz_rust2::SourceReader;
@@ -1259,11 +1261,12 @@ mod tests {
 	use std::io::Seek;
 	use std::io::SeekFrom;
 	use std::io::Write;
+	use std::result::Result as StdResult;
 	use std::time::Instant;
 	use tempfile::tempfile;
 	use tokio_util::sync::CancellationToken;
 
-	type TestResult<T = ()> = std::result::Result<T, Box<dyn StdError>>;
+	type TestResult<T = ()> = StdResult<T, Box<dyn StdError>>;
 
 	fn push_variable_u64(bytes: &mut Vec<u8>, mut value: u64) {
 		let mut first = 0_u8;
@@ -1306,7 +1309,7 @@ mod tests {
 		Ok(header)
 	}
 
-	fn preflight_synthetic_encoded_header(header: &[u8]) -> TestResult<std::result::Result<(), ArchiveError>> {
+	fn preflight_synthetic_encoded_header(header: &[u8]) -> TestResult<StdResult<(), ArchiveError>> {
 		let next_header_start = 33;
 		let header_length = u64::try_from(header.len())?;
 		Ok(preflight_encoded_header(
@@ -1322,12 +1325,12 @@ mod tests {
 
 	fn synthetic_archive(packed: &[u8], next_header: &[u8]) -> TestResult<File> {
 		let mut signature_header = [0_u8; 32];
-		signature_header[..6].copy_from_slice(super::SEVEN_ZIP_SIGNATURE);
+		signature_header[..6].copy_from_slice(SEVEN_ZIP_SIGNATURE);
 		signature_header[6..8].copy_from_slice(&[0, 4]);
 		signature_header[12..20].copy_from_slice(&u64::try_from(packed.len())?.to_le_bytes());
 		signature_header[20..28].copy_from_slice(&u64::try_from(next_header.len())?.to_le_bytes());
-		signature_header[28..32].copy_from_slice(&crc32fast::hash(next_header).to_le_bytes());
-		let start_header_crc = crc32fast::hash(&signature_header[12..]);
+		signature_header[28..32].copy_from_slice(&crc32_hash(next_header).to_le_bytes());
+		let start_header_crc = crc32_hash(&signature_header[12..]);
 		signature_header[8..12].copy_from_slice(&start_header_crc.to_le_bytes());
 
 		let mut file = tempfile()?;
@@ -1429,7 +1432,7 @@ mod tests {
 			1,
 			1,
 			K_END,
-			super::K_SUB_STREAMS_INFO,
+			K_SUB_STREAMS_INFO,
 			K_END,
 			K_END,
 			K_END,
@@ -1527,7 +1530,7 @@ mod tests {
 		file.seek(SeekFrom::Start(32 + next_header_offset))?;
 		let mut marker = [0_u8; 1];
 		file.read_exact(&mut marker)?;
-		assert_eq!(marker[0], super::K_ENCODED_HEADER);
+		assert_eq!(marker[0], K_ENCODED_HEADER);
 
 		file.seek(SeekFrom::Start(0))?;
 		let Ok(members) = index(file, &CancellationToken::new(), Instant::now()) else {

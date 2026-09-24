@@ -226,14 +226,16 @@ fn validate_profile_mode(
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
-		if profile.exists(name).context(ErrorMarker::environment_invalid(None))? {
-			let bytes = read_regular_file(profile, name, cancellation)?;
-			let text = decode(&bytes)?.0;
-			if contains_keys(&text, &MANAGED_GENERAL_KEYS)
-				|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
-			{
-				return Err(report!(ErrorMarker::environment_invalid(None)));
-			}
+		if !profile.exists(name).context(ErrorMarker::environment_invalid(None))? {
+			continue;
+		}
+
+		let bytes = read_regular_file(profile, name, cancellation)?;
+		let text = decode(&bytes)?.0;
+		if contains_keys(&text, &MANAGED_GENERAL_KEYS)
+			|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
+		{
+			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
 	for (name, utf8) in [("plugins.txt", false), ("loadorder.txt", true)] {
@@ -381,13 +383,15 @@ pub(crate) fn stage_plugin_maintenance(
 		.map(case_fold_key)
 		.collect::<HashSet<_>>();
 	for (key, spelling) in newly_visible {
-		if !existing.contains(&key) {
-			if !loadorder_output.is_empty() && !loadorder_output.ends_with("\r\n") {
-				loadorder_output.push_str("\r\n");
-			}
-			loadorder_output.push_str(&spelling);
+		if existing.contains(&key) {
+			continue;
+		}
+
+		if !loadorder_output.is_empty() && !loadorder_output.ends_with("\r\n") {
 			loadorder_output.push_str("\r\n");
 		}
+		loadorder_output.push_str(&spelling);
+		loadorder_output.push_str("\r\n");
 	}
 	if loadorder_output != loadorder_text {
 		staged_profile
@@ -566,21 +570,21 @@ fn insert_section_values(lines: &mut Vec<String>, section: &str, values: &[Strin
 
 fn last_archive_list(bytes: &[u8]) -> Option<String> {
 	let (text, _) = decode(bytes).ok()?;
-	let mut current = "";
-	let mut found = None;
+	let mut current_section = "";
+	let mut last_value = None;
 	for line in text.lines() {
 		if let Some(section) = section_name(line) {
-			current = section;
+			current_section = section;
 			continue;
 		}
-		if current.eq_ignore_ascii_case("Archive")
+		if current_section.eq_ignore_ascii_case("Archive")
 			&& let Some((key, value)) = line.split_once('=')
 			&& key.trim().eq_ignore_ascii_case("sArchiveList")
 		{
-			found = Some(value.trim().to_owned());
+			last_value = Some(value.trim().to_owned());
 		}
 	}
-	found
+	last_value
 }
 
 fn normalized_archive_list(source: &str) -> String {
@@ -625,13 +629,13 @@ fn contains_keys(text: &str, keys: &[&str]) -> bool {
 }
 
 fn contains_keys_outside_section(text: &str, section: &str, keys: &[&str]) -> bool {
-	let mut current = "";
+	let mut current_section = "";
 	for line in text.lines() {
 		if let Some(found) = section_name(line) {
-			current = found;
+			current_section = found;
 			continue;
 		}
-		if !current.eq_ignore_ascii_case(section)
+		if !current_section.eq_ignore_ascii_case(section)
 			&& line.split_once('=').is_some_and(|(key, _)| {
 				keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim()))
 			}) {
@@ -643,13 +647,13 @@ fn contains_keys_outside_section(text: &str, section: &str, keys: &[&str]) -> bo
 
 fn section_values<'a>(text: &'a str, wanted_section: &str, wanted_keys: &[&str]) -> HashMap<String, Vec<&'a str>> {
 	let mut result: HashMap<String, Vec<&str>> = HashMap::new();
-	let mut current = "";
+	let mut current_section = "";
 	for line in text.lines() {
 		if let Some(section) = section_name(line) {
-			current = section;
+			current_section = section;
 			continue;
 		}
-		if !current.eq_ignore_ascii_case(wanted_section) {
+		if !current_section.eq_ignore_ascii_case(wanted_section) {
 			continue;
 		}
 		let Some((key, value)) = line.split_once('=') else {

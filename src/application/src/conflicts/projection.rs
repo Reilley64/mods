@@ -780,17 +780,19 @@ fn problem_scope_order(scope: &ProblemScope) -> u8 {
 }
 
 fn compare_provider_identity_names(left: &ProviderIdentity, right: &ProviderIdentity) -> Ordering {
-	match (left, right) {
-		(
-			ProviderIdentity::DataMod {
-				mod_name: left_name, ..
-			},
-			ProviderIdentity::DataMod {
-				mod_name: right_name, ..
-			},
-		) => compare_utf16(left_name.as_str(), right_name.as_str()),
-		_ => Ordering::Equal,
-	}
+	let (
+		ProviderIdentity::DataMod {
+			mod_name: left_name, ..
+		},
+		ProviderIdentity::DataMod {
+			mod_name: right_name, ..
+		},
+	) = (left, right)
+	else {
+		return Ordering::Equal;
+	};
+
+	compare_utf16(left_name.as_str(), right_name.as_str())
 }
 
 fn compare_rows(left: &ConflictRow, right: &ConflictRow) -> Ordering {
@@ -873,7 +875,6 @@ mod tests {
 	}
 
 	fn data_mod_file(
-		_id: u64,
 		name: &str,
 		priority: u32,
 		path_value: &str,
@@ -896,7 +897,7 @@ mod tests {
 		}
 	}
 
-	fn steam_file(_id: u64, path_value: &str) -> IndexedConflictFile {
+	fn steam_file(path_value: &str) -> IndexedConflictFile {
 		let path = path(path_value);
 		IndexedConflictFile {
 			id: IndexedConflictFileId::new(ProviderIdentity::SteamData, path.clone()),
@@ -904,7 +905,7 @@ mod tests {
 		}
 	}
 
-	fn overwrite_file(_id: u64, path_value: &str) -> IndexedConflictFile {
+	fn overwrite_file(path_value: &str) -> IndexedConflictFile {
 		let path = path(path_value);
 		IndexedConflictFile {
 			id: IndexedConflictFileId::new(ProviderIdentity::Overwrite, path.clone()),
@@ -996,7 +997,6 @@ mod tests {
 					0,
 					true,
 					vec![data_mod_file(
-						1,
 						"Low",
 						0,
 						"Textures/A.dds",
@@ -1009,7 +1009,6 @@ mod tests {
 					1,
 					true,
 					vec![data_mod_file(
-						2,
 						"High",
 						1,
 						"textures/a.DDS",
@@ -1055,14 +1054,14 @@ mod tests {
 					"Low",
 					0,
 					true,
-					vec![data_mod_file(1, "Low", 0, "same.txt", ParticipationReason::EnabledMod)],
+					vec![data_mod_file("Low", 0, "same.txt", ParticipationReason::EnabledMod)],
 					Vec::new(),
 				),
 				provider(
 					"High",
 					1,
 					true,
-					vec![data_mod_file(2, "High", 1, "same.txt", ParticipationReason::EnabledMod)],
+					vec![data_mod_file("High", 1, "same.txt", ParticipationReason::EnabledMod)],
 					Vec::new(),
 				),
 			],
@@ -1092,7 +1091,6 @@ mod tests {
 					0,
 					true,
 					vec![data_mod_file(
-						1,
 						"Enabled",
 						0,
 						"shared.txt",
@@ -1105,7 +1103,6 @@ mod tests {
 					1,
 					false,
 					vec![data_mod_file(
-						2,
 						"Disabled",
 						1,
 						"shared.txt",
@@ -1150,7 +1147,6 @@ mod tests {
 					0,
 					true,
 					vec![data_mod_file(
-						1,
 						"Low",
 						0,
 						"Textures/Old/a.dds",
@@ -1193,7 +1189,6 @@ mod tests {
 					0,
 					true,
 					vec![data_mod_file(
-						1,
 						"Suppressed",
 						0,
 						"shared.txt",
@@ -1207,7 +1202,6 @@ mod tests {
 					2,
 					true,
 					vec![data_mod_file(
-						2,
 						"Higher",
 						2,
 						"shared.txt",
@@ -1220,7 +1214,6 @@ mod tests {
 					3,
 					true,
 					vec![data_mod_file(
-						3,
 						"Winner",
 						3,
 						"shared.txt",
@@ -1250,17 +1243,12 @@ mod tests {
 	async fn overwrite_wins_after_enabled_mods_and_disabled_priorities_remain_gaps() -> Result<(), ErrorMarker> {
 		let scan = EnvironmentConflictScan {
 			providers: vec![
-				fixed_provider(
-					ProviderIdentity::SteamData,
-					true,
-					vec![steam_file(1, "Shared/File.txt")],
-				),
+				fixed_provider(ProviderIdentity::SteamData, true, vec![steam_file("Shared/File.txt")]),
 				provider(
 					"Low",
 					0,
 					true,
 					vec![data_mod_file(
-						2,
 						"Low",
 						0,
 						"shared/file.TXT",
@@ -1273,7 +1261,6 @@ mod tests {
 					1,
 					false,
 					vec![data_mod_file(
-						3,
 						"Disabled",
 						1,
 						"shared/file.txt",
@@ -1286,7 +1273,6 @@ mod tests {
 					2,
 					true,
 					vec![data_mod_file(
-						4,
 						"High",
 						2,
 						"shared/file.txt",
@@ -1297,7 +1283,7 @@ mod tests {
 				fixed_provider(
 					ProviderIdentity::Overwrite,
 					true,
-					vec![overwrite_file(5, "SHARED/file.txt")],
+					vec![overwrite_file("SHARED/file.txt")],
 				),
 			],
 			problems: Vec::new(),
@@ -1340,14 +1326,14 @@ mod tests {
 					"Low",
 					0,
 					true,
-					vec![data_mod_file(1, "Low", 0, "same.txt", ParticipationReason::EnabledMod)],
+					vec![data_mod_file("Low", 0, "same.txt", ParticipationReason::EnabledMod)],
 					Vec::new(),
 				),
 				provider(
 					"High",
 					1,
 					true,
-					vec![data_mod_file(2, "High", 1, "same.txt", ParticipationReason::EnabledMod)],
+					vec![data_mod_file("High", 1, "same.txt", ParticipationReason::EnabledMod)],
 					Vec::new(),
 				),
 			],
@@ -1408,13 +1394,7 @@ mod tests {
 					"Enabled",
 					0,
 					true,
-					vec![data_mod_file(
-						1,
-						"Enabled",
-						0,
-						"folder",
-						ParticipationReason::EnabledMod,
-					)],
+					vec![data_mod_file("Enabled", 0, "folder", ParticipationReason::EnabledMod)],
 					Vec::new(),
 				),
 				provider(
@@ -1422,7 +1402,6 @@ mod tests {
 					1,
 					false,
 					vec![data_mod_file(
-						2,
 						"Disabled",
 						1,
 						"folder/file.txt",
@@ -1571,7 +1550,6 @@ mod tests {
 					0,
 					true,
 					vec![data_mod_file(
-						1,
 						"Lower",
 						0,
 						"selected.txt",
@@ -1584,7 +1562,6 @@ mod tests {
 					1,
 					true,
 					vec![data_mod_file(
-						2,
 						"Selected",
 						1,
 						"selected.txt",
@@ -1597,7 +1574,6 @@ mod tests {
 					2,
 					true,
 					vec![data_mod_file(
-						3,
 						"Unrelated Lower",
 						2,
 						"unrelated.txt",
@@ -1610,7 +1586,6 @@ mod tests {
 					3,
 					true,
 					vec![data_mod_file(
-						4,
 						"Unrelated Higher",
 						3,
 						"unrelated.txt",
@@ -1643,14 +1618,12 @@ mod tests {
 						true,
 						vec![
 							data_mod_file(
-								1,
 								"Lower",
 								0,
 								"old.txt",
 								ParticipationReason::EnabledMod,
 							),
 							data_mod_file(
-								2,
 								"Lower",
 								0,
 								"folder/file.txt",
@@ -1720,7 +1693,6 @@ mod tests {
 						0,
 						true,
 						vec![data_mod_file(
-							1,
 							"Selected",
 							0,
 							"same.txt",
@@ -1733,7 +1705,6 @@ mod tests {
 						1,
 						true,
 						vec![data_mod_file(
-							2,
 							"Higher",
 							1,
 							"same.txt",
@@ -1768,7 +1739,6 @@ mod tests {
 						0,
 						true,
 						vec![data_mod_file(
-							1,
 							"Lower",
 							0,
 							"won.txt",
@@ -1782,14 +1752,12 @@ mod tests {
 						true,
 						vec![
 							data_mod_file(
-								2,
 								"Selected",
 								1,
 								"won.txt",
 								ParticipationReason::EnabledMod,
 							),
 							data_mod_file(
-								3,
 								"Selected",
 								1,
 								"lost.txt",
@@ -1803,7 +1771,6 @@ mod tests {
 						2,
 						true,
 						vec![data_mod_file(
-							4,
 							"Higher",
 							2,
 							"lost.txt",
@@ -1839,7 +1806,6 @@ mod tests {
 						0,
 						true,
 						vec![data_mod_file(
-							1,
 							"Lower",
 							0,
 							"old.txt",
@@ -1853,14 +1819,12 @@ mod tests {
 						true,
 						vec![
 							data_mod_file(
-								2,
 								"Selected",
 								1,
 								"own.txt",
 								ParticipationReason::EnabledMod,
 							),
 							data_mod_file(
-								3,
 								"Selected",
 								1,
 								"removed.txt",
@@ -1914,7 +1878,6 @@ mod tests {
 						0,
 						true,
 						vec![data_mod_file(
-							1,
 							"Lower",
 							0,
 							"shared.txt",
@@ -1927,7 +1890,6 @@ mod tests {
 						1,
 						true,
 						vec![data_mod_file(
-							2,
 							"Selected",
 							1,
 							"shared.txt",
@@ -1956,14 +1918,12 @@ mod tests {
 						true,
 						vec![
 							data_mod_file(
-								1,
 								"Selected",
 								0,
 								"shared.txt",
 								ParticipationReason::EnabledMod,
 							),
 							data_mod_file(
-								2,
 								"Selected",
 								0,
 								"unique.txt",
@@ -1977,7 +1937,6 @@ mod tests {
 						1,
 						true,
 						vec![data_mod_file(
-							3,
 							"Higher",
 							1,
 							"shared.txt",
@@ -2035,15 +1994,8 @@ mod tests {
 					0,
 					true,
 					vec![
+						data_mod_file("Lower", 0, private_use, ParticipationReason::EnabledMod),
 						data_mod_file(
-							1,
-							"Lower",
-							0,
-							private_use,
-							ParticipationReason::EnabledMod,
-						),
-						data_mod_file(
-							2,
 							"Lower",
 							0,
 							supplementary,
@@ -2058,14 +2010,12 @@ mod tests {
 					true,
 					vec![
 						data_mod_file(
-							3,
 							"Higher",
 							1,
 							private_use,
 							ParticipationReason::EnabledMod,
 						),
 						data_mod_file(
-							4,
 							"Higher",
 							1,
 							supplementary,
@@ -2107,15 +2057,8 @@ mod tests {
 					0,
 					true,
 					vec![
+						data_mod_file("Lower", 0, private_use, ParticipationReason::EnabledMod),
 						data_mod_file(
-							1,
-							"Lower",
-							0,
-							private_use,
-							ParticipationReason::EnabledMod,
-						),
-						data_mod_file(
-							2,
 							"Lower",
 							0,
 							supplementary,
