@@ -12,6 +12,43 @@ Status: incomplete. This ledger starts from a read-only acceptance audit. Existi
 - Blocked: Windows PowerShell packaging, MSVC/LLVM compilation, clean disconnected consumer/native rebuilds, packaged runtime smoke, Windows 11 Steam scenarios, public assets and Winget installation/removal.
 - Final evidence must identify the committed revision and link retained logs/artifacts; the local checks above ran against uncommitted work, not a clean final checkout.
 
+## Committed Windows CI evidence
+
+Candidate revision: `35072e9dbed1308b6fda68c825f776b1cf79a0d2` ([draft PR #103](https://github.com/Reilley64/mods/pull/103)).
+
+- [Windows CI](https://github.com/Reilley64/mods/actions/runs/36100347155): passed, including native release validation, pinned native fetch, x86 adapter tests, formatting, Clippy, dependency checks and workspace tests.
+- [Repository tools](https://github.com/Reilley64/mods/actions/runs/36100347346): passed.
+- [Conventional Commit title](https://github.com/Reilley64/mods/actions/runs/36100347280): passed.
+- Preview publication was skipped by its intentional gate. These jobs do not prove packaged-binary behavior or a disconnected source rebuild.
+- A separate Windows 11 host has the pinned Rust toolchain, Visual Studio C++ tools, Windows SDK and Steam Fallout: New Vegas build `1510068`. Candidate packaging validation is in progress in an isolated user workspace; game files and saves have not been changed.
+
+## Windows 11 candidate packaging evidence
+
+Candidate revision: `35072e9dbed1308b6fda68c825f776b1cf79a0d2`. The isolated Windows 11 `10.0.26200` workspace ran the unchanged `scripts/package-windows.ps1` from a clean checkout.
+
+- Candidate ZIP SHA-256: `d760379881f469d1e1acfbea86cc04e036c68c6a291e6d1e1cd3b0b0729d72ae`; external `SHA256SUMS` matched.
+- Fresh extraction verified both executables, exactly four native runtimes, notices and packaged source.
+- Both executable help/version invocations returned exit 0. Their presentation versions are `0.0.0`; this is not a stable aggregate-version assertion.
+- Packaged source rebuilt successfully with an initially empty Cargo home and fresh target directory, using `cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins` and the included local native ZIP. All seven required headers and pinned native source hash were verified.
+- Network remained connected. This is **not** disconnected rebuild proof, and it does not rebuild native usvfs.
+- Logs remain under `C:/Users/prime/mods-issue-33`: `packaging.log`, `smoke.log`, `consumer-rebuild.log`, and `final-evidence.log`. The candidate remains local to the approved host; no publication occurred.
+
+## Windows initialization blocker
+
+The first packaged CLI initialization returned `game_install_invalid` (exit 1) for `C:/Games/Steam/steamapps/common/Fallout New Vegas`. The selected owned environment contains only diagnostic logs; no manifest/profile/mods were published. No retry or cleanup was performed.
+
+Read-only inspection found `Data/Fallout - Invalidation.bsa` (83 bytes). `src/infrastructure/game_platform/src/steam/validation.rs` explicitly rejects that reserved filename. Required executable/default INI and path directories were present with no reported links. This observed reserved archive is sufficient to fail the current validation contract; no product fix is justified by this observation.
+
+Before/after content-hash inventories of all 312 Steam Data files were byte-identical. The standard save directory for the test user was absent both times; other save locations were not asserted covered. Evidence remains under `C:/Users/prime/mods-issue-33/safe-smoke-20260925-01`.
+
+Downstream settings/install/conflict/MCP acceptance is blocked pending an approved clean installation or explicit owner action on the conflicting existing archive. The archive was not moved, deleted or modified.
+
+## Native source inventory evidence
+
+The published native source asset SHA-256 matched `961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199`. A local archive audit verified all 16,347 declared files, all 66 source-map resource SHA-512 values, and the nested fork revision/file inventory. No missing mapped library-source asset was identified. This is inventory evidence, not a native rebuild result or an unconditional source-completeness certification.
+
+The existing native `packaging/rebuild-sources.ps1` requires collector-stage inputs not contained in the released source archive: a genuine collection-status report, provisioned helper tools/archives and bootstrapped vcpkg. The downloaded release-preparation artifact contains the native ZIP, source archive and release manifest, but not that collector-stage report. The existing native rebuild path therefore still needs its documented inputs; no prior-run report has been fabricated and no replacement harness has been added.
+
 ## Authority and supersessions
 
 Read via `gh`: issues [33](https://github.com/Reilley64/mods/issues/33), [25](https://github.com/Reilley64/mods/issues/25), [32](https://github.com/Reilley64/mods/issues/32), including comments (none), and the [authoritative acceptance gist](https://gist.github.com/Reilley64/76e35e2187eb5f0aff543c228a6de39f).
