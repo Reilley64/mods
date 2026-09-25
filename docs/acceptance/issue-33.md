@@ -67,6 +67,16 @@ The exact previously failing MCP request (same ID 5, original environment and fi
 
 Evidence: `C:/Users/prime/mods-issue-33/packaging-82467db.log`, `dist-82467db`, `extracted-82467db`, and `safe-smoke-20260925-02/evidence-82467db` (literal requests/responses, session streams/statuses, fixture/state observations and inventories). The prior empty-Cargo-home consumer rebuild applies to the older candidate, not this ZIP. Disconnected and native source rebuild evidence remains missing. The observed candidate-discriminator defect is resolved by real Windows replay, not only unit tests.
 
+## Controlled execution blocker
+
+The owner approved controlled x86/x64 read-only tools, descendants and cancellation (not game launch). On candidate `82467db`, a fresh environment initialized successfully. The first and only managed-execution command targeted the verified x64 `C:/Windows/System32/whoami.exe` with no arguments and an owned workspace cwd.
+
+The controller `mods.exe` crashed with unsigned exit `3221225477` (`0xC0000005`, access violation); stdout/stderr were empty. Windows Application Error event 1000 identified packaged `usvfs_x64.dll`, fault offset `0x60210`, report `c81582db-a053-4386-b8b9-1bcbe372b42e`. The execution diagnostic ended after effective plugin configuration without completion. This is not successful child execution or graceful fail-closed evidence. Root cause remains unconfirmed.
+
+The test stopped immediately: no x86/MCP execution, descendant or cancellation tests ran. No retry, cleanup, debugger, system changes or native repair occurred. Final process inspection found no test/game processes. All 311 Steam Data hashes matched the post-approved-move baseline, and the standard save path remained absent.
+
+Evidence is retained at `C:/Users/prime/mods-issue-33/execution-smoke-20260925-01/evidence` (exact argv, status, streams, Windows crash events, PE/hashes, process and file inventories). Successful execution acceptance remains blocked pending focused diagnosis and an approved repair/retest plan.
+
 ## Native source inventory evidence
 
 The published native source asset SHA-256 matched `961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199`. A local archive audit verified all 16,347 declared files, all 66 source-map resource SHA-512 values, and the nested fork revision/file inventory. No missing mapped library-source asset was identified. This is inventory evidence, not a native rebuild result or an unconditional source-completeness certification.
