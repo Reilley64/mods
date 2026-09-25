@@ -1,5 +1,5 @@
 [package]
-name = "archive"
+name = "infrastructure-archive"
 version = "0.0.0"
 edition = "2024"
 publish = false

@@ -3,12 +3,12 @@ const packageNames = [
   "mods-mcp",
   "domain",
   "application",
-  "environment",
-  "settings",
-  "game-platform",
-  "archive",
-  "execution",
-  "infrastructure",
+  "infrastructure-environment",
+  "infrastructure-settings",
+  "infrastructure-game-platform",
+  "infrastructure-archive",
+  "infrastructure-execution",
+  "infrastructure-dependencies",
 ] as const;
 
 type PackageName = (typeof packageNames)[number];
@@ -22,16 +22,16 @@ type CargoMetadata = {
 };
 
 const expectedProjectDependencies: Record<PackageName, readonly PackageName[]> = {
-  mods: ["application", "domain", "infrastructure"],
-  "mods-mcp": ["application", "domain", "infrastructure"],
+  mods: ["application", "domain", "infrastructure-dependencies"],
+  "mods-mcp": ["application", "domain", "infrastructure-dependencies"],
   domain: [],
   application: ["domain"],
-  environment: ["application", "domain"],
-  settings: ["application", "domain"],
-  "game-platform": ["application", "domain"],
-  archive: ["application", "domain"],
-  execution: ["application", "domain"],
-  infrastructure: ["environment", "settings", "game-platform", "archive", "execution", "application", "domain"],
+  "infrastructure-environment": ["application", "domain"],
+  "infrastructure-settings": ["application", "domain"],
+  "infrastructure-game-platform": ["application", "domain"],
+  "infrastructure-archive": ["application", "domain"],
+  "infrastructure-execution": ["application", "domain"],
+  "infrastructure-dependencies": ["infrastructure-environment", "infrastructure-settings", "infrastructure-game-platform", "infrastructure-archive", "infrastructure-execution", "application", "domain"],
 };
 
 export function validateProjectGraph(metadata: CargoMetadata): string[] {

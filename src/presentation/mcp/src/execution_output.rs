@@ -1,7 +1,7 @@
 use application::execution::ExecuteProgramOutput;
 use application::execution::ExecutionWarning;
-use infrastructure::CapturedOutput;
-use infrastructure::CapturedStream;
+use infrastructure_dependencies::CapturedOutput;
+use infrastructure_dependencies::CapturedStream;
 use rmcp::model::CallToolResult;
 use rmcp::model::ContentBlock;
 use serde_json::Value;
@@ -55,8 +55,8 @@ mod tests {
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
 	use domain::ProcessStatus;
-	use infrastructure::CapturedOutput;
-	use infrastructure::CapturedStream;
+	use infrastructure_dependencies::CapturedOutput;
+	use infrastructure_dependencies::CapturedStream;
 	use rootcause::Result;
 	use rootcause::report;
 	use serde_json::json;

@@ -1,7 +1,7 @@
 use crate::Resources;
 use crate::execution_adapter::ExecutionAdapter;
 use application::execution::ExecuteProgramDependencies;
-use execution::ExecutionCapture;
+use infrastructure_execution::ExecutionCapture;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;

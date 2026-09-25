@@ -68,7 +68,7 @@ jobs:
           "LIBCLANG_PATH=C:/Program Files/LLVM/bin" >> $env:GITHUB_ENV
       - name: Compile and test x86 adapter bindings
         if: steps.rust-changes.outputs.changed == 'true'
-        run: cargo test --locked --package execution --target i686-pc-windows-msvc
+        run: cargo test --locked --package infrastructure-execution --target i686-pc-windows-msvc
       - name: Run Rust checks
         if: steps.rust-changes.outputs.changed == 'true'
         run: bun run check:rust

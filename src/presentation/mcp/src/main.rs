@@ -22,7 +22,7 @@ use diagnostics::DiagnosticSession;
 use diagnostics::SINK_WARNING;
 use diagnostics::SessionStart;
 use domain::EnvironmentRoot;
-use infrastructure::Resources;
+use infrastructure_dependencies::Resources;
 use path_resolution::resolve_path;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;

@@ -11,14 +11,14 @@ mod list_effective_conflicts;
 mod list_settings;
 mod set_game_directory;
 
-use archive::ArchiveAdapter;
 use domain::EnvironmentRoot;
-use environment::EnvironmentAdapter;
 pub use execution::CapturedOutput;
 pub use execution::CapturedStream;
 pub use execution::ExecutionCapture;
-use game_platform::GamePlatformAdapter;
-use settings::SettingsAdapter;
+use infrastructure_archive::ArchiveAdapter;
+use infrastructure_environment::EnvironmentAdapter;
+use infrastructure_game_platform::GamePlatformAdapter;
+use infrastructure_settings::SettingsAdapter;
 
 #[derive(Clone)]
 pub struct Resources {

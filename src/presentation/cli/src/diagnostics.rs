@@ -116,12 +116,12 @@ fn filter(level: LogLevel) -> Targets {
 		"mods",
 		"application",
 		"domain",
-		"environment",
-		"settings",
-		"game_platform",
-		"archive",
-		"execution",
-		"infrastructure",
+		"infrastructure_environment",
+		"infrastructure_settings",
+		"infrastructure_game_platform",
+		"infrastructure_archive",
+		"infrastructure_execution",
+		"infrastructure_dependencies",
 	]
 	.into_iter()
 	.fold(

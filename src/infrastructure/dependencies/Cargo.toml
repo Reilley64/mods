@@ -1,5 +1,5 @@
 [package]
-name = "infrastructure"
+name = "infrastructure-dependencies"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -9,11 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-environment = { path = "../environment", version = "0.0.0" }
-settings = { path = "../settings", version = "0.0.0" }
-game-platform = { path = "../game_platform", version = "0.0.0" }
-archive = { path = "../archive", version = "0.0.0" }
-execution = { path = "../execution", version = "0.0.0" }
+infrastructure-environment = { path = "../environment", version = "0.0.0" }
+infrastructure-settings = { path = "../settings", version = "0.0.0" }
+infrastructure-game-platform = { path = "../game_platform", version = "0.0.0" }
+infrastructure-archive = { path = "../archive", version = "0.0.0" }
+infrastructure-execution = { path = "../execution", version = "0.0.0" }
 application = { workspace = true }
 domain = { workspace = true }
 rootcause = { workspace = true }
