@@ -43,6 +43,30 @@ Before/after content-hash inventories of all 312 Steam Data files were byte-iden
 
 Downstream settings/install/conflict/MCP acceptance is blocked pending an approved clean installation or explicit owner action on the conflicting existing archive. The archive was not moved, deleted or modified.
 
+## Owner-approved reserved archive move
+
+After the first initialization failure, the owner approved moving only the conflicting 83-byte archive. It was moved to `C:/Users/prime/mods-issue-33/owner-approved-backup-20260925/Fallout - Invalidation.bsa`; `record.json` alongside it records the original path and metadata. SHA-256 before and after: `ee54ebdd90c485bce3b3c0151e193d40b37b3278a14decabc133f9afa8487f57`. The backup is retained, not deleted or restored.
+
+A fresh `safe-smoke-20260925-02` environment initialized successfully (exit 0). Subsequent safety comparisons use a new baseline **after** the owner-approved archive move; they must not imply that the original Steam Data inventory was never changed. Further CLI/MCP observations are in progress.
+
+## CLI acceptance and MCP defect repair
+
+On candidate `35072e9`, the `safe-smoke-20260925-02` run passed CLI settings list/get/set; normal archive preview and commit; FOMOD incomplete choices, preview, commit and replacement; and inactive/active conflict list/inspect/explain. Ordinary successful mutations were quiet, previews left owned mod state unchanged, and replacement preserved the modlist. Only disposable environment modlists were edited to enable fixture providers. Steam Data/save inventories before and after the run were identical (311 Data files after the approved archive move).
+
+MCP advertised exactly eight tools with input/output schemas and annotations. Config list/get/set passed with structured results. The first normal install preview failed with JSON-RPC `-32603`, `tool output violated its contract`; the commit request was not sent. The environment remained empty with no pending state. Full failed request/response and CLI logs remain under the `-02` evidence directory. That failed server session's stderr/exit was not captured; no clean exit is inferred from it.
+
+Source diagnosis identified missing `kind: "archive_candidate"` on candidate `proposed_winner`. Fix `82467db4679587d698a2a6f953bfdae1543bfe62` adds only that production field and a colocated nonempty-plan regression covering preview and installed output schemas. The test failed for both outputs before the fix and passed afterward. Full local `bun run check` passed: 415 Rust tests and 79 tooling tests. Manual Standards and Spec re-review passed; the advisory Jev coding-style service returned no verdict and was not overridden. Windows package replay is pending; local tests alone do not close the observed acceptance defect.
+
+## Fixed Windows MCP replay
+
+Candidate `82467db4679587d698a2a6f953bfdae1543bfe62` passed a fresh full Windows package build. ZIP SHA-256: `3a2fedb31e029b234b18f0c7e4508988422ce1679941d0878d049fbe9c32ac31`. Source revision, fresh extraction, checksum/layout and both help/version checks passed. [Windows CI](https://github.com/Reilley64/mods/actions/runs/36102669901) and [tooling CI](https://github.com/Reilley64/mods/actions/runs/36102669882) passed for this revision.
+
+The exact previously failing MCP request (same ID 5, original environment and fixture bytes) now returned `preview` with both candidate-reference discriminators. It did not publish mod state. Subsequent normal commits, FOMOD incomplete/red preview/red commit/blue replacement, inactive and active conflict queries, config tools, eight-tool schema/annotation inventory, and strict invalid-argument cases passed. Replacement preserved the modlist. All 16 MCP sessions drained stdout/stderr and exited 0; protocol responses remained JSON-RPC.
+
+`mods_exec` was covered only by an empty-program rejection (`program_unsupported`, status 126). No successful execution, descendants, cancellation or save routing is claimed. All 311 Steam Data files matched the after-approved-move baseline before and after these observations; the standard save path remained absent. No pending state or running MCP server remained. The reserved archive backup was unchanged.
+
+Evidence: `C:/Users/prime/mods-issue-33/packaging-82467db.log`, `dist-82467db`, `extracted-82467db`, and `safe-smoke-20260925-02/evidence-82467db` (literal requests/responses, session streams/statuses, fixture/state observations and inventories). The prior empty-Cargo-home consumer rebuild applies to the older candidate, not this ZIP. Disconnected and native source rebuild evidence remains missing. The observed candidate-discriminator defect is resolved by real Windows replay, not only unit tests.
+
 ## Native source inventory evidence
 
 The published native source asset SHA-256 matched `961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199`. A local archive audit verified all 16,347 declared files, all 66 source-map resource SHA-512 values, and the nested fork revision/file inventory. No missing mapped library-source asset was identified. This is inventory evidence, not a native rebuild result or an unconditional source-completeness certification.
