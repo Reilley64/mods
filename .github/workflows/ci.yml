@@ -5,11 +5,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      clean_native:
-        description: Rebuild native artifacts and dependencies without restoring caches
-        type: boolean
-        default: false
   schedule:
     - cron: '23 5 * * 1'
 
@@ -19,15 +14,12 @@ permissions:
 jobs:
   check:
     runs-on: windows-2022
-    env:
-      NATIVE_CLEAN_BUILD: ${{ github.event_name == 'schedule' || inputs.clean_native == true }}
     outputs:
       rust_changed: ${{ steps.rust-changes.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: true
       - name: Detect Rust changes
         id: rust-changes
         shell: pwsh
@@ -40,7 +32,7 @@ jobs:
           } else {
             $changed = git diff --name-only $env:BASE_SHA $env:HEAD_SHA
           }
-          $rustChanged = $env:NATIVE_CLEAN_BUILD -eq 'true' -or @($changed | Where-Object {
+          $rustChanged = '${{ github.event_name }}' -eq 'schedule' -or '${{ github.event_name }}' -eq 'workflow_dispatch' -or @($changed | Where-Object {
             $_ -match '^(src/|native/|licenses/|\.github/workflows/ci\.yml$|\.gitmodules$|Cargo\.lock$|Cargo\.toml$|rust-toolchain\.toml$|rustfmt\.toml$)'
           }).Count -gt 0
           "changed=$($rustChanged.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -63,59 +55,17 @@ jobs:
         with:
           tool: cargo-nextest@0.9.145
           fallback: none
-      - name: Test native cache validation
+      - name: Test native release validation
         if: steps.rust-changes.outputs.changed == 'true'
         shell: pwsh
-        run: ./native/cache.tests.ps1
-      - name: Prepare native cache keys and environment
+        run: ./native/fetch.tests.ps1
+      - name: Fetch pinned native release
         if: steps.rust-changes.outputs.changed == 'true'
-        id: native-cache-key
         shell: pwsh
         run: |
-          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
-          "VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
-          $binaryCache = Join-Path $env:RUNNER_TEMP "mods-vcpkg-binary-cache"
-          New-Item -ItemType Directory -Force $binaryCache | Out-Null
-          "dependency-path=$binaryCache" >> $env:GITHUB_OUTPUT
-          "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite" >> $env:GITHUB_ENV
+          ./native/fetch.ps1
           "MODS_USVFS_ARTIFACTS=$pwd/native/artifacts/bin" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=C:/Program Files/LLVM/bin" >> $env:GITHUB_ENV
-          ./native/cache.ps1 -Mode Key
-      - name: Restore exact native bundle
-        if: steps.rust-changes.outputs.changed == 'true' && env.NATIVE_CLEAN_BUILD != 'true'
-        id: native-bundle
-        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: native/artifacts
-          key: ${{ steps.native-cache-key.outputs.bundle-key }}-${{ hashFiles('.github/workflows/ci.yml') }}
-      - name: Restore compiled vcpkg dependencies
-        if: steps.rust-changes.outputs.changed == 'true' && env.NATIVE_CLEAN_BUILD != 'true' && steps.native-bundle.outputs.cache-hit != 'true'
-        id: native-dependencies
-        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: ${{ steps.native-cache-key.outputs.dependency-path }}
-          key: ${{ steps.native-cache-key.outputs.dependency-key }}
-      - name: Build unmodified upstream native artifacts
-        if: steps.rust-changes.outputs.changed == 'true' && steps.native-bundle.outputs.cache-hit != 'true'
-        id: native-build
-        shell: pwsh
-        run: ./native/build.ps1
-      - name: Validate native bundle
-        if: steps.rust-changes.outputs.changed == 'true'
-        shell: pwsh
-        run: ./native/cache.ps1 -Mode Validate
-      - name: Save verified native bundle
-        if: steps.native-build.outcome == 'success' && steps.native-bundle.outputs.cache-hit != 'true'
-        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: native/artifacts
-          key: ${{ steps.native-cache-key.outputs.bundle-key }}-${{ hashFiles('.github/workflows/ci.yml') }}
-      - name: Save compiled vcpkg dependencies
-        if: steps.native-build.outcome == 'success' && steps.native-dependencies.outputs.cache-hit != 'true'
-        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: ${{ steps.native-cache-key.outputs.dependency-path }}
-          key: ${{ steps.native-cache-key.outputs.dependency-key }}
       - name: Compile and test x86 adapter bindings
         if: steps.rust-changes.outputs.changed == 'true'
         run: cargo test --locked --package execution --target i686-pc-windows-msvc
@@ -131,18 +81,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          submodules: true
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: nightly-2026-08-21
           targets: x86_64-pc-windows-msvc
-      - name: Build unmodified upstream native artifacts
+      - name: Fetch pinned native release
         shell: pwsh
         run: |
-          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
-          ./native/build.ps1
+          ./native/fetch.ps1
           "MODS_USVFS_ARTIFACTS=$pwd/native/artifacts/bin" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=C:/Program Files/LLVM/bin" >> $env:GITHUB_ENV
       - name: Build preview
@@ -163,7 +110,13 @@ jobs:
           Copy-Item native/README.md dist/package/usvfs/BUILD-AND-SOURCE.md
           # Partial source bundle only; static dependency source still blocks publication.
           git archive --format=tar --output=dist/package/mods-source.tar HEAD
-          git -C native/usvfs archive --format=tar --output=../../dist/package/usvfs-source.tar HEAD
+          $release = Get-Content -Raw native/usvfs-release.json | ConvertFrom-Json
+          $source = "dist/package/$($release.sourceAsset)"
+          Invoke-WebRequest "https://github.com/$($release.repository)/releases/download/$($release.tag)/$($release.sourceAsset)" -OutFile $source
+          if ((Get-FileHash -Algorithm SHA256 $source).Hash -ne $release.sourceSha256) {
+            throw "Native corresponding-source checksum mismatch"
+          }
+          Copy-Item -Recurse native/artifacts/licenses dist/package/licenses/native-release
           Compress-Archive -Path dist/package/* -DestinationPath "dist/$artifact"
       - name: Upload tagless preview
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

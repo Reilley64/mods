@@ -1,5 +1,3 @@
-mod ffi;
-
 use crate::ExecutionError;
 use crate::NativeFailure;
 use crate::PathMapping;
@@ -36,6 +34,7 @@ use std::ptr::null_mut;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use usvfs_sys as ffi;
 
 include!(concat!(env!("OUT_DIR"), "/artifacts.rs"));
 
