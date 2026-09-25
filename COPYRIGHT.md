@@ -12,7 +12,8 @@ WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See `LICENSE` for the full GNU General Public License.
 
 Upstream usvfs and third-party components retain their own copyright notices and
-licenses. See `native/usvfs` and `licenses/usvfs`. This grant does not replace or
+licenses. See <https://github.com/Reilley64/usvfs-rs>, the pinned native release
+notices, and `licenses/usvfs`. This grant does not replace or
 remove those notices. Binary publication remains disabled until the complete
 corresponding-source distribution requirements are met; registry references alone
 are not a substitute for required corresponding source.

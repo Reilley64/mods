@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "repository": "Reilley64/usvfs-rs",
+  "tag": "usvfs-0.5.7.2-rs.1",
+  "bundleAsset": "usvfs-0.5.7.2-rs.1-native.zip",
+  "bundleSha256": "bcee5841ff291f7cdd68b128020a0358e21a4eaafc70c58efab8c0ab6c447a8a",
+  "sourceRevision": "57f1ea5e6ad13f7435a7af184748e6c1312c5637",
+  "sourceAsset": "usvfs-0.5.7.2-rs.1-corresponding-source.tar.gz",
+  "sourceSha256": "961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199",
+  "forkRevision": "eb4949fb2439fe5b98901e2fb1afceee752a6133"
+}

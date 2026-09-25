@@ -670,8 +670,6 @@ name = "execution"
 version = "0.0.0"
 dependencies = [
  "application",
- "bindgen",
- "cc",
  "domain",
  "os_pipe",
  "rootcause",
@@ -679,6 +677,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "usvfs-sys",
  "uuid",
  "windows",
 ]
@@ -2026,7 +2025,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -2331,6 +2330,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5033c97c4262335cded6d6fc3e5c18ab755e1a3dc96376350f3d8e9f009ad956"
 dependencies = [
  "tinyvec",
+]
+
+[[package]]
+name = "usvfs-sys"
+version = "0.0.0"
+source = "git+https://github.com/Reilley64/usvfs-rs?rev=eb4949fb2439fe5b98901e2fb1afceee752a6133#eb4949fb2439fe5b98901e2fb1afceee752a6133"
+dependencies = [
+ "bindgen",
+ "cc",
 ]
 
 [[package]]
