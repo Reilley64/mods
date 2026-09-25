@@ -11,7 +11,7 @@ mod path_resolution;
 mod publication;
 mod runner;
 
-use infrastructure::Resources;
+use infrastructure_dependencies::Resources;
 use std::env::args_os;
 use std::ffi::OsString;
 use std::io::stderr;

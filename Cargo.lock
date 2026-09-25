@@ -141,27 +141,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "archive"
-version = "0.0.0"
-dependencies = [
- "application",
- "crc32fast",
- "domain",
- "lzma-rust2",
- "quick-xml",
- "rars",
- "rootcause",
- "sevenz-rust2",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-util",
- "unicode-normalization",
- "windows",
- "zip",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -630,26 +609,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "environment"
-version = "0.0.0"
-dependencies = [
- "application",
- "cap-fs-ext",
- "cap-std",
- "domain",
- "encoding_rs",
- "rootcause",
- "same-file",
- "serde",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-util",
- "toml 0.9.12+spec-1.1.0",
- "windows",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -663,23 +622,6 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "execution"
-version = "0.0.0"
-dependencies = [
- "application",
- "domain",
- "os_pipe",
- "rootcause",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-util",
- "usvfs-sys",
- "uuid",
- "windows",
 ]
 
 [[package]]
@@ -843,22 +785,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "game-platform"
-version = "0.0.0"
-dependencies = [
- "application",
- "cap-std",
- "domain",
- "libc",
- "pelite",
- "rootcause",
- "tempfile",
- "tokio-util",
- "windows",
- "winreg",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -963,20 +889,112 @@ dependencies = [
 ]
 
 [[package]]
-name = "infrastructure"
+name = "infrastructure-archive"
 version = "0.0.0"
 dependencies = [
  "application",
- "archive",
+ "crc32fast",
  "domain",
- "environment",
- "execution",
- "game-platform",
+ "lzma-rust2",
+ "quick-xml",
+ "rars",
  "rootcause",
- "settings",
+ "sevenz-rust2",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "unicode-normalization",
+ "windows",
+ "zip",
+]
+
+[[package]]
+name = "infrastructure-dependencies"
+version = "0.0.0"
+dependencies = [
+ "application",
+ "domain",
+ "infrastructure-archive",
+ "infrastructure-environment",
+ "infrastructure-execution",
+ "infrastructure-game-platform",
+ "infrastructure-settings",
+ "rootcause",
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "infrastructure-environment"
+version = "0.0.0"
+dependencies = [
+ "application",
+ "cap-fs-ext",
+ "cap-std",
+ "domain",
+ "encoding_rs",
+ "rootcause",
+ "same-file",
+ "serde",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "toml 0.9.12+spec-1.1.0",
+ "windows",
+]
+
+[[package]]
+name = "infrastructure-execution"
+version = "0.0.0"
+dependencies = [
+ "application",
+ "domain",
+ "os_pipe",
+ "rootcause",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "usvfs-sys",
+ "uuid",
+ "windows",
+]
+
+[[package]]
+name = "infrastructure-game-platform"
+version = "0.0.0"
+dependencies = [
+ "application",
+ "cap-std",
+ "domain",
+ "libc",
+ "pelite",
+ "rootcause",
+ "tempfile",
+ "tokio-util",
+ "windows",
+ "winreg",
+]
+
+[[package]]
+name = "infrastructure-settings"
+version = "0.0.0"
+dependencies = [
+ "application",
+ "cap-std",
+ "config",
+ "domain",
+ "encoding_rs",
+ "libc",
+ "rootcause",
+ "serde",
+ "tempfile",
+ "tokio-util",
+ "toml 0.9.12+spec-1.1.0",
+ "windows",
 ]
 
 [[package]]
@@ -1222,7 +1240,7 @@ dependencies = [
  "application",
  "clap",
  "domain",
- "infrastructure",
+ "infrastructure-dependencies",
  "rootcause",
  "serde_json",
  "tempfile",
@@ -1242,7 +1260,7 @@ dependencies = [
  "clap",
  "domain",
  "futures-util",
- "infrastructure",
+ "infrastructure-dependencies",
  "jsonschema",
  "rmcp",
  "rootcause",
@@ -1844,24 +1862,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
 dependencies = [
  "serde_core",
-]
-
-[[package]]
-name = "settings"
-version = "0.0.0"
-dependencies = [
- "application",
- "cap-std",
- "config",
- "domain",
- "encoding_rs",
- "libc",
- "rootcause",
- "serde",
- "tempfile",
- "tokio-util",
- "toml 0.9.12+spec-1.1.0",
- "windows",
 ]
 
 [[package]]

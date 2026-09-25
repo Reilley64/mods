@@ -39,43 +39,43 @@
     },
     "src/infrastructure/environment": {
       "release-type": "rust",
-      "component": "environment",
-      "package-name": "environment",
+      "component": "infrastructure-environment",
+      "package-name": "infrastructure-environment",
       "skip-github-release": true,
       "skip-changelog": true
     },
     "src/infrastructure/settings": {
       "release-type": "rust",
-      "component": "settings",
-      "package-name": "settings",
+      "component": "infrastructure-settings",
+      "package-name": "infrastructure-settings",
       "skip-github-release": true,
       "skip-changelog": true
     },
     "src/infrastructure/game_platform": {
       "release-type": "rust",
-      "component": "game-platform",
-      "package-name": "game-platform",
+      "component": "infrastructure-game-platform",
+      "package-name": "infrastructure-game-platform",
       "skip-github-release": true,
       "skip-changelog": true
     },
     "src/infrastructure/archive": {
       "release-type": "rust",
-      "component": "archive",
-      "package-name": "archive",
+      "component": "infrastructure-archive",
+      "package-name": "infrastructure-archive",
       "skip-github-release": true,
       "skip-changelog": true
     },
     "src/infrastructure/execution": {
       "release-type": "rust",
-      "component": "execution",
-      "package-name": "execution",
+      "component": "infrastructure-execution",
+      "package-name": "infrastructure-execution",
       "skip-github-release": true,
       "skip-changelog": true
     },
     "src/infrastructure/dependencies": {
       "release-type": "rust",
-      "component": "infrastructure",
-      "package-name": "infrastructure",
+      "component": "infrastructure-dependencies",
+      "package-name": "infrastructure-dependencies",
       "skip-github-release": true,
       "skip-changelog": true
     },

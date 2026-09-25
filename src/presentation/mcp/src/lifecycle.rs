@@ -1,7 +1,7 @@
 //! rmcp's bounded EOF drain does not own application supervision. The tracker
 //! keeps admitted work alive through native Job and pipe drain, without extending
 //! protocol response eligibility after the transport closes.
-use infrastructure::ExecutionCapture;
+use infrastructure_dependencies::ExecutionCapture;
 use rmcp::model::RequestId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -73,7 +73,7 @@ impl Lifecycle {
 #[cfg(test)]
 mod tests {
 	use super::Lifecycle;
-	use infrastructure::ExecutionCapture;
+	use infrastructure_dependencies::ExecutionCapture;
 	use rmcp::model::RequestId;
 	use rootcause::Result;
 	use std::path::Path;

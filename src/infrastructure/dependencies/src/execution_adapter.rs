@@ -2,13 +2,13 @@ use application::ErrorMarker;
 use application::ports::RunManagedProgram;
 use domain::EnvironmentRoot;
 #[cfg(windows)]
-use execution::CallerSnapshot;
-use execution::ExecutionCapture;
+use infrastructure_execution::CallerSnapshot;
+use infrastructure_execution::ExecutionCapture;
+#[cfg(windows)]
+use infrastructure_settings::SettingsAdapter;
 #[cfg(windows)]
 use rootcause::prelude::ResultExt;
 use rootcause::report;
-#[cfg(windows)]
-use settings::SettingsAdapter;
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(windows)]

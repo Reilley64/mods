@@ -1,12 +1,12 @@
 const internalComponents = {
   "src/domain": "domain",
   "src/application": "application",
-  "src/infrastructure/environment": "environment",
-  "src/infrastructure/settings": "settings",
-  "src/infrastructure/game_platform": "game-platform",
-  "src/infrastructure/archive": "archive",
-  "src/infrastructure/execution": "execution",
-  "src/infrastructure/dependencies": "infrastructure",
+  "src/infrastructure/environment": "infrastructure-environment",
+  "src/infrastructure/settings": "infrastructure-settings",
+  "src/infrastructure/game_platform": "infrastructure-game-platform",
+  "src/infrastructure/archive": "infrastructure-archive",
+  "src/infrastructure/execution": "infrastructure-execution",
+  "src/infrastructure/dependencies": "infrastructure-dependencies",
   "src/presentation/cli": "mods-cli",
   "src/presentation/mcp": "mods-mcp",
 } as const;
