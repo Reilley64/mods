@@ -8,6 +8,7 @@ mod identity;
 mod installation;
 mod mods;
 mod paths;
+mod profile_state;
 mod providers;
 mod tombstones;
 
@@ -65,6 +66,7 @@ pub use mods::ModName;
 pub use mods::ModPriority;
 pub use paths::DataRelativePath;
 pub use paths::InvalidDataRelativePath;
+pub use profile_state::profile_test_file_slots;
 pub use providers::ParticipationReason;
 pub use providers::ProviderClass;
 pub use providers::ProviderIdentity;

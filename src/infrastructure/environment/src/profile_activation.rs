@@ -6,6 +6,7 @@ use crate::safe_fs::SafeDir;
 use crate::safe_fs::read_bounded;
 use application::ErrorMarker;
 use domain::DataRelativePath;
+use domain::profile_test_file_slots;
 use encoding_rs::WINDOWS_1252;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -47,6 +48,7 @@ impl ProfileActivation {
 			if !exists.context(ErrorMarker::environment_invalid(None))? {
 				continue;
 			}
+
 			let bytes = read_bounded(
 				profile,
 				name,
@@ -54,11 +56,12 @@ impl ProfileActivation {
 				ErrorMarker::environment_invalid(None),
 				cancellation,
 			)?;
-			// FNV settles each Profile State INI independently. A numbered slot in one file does not
-			// suppress the same numbered slot in another file.
-			let mut test_file_slots: [Option<String>; 10] = Default::default();
-			merge_test_file_slots(&decode_ini(&bytes)?, &mut test_file_slots);
-			active_plugins.extend(test_file_slots.into_iter().flatten());
+			let text = decode_ini(&bytes)?;
+
+			active_plugins.extend(profile_test_file_slots(&text)
+				.into_iter()
+				.flatten()
+				.filter_map(activation_plugin_key));
 		}
 		Ok(Self { active_plugins })
 	}
@@ -74,33 +77,6 @@ fn activation_plugin_key(name: &str) -> Option<String> {
 		return None;
 	}
 	Some(path.comparison_key().to_owned())
-}
-
-fn merge_test_file_slots(text: &str, slots: &mut [Option<String>; 10]) {
-	let mut current_section = "";
-	for line in text.lines() {
-		if let Some(section) = section_name(line) {
-			current_section = section;
-			continue;
-		}
-		if !current_section.eq_ignore_ascii_case("General") {
-			continue;
-		}
-		let Some((key, value)) = line.split_once('=') else {
-			continue;
-		};
-		let key = key.trim();
-		let Some(index) = (0..10).find(|index| key.eq_ignore_ascii_case(&format!("sTestFile{}", index + 1)))
-		else {
-			continue;
-		};
-		slots[index] = activation_plugin_key(value.trim());
-	}
-}
-
-fn section_name(line: &str) -> Option<&str> {
-	let line = line.trim();
-	line.strip_prefix('[')?.strip_suffix(']').map(str::trim)
 }
 
 fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
@@ -138,6 +114,25 @@ mod tests {
 	use std::result::Result as StdResult;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
+
+	#[test]
+	fn reads_numbered_slots_from_utf16_profile_ini() -> StdResult<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		fs::write(temp.path().join("plugins.txt"), b"")?;
+		let mut bytes = vec![0xff, 0xfe];
+		bytes.extend("[General]\nsTestFile1=Café.esp"
+			.encode_utf16()
+			.flat_map(u16::to_le_bytes));
+		fs::write(temp.path().join("Fallout.ini"), bytes)?;
+		let profile = SafeDir::open_absolute(&temp.path().canonicalize()?)
+			.map_err(|_| "profile directory must open")?;
+
+		let activation = ProfileActivation::load(&profile, &CancellationToken::new())
+			.map_err(|_| "activation must load")?;
+		let path = DataRelativePath::new("café.esp".to_owned()).map_err(|_| "plugin path must be valid")?;
+		assert!(activation.is_active(&path));
+		Ok(())
+	}
 
 	#[test]
 	fn loads_additive_effective_test_file_slots_from_every_profile_ini() -> StdResult<(), Box<dyn Error>> {
