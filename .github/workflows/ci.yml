@@ -12,10 +12,14 @@ permissions:
   contents: read
 
 jobs:
+  tools:
+    uses: ./.github/workflows/tools.yml
+
   check:
     runs-on: windows-2022
     outputs:
       rust_changed: ${{ steps.rust-changes.outputs.changed }}
+      validated_sha: ${{ steps.validated.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,7 +36,7 @@ jobs:
           } else {
             $changed = git diff --name-only $env:BASE_SHA $env:HEAD_SHA
           }
-          $rustChanged = '${{ github.event_name }}' -eq 'schedule' -or '${{ github.event_name }}' -eq 'workflow_dispatch' -or @($changed | Where-Object {
+          $rustChanged = ('${{ github.event_name }}' -eq 'push' -and '${{ github.ref }}' -eq 'refs/heads/main') -or '${{ github.event_name }}' -eq 'schedule' -or '${{ github.event_name }}' -eq 'workflow_dispatch' -or @($changed | Where-Object {
             $_ -match '^(src/|native/|licenses/|\.github/workflows/ci\.yml$|\.gitmodules$|Cargo\.lock$|Cargo\.toml$|rust-toolchain\.toml$|rustfmt\.toml$)'
           }).Count -gt 0
           "changed=$($rustChanged.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -72,12 +76,24 @@ jobs:
       - name: Run Rust checks
         if: steps.rust-changes.outputs.changed == 'true'
         run: bun run check:rust
+      - name: Record validated revision
+        id: validated
+        if: success() && steps.rust-changes.outputs.changed == 'true'
+        shell: pwsh
+        run: '"sha=$env:GITHUB_SHA" >> $env:GITHUB_OUTPUT'
+
+  preview-ready:
+    needs: [check, tools]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check.result == 'success' && needs.tools.result == 'success' && needs.check.outputs.validated_sha == github.sha }}
+    runs-on: windows-2022
+    steps:
+      - run: echo "Main revision passed Rust and repository tool checks."
 
   preview:
     # Disabled until complete corresponding source (including required static
     # dependency source) is distributable. Registry references are insufficient.
     if: ${{ false }}
-    needs: check
+    needs: preview-ready
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

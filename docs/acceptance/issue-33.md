@@ -1,8 +1,39 @@
 # Issue 33 acceptance evidence ledger
 
-Status: incomplete. This ledger starts from a read-only acceptance audit. Existing test sources below are candidate evidence, not passing results. Grouped requirements must be split into individual handoff scenarios with linked results before sign-off. No controlled Windows 11 sign-off is recorded.
+Status: **incomplete; no controlled Windows 11 sign-off or full acceptance is recorded.** The current summary below reconciles retained evidence. The following chronological checkpoints and grouped audit matrix preserve historical pending states; they are not the current status authority.
 
-## Packaging checkpoint
+## Current status — 2026-09-25 reconciliation
+
+- Reviewed HEAD: `23d5b9ae1a5ffad556de593eb619381228de4f39`. The worktree was clean before this documentation reconciliation. Only this ledger changed between runtime candidate `82467db4679587d698a2a6f953bfdae1543bfe62` and that HEAD. This establishes unchanged-code traceability, not a new-head package: the repaired ZIP remains an **82467db artifact**, SHA-256 `3a2fedb31e029b234b18f0c7e4508988422ce1679941d0878d049fbe9c32ac31`.
+- Current-head checks reported successful by the completion audit: [Windows CI](https://github.com/Reilley64/mods/actions/runs/36112545582/job/107999068031), [repository tools](https://github.com/Reilley64/mods/actions/runs/36112545789/job/107999068663), and [title](https://github.com/Reilley64/mods/actions/runs/36112543814/job/107999064853). Preview was intentionally skipped. Follow-up inspection of the run’s step metadata confirmed successful native-release validation, pinned-native fetch, x86 adapter compile/tests and Rust checks; these steps were not skipped. Raw step logs were not re-audited, and CI does not establish Windows 11 runtime acceptance. The earlier repair check recorded 415 Rust tests and 79 tooling tests; it is not a newly run HEAD check.
+- Candidate packaging, checksum/layout, both executable help/version checks, and representative Windows 11 CLI initialization/settings/install/conflict scenarios already have passing evidence. The repaired MCP request and subsequent bounded scenarios passed on Windows; the old pending-replay statement below is superseded by “Fixed Windows MCP replay.” These results must not be repeated or left wholly pending merely because the initial matrix predates them.
+
+### Reconciled scenario evidence
+
+Existing Windows observations were performed by the agent through the `prime` account on the approved Windows 11 host (Steam build `1510068`). Paths below are relative to `C:/Users/prime/mods-issue-33`. They identify retained evidence, not new execution by this documentation reconciliation.
+
+| Scenario | Candidate, result and retained evidence | Limit |
+|---|---|---|
+| Fresh owned initialization; five settings list/get/set | `35072e9`; exit 0, manifest provenance and quiet CLI mutation success; `safe-smoke-20260925-02/evidence` CLI argument/stream/status captures | After approved archive move; existing user INI/plugin import not covered |
+| Normal archive preview and commits | `35072e9` CLI captures above; `82467db` MCP requests 5–7 in `safe-smoke-20260925-02/evidence-82467db`; preview unchanged, commits installed | Representative `normal-a.zip` / `normal-b.zip`, not all archive edge cases |
+| FOMOD missing choice, red preview/commit, blue replacement | Same CLI evidence; `82467db` MCP requests 8–11; no publication for incomplete/preview, actual red/blue content, replacement modlist preserved | Representative `fomod.zip`, not interruption/failure coverage |
+| Inactive and active conflict list/inspect/explain | Same CLI evidence; `82467db` MCP requests 12–17; SmokeB priority 1 wins over SmokeA priority 0, `different_sha256` | Fixture enablement changed only owned modlists; no runtime interception claim |
+| MCP inventory/config/strict arguments | `82467db` requests 18–21 and 23–25; eight schemas/annotations, structured config success, invalid enum/unknown field/null rejected | Inventory is not successful execution coverage |
+| MCP execution rejection | `82467db` request 22; empty program rejected, status 126 | No child launched; successful execution remains blocked |
+
+Fixture hashes are recorded in the retained fixture inventory and `/tmp/mods-33-windows-safe-smoke-retry.md`; the fixed replay verified the same bytes. All 16 repaired MCP sessions drained streams and exited 0. The exact failed ID 5 request is preserved alongside its successful replay. Reports: `/tmp/mods-33-windows-mcp-fixed.md`, `/tmp/mods-33-windows-safe-smoke-retry.md`, `/tmp/mods-33-native-source-audit.md`, `/tmp/mods-33-final-local-check.log`, and `/tmp/mods-33-completion-audit.md`. Local `/tmp` reports are supporting session records, not published artifacts; retained Windows paths above and below locate the underlying captures.
+
+### Remaining acceptance gates
+
+- Successful managed execution remains blocked by the native access violation. Matching-symbol evidence localizes null traversal state but does not establish its cause or preceding branch. No speculative normalization, omitted mapping, native fix or pin change is justified or applied. Prepared Debug builds below add no runtime evidence; the requested null-transition observation was not run.
+- Still missing: applicable profile import, per-presentation diagnostics off/setup-failure, interruption/pending-state refusal, execution/descendant lifetime/cancellation/output, save routing, representative performance and clean install/remove evidence. Existing test sources and grouped rows still need complete scenario-level reconciliation, including precise automated evidence and unsafe/local-proof/declaration-order review coverage. Do not require duplicate runtime work where sufficient automated evidence exists, or infer that all gaps require game launch.
+- Previous 311-file Data comparisons use the **post-approved-move** baseline. The absent standard save path neither proves save routing nor covers every save location. No fresh Data/save inventory was taken for this reconciliation or the Debug build preparation.
+- Source inventory passed. The pinned native ZIP also contains exact-source x86/x64 rebuild reports recording `succeeded-with-origin-blocking`, matching package identities and four rebuilt output hashes; these are retained release evidence, not a newly witnessed build. Online diagnostic native builds also exist. Neither origin blocking nor these diagnostic builds proves disconnected Rust/native rebuild closure. The older empty-Cargo-home consumer rebuild is network-connected and belongs to `35072e9`, not the repaired ZIP. The native supported validator still needs genuine collector-stage evidence and its documented provisioned inputs; no substitute report or harness was fabricated.
+- Shared packaging, disabled stable publication and stable-first Winget update wiring already exist. Their existence is not a release outcome. Preview/stable/Winget publication gates remain disabled; aggregate version is still `0.0.0`. Approved Release Please/version outcome, actual stable URL/hash, real Winget manifest/human-controlled initial submission and clean installation/removal remain unproved and cannot be completed under the current no-publication boundary. Credentials were not checked and are not a proven blocker.
+- Local preview-readiness repair composes the existing repository-tool checks into CI, forces Rust checks on main pushes, and requires successful same-revision Rust/tool checks plus a main-push event before readiness. Preview, stable and Winget remain unconditionally disabled. Focused policy tests passed (9 tests, 59 assertions); `bun run check:tools` passed (80 tests, 749 assertions); `git diff --check` and bounded read-only review passed. This is local/static validation, not a hosted workflow run; actionlint was unavailable. Reports: `/tmp/mods-33-preview-guards.md` and `/tmp/mods-33-preview-review.md`.
+- Keep #33 open and PR #103 partial/draft. These records do not waive any applicable handoff criterion. No game/runtime/remote work or tracker changes were performed for this reconciliation.
+
+## Historical packaging checkpoint
 
 - Base revision: `86e9563bc5422f9afce47046fdc9df17c51a08d1`; packaging changes are not yet committed.
 - Shared candidate packaging script: `scripts/package-windows.ps1`; instructions: `docs/distribution.md`. Publication remains disabled.
@@ -101,9 +132,23 @@ Subsequent offline inspection of the same full dump recovered `current = NULL`, 
 
 Evidence is retained in `C:/Users/prime/mods-issue-33/native-symbols-20260925-01`, including build logs, matching PDBs, separate controller and comparison dump (SHA-256 `c52a8f09341df690705a06ce90b7b7660edb88bb4b4529f75e12fbc504cbe2ea`). All 304 archived fork files and original package hashes remain unchanged. All 311 Steam Data hashes match; standard saves remain absent and relevant processes are gone. Additional controlled runtime comparisons require owner approval.
 
+## Isolated Debug build preparation — builds only
+
+Separate x64/x86 native Debug DLL/proxy builds and an x64 Rust debug controller from clean `82467db4679587d698a2a6f953bfdae1543bfe62` succeeded in `C:/Users/prime/mods-issue-33/debug-builds-20260925-02`. The native source identities remained fork `eb4949fb2439fe5b98901e2fb1afceee752a6133` and upstream `57f1ea5e6ad13f7435a7af184748e6c1312c5637`. Native builds used the existing Debug configuration; the Rust controller used its normal dev profile and a fresh target directory. No production source, workflow or release pin changed.
+
+All five binary/PDB CodeView GUID/age pairs matched (age 1): `mods.exe`/`mods.pdb`, both `usvfs_x64.dll`/`usvfs_x64.pdb` and `usvfs_x86.dll`/`usvfs_x86.pdb`, and both architecture-specific `usvfs_proxy_*.exe`/`usvfs_proxy_*.pdb` pairs. Symbols are retained under `diagnostic/pdb` and native `install-*/pdb`; matching records are in `verification/pdb-matches.json`. These PDBs belong only to the new Debug binaries, never the prior Release/package DLLs.
+
+All 304 archived fork files in the fresh extraction and prior Release workspace were unchanged. All 25 original extracted-package files and 38 prior Release installed/staged files matched inventories. Independent before/after hashes also preserved the original controller, x64 DLL, candidate ZIP, corresponding-source archive and reserved archive backup. Build scripts did not access Steam/save paths; no fresh Data/save hash claim is made.
+
+Native resolution was cache-assisted with network available, not enforced offline or proven zero-network. The Rust controller used `--offline --locked` with the existing Cargo home; this is not a fresh disconnected source-closure rebuild. Debug CRT files were observed present, but no loader test ran. No product executable, debugger target, game or runtime comparison was launched. Debug CRT/assertions/heap/layout/timing differ from Release, so no byte-identical replay or new root-cause finding is implied.
+
+Evidence: the workspace build logs/statuses, `build-manifest.json`, `output-hashes.json`, verification files and final process inventory; local report `/tmp/mods-33-debug-builds.md`. The subsequent `/tmp/mods-33-debug-null-transition.md` records source reads only: the requested live transition observation was **not run**. No fresh binary identity, process or game/save inventories were collected by that source-read task. The missing last-assignment/branch evidence and native root cause remain unresolved; no speculative fix was applied.
+
 ## Native source inventory evidence
 
 The published native source asset SHA-256 matched `961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199`. A local archive audit verified all 16,347 declared files, all 66 source-map resource SHA-512 values, and the nested fork revision/file inventory. No missing mapped library-source asset was identified. This is inventory evidence, not a native rebuild result or an unconditional source-completeness certification.
+
+The verified pinned native ZIP (SHA-256 `bcee5841ff291f7cdd68b128020a0358e21a4eaafc70c58efab8c0ab6c447a8a`) contains `release-evidence/rebuild-inputs.json` binding the exact source SHA above and original run `36086098511`. Its `source-rebuild-status.json` records `succeeded-with-origin-blocking` for x86 and x64. Package-identity arrays match, and four rebuilt output hashes are recorded. This corrects earlier broad claims that native rebuild evidence was absent. These cached asset reports do not prove a disconnected host build, independently witnessed execution, or byte-reproducible PE outputs; byte reproducibility is explicitly not claimed. Audit details: `/tmp/mods-33-static-readiness.md`.
 
 The existing native `packaging/rebuild-sources.ps1` requires collector-stage inputs not contained in the released source archive: a genuine collection-status report, provisioned helper tools/archives and bootstrapped vcpkg. The downloaded release-preparation artifact contains the native ZIP, source archive and release manifest, but not that collector-stage report. The existing native rebuild path therefore still needs its documented inputs; no prior-run report has been fabricated and no replacement harness has been added.
 
@@ -123,7 +168,9 @@ Apply these explicit replacements before using the old handoff:
 - No MCP rate limiter. Preserve nonqueueing environment_busy guard. Valid UTF-8 child output is complete and unchanged; binary output remains byte count/SHA-256. environment_invalid has no details, including read tools.
 - ADR-0005/#25 accepts unmodified upstream usvfs behavior. Modified-fork semantic guarantees, COW, durable execution Tombstones, opaque namespaces, virtual timestamp enforcement, exact handshake and fail-closed descendant interception are superseded. Keep mods-owned configuration, trusted artifact loading, ownership, supervision and failure mapping. Source packaging still covers the exact pinned usvfs-rs integration/shim and upstream source.
 
-## Acceptance matrix (pending scenario-level results)
+## Historical grouped acceptance matrix (initial audit snapshot)
+
+This matrix preserves the initial audit chronology, including then-pending work subsequently evidenced above. It is not the current gap list. Use “Current status” and the later dated/candidate checkpoints to resolve stale pending claims; untouched rows do not imply completion. Full scenario-level sign-off remains incomplete.
 
 Paths below are relative to repository root. `src/` prefixes are significant. Each final evidence row should record commit, scenario, fixture identity, actual result, linked CI/log artifact, platform and operator. Split these grouped rows into individual handoff bullets for final sign-off.
 
@@ -151,7 +198,9 @@ Paths below are relative to repository root. `src/` prefixes are significant. Ea
 | ZIP install/run CLI + stdio MCP/remove without altering managed Steam Data | Packaging requirement; not yet linked runtime evidence | Controlled clean Windows 11 target, published ZIP hash, prerequisites, both binaries, source/notices, install/remove before-after Data snapshot. This package lifecycle requirement must not be generalized into the superseded arbitrary managed-write protection guarantee. |
 | Representative performance and complete acceptance ledger | No numeric product threshold; handoff explicitly defers tuning | Record measured scenarios and environment; no invented pass/fail numeric target. Follow up only on observed problems. |
 
-## Sign-off blockers and suggested order
+## Historical sign-off blockers and suggested order
+
+These recommendations and the read-only audit disclaimer below describe the initial audit, not this reconciliation. Existing workflow wiring and later CI/package results supersede their stale pending wording; current unresolved gates are listed above.
 
 1. Do not close #33 based on unit-test presence. Link final clean-check and Windows jobs, then attach scenario-level evidence.
 2. Resolve complete corresponding-source packaging before enabling the currently gated preview or publishing stable binaries. Include full Rust dependency source, exact pinned native source/shim/build material and notices; a registry reference is not source.

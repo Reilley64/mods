@@ -43,6 +43,24 @@ describe("Windows distribution recipe policy", () => {
 		expect(script.indexOf('tar -a -cf')).toBeLessThan(script.indexOf('"$hash  $name"'));
 	});
 
+	test("requires successful same-SHA Rust and tool checks on main pushes before preview readiness", () => {
+		const check = workflow.jobs.check;
+		const steps = check.steps as any[];
+		const detection = steps.find(step => step.id === "rust-changes");
+		expect(detection.run).toContain("('${{ github.event_name }}' -eq 'push' -and '${{ github.ref }}' -eq 'refs/heads/main')");
+		const validated = steps.find(step => step.id === "validated");
+		expect(validated).toBeDefined();
+		expect(validated.if).toBe("success() && steps.rust-changes.outputs.changed == 'true'");
+		expect(steps.indexOf(validated)).toBeGreaterThan(steps.findIndex(step => step.name === "Run Rust checks"));
+		expect(validated.run).toBe('"sha=$env:GITHUB_SHA" >> $env:GITHUB_OUTPUT');
+		expect(check.outputs.validated_sha).toBe("${{ steps.validated.outputs.sha }}");
+		const ready = workflow.jobs["preview-ready"];
+		expect(ready.needs).toEqual(["check", "tools"]);
+		expect(ready.if).toBe("${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check.result == 'success' && needs.tools.result == 'success' && needs.check.outputs.validated_sha == github.sha }}");
+		expect(workflow.jobs.preview.needs).toBe("preview-ready");
+		expect(workflow.jobs.preview.if).toBe("${{ false }}");
+	});
+
 	test("keeps the preview gated while sharing candidate packaging", () => {
 		const preview = workflow.jobs.preview;
 		expect(preview.if).toBe("${{ false }}");
