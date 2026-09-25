@@ -746,11 +746,11 @@ async fn compare_files(
 			})
 			.collect());
 	}
-	let mut cache = HashMap::<IndexedConflictFileId, ConflictContentRead>::new();
-	let winner_content = read_once(winner.id.clone(), &mut cache, read_content, cancellation).await?;
+
+	let winner_content = read_content.call((winner.id.clone(), cancellation.clone())).await?;
 	let mut comparisons = Vec::new();
 	for loser in losers {
-		let loser_content = read_once(loser.id.clone(), &mut cache, read_content, cancellation).await?;
+		let loser_content = read_content.call((loser.id.clone(), cancellation.clone())).await?;
 		let comparison = match (&winner_content, &loser_content) {
 			(ConflictContentRead::Unstable, _) | (_, ConflictContentRead::Unstable) => {
 				ContentComparison::Unstable {
@@ -786,20 +786,6 @@ async fn compare_files(
 		comparisons.push(comparison);
 	}
 	Ok(comparisons)
-}
-
-async fn read_once(
-	id: IndexedConflictFileId,
-	cache: &mut HashMap<IndexedConflictFileId, ConflictContentRead>,
-	read_content: &ReadConflictContent,
-	cancellation: &CancellationToken,
-) -> Result<ConflictContentRead, ErrorMarker> {
-	if let Some(content) = cache.get(&id) {
-		return Ok(content.clone());
-	}
-	let content = read_content.call((id.clone(), cancellation.clone())).await?;
-	cache.insert(id, content.clone());
-	Ok(content)
 }
 
 fn sort_provider_references(values: &mut [ProviderReference]) {
@@ -948,6 +934,7 @@ mod tests {
 	use domain::TombstoneScope;
 	use rootcause::Result;
 	use std::sync::Arc;
+	use std::sync::Mutex;
 	use std::sync::atomic::AtomicUsize;
 	use std::sync::atomic::Ordering;
 	use tokio_util::sync::CancellationToken;
@@ -1128,6 +1115,62 @@ mod tests {
 		assert_eq!(losing_files.len(), 1);
 		assert_eq!(content_comparisons[0].state(), ContentState::NotCompared);
 		assert_eq!(calls.load(Ordering::SeqCst), 0);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn multiple_losers_read_each_contender_once() -> Result<(), ErrorMarker> {
+		let files = vec![
+			data_mod_file("Low", 0, "same.txt", ParticipationReason::EnabledMod),
+			data_mod_file("Middle", 1, "same.txt", ParticipationReason::EnabledMod),
+			data_mod_file("High", 2, "same.txt", ParticipationReason::EnabledMod),
+		];
+		let scan = EnvironmentConflictScan {
+			providers: files
+				.iter()
+				.map(|file| fixed_provider(file.provider.identity(), true, vec![file.clone()]))
+				.collect(),
+			problems: Vec::new(),
+		};
+		let calls = Arc::new(Mutex::new(Vec::new()));
+		let recorded_calls = calls.clone();
+		let read_content: ReadConflictContent = Arc::new(move |id, _| {
+			recorded_calls.lock().expect("record reads").push(id);
+			Box::pin(async {
+				Ok(ConflictContentRead::Sha256(
+					Sha256Digest::new("a".repeat(64)).expect("digest fixture"),
+				))
+			}) as PortFuture<_, ErrorMarker>
+		});
+
+		let output = project_list(scan, true, read_content, CancellationToken::new()).await?;
+
+		assert_eq!(output.rows.len(), 1);
+		let ConflictRow::OrdinaryConflict {
+			effective_file,
+			losing_files,
+			content_comparisons,
+			..
+		} = &output.rows[0]
+		else {
+			panic!("expected ordinary conflict");
+		};
+		assert_eq!(effective_file, &files[2].provider);
+		assert_eq!(
+			losing_files,
+			&vec![files[1].provider.clone(), files[0].provider.clone()]
+		);
+		assert_eq!(
+			content_comparisons
+				.iter()
+				.map(|comparison| comparison.state())
+				.collect::<Vec<_>>(),
+			vec![ContentState::SameSha256, ContentState::SameSha256]
+		);
+		assert_eq!(
+			*calls.lock().expect("recorded reads"),
+			vec![files[2].id.clone(), files[1].id.clone(), files[0].id.clone()]
+		);
 		Ok(())
 	}
 
@@ -1450,7 +1493,17 @@ mod tests {
 				))
 			}) as PortFuture<_, ErrorMarker>
 		});
+		let unstable: ReadConflictContent = Arc::new(|_, _| {
+			Box::pin(async { Ok(ConflictContentRead::Unstable) }) as PortFuture<_, ErrorMarker>
+		});
+		let unstable_output = project_list(scan.clone(), true, unstable, CancellationToken::new()).await?;
 		let different_output = project_list(scan, true, different, CancellationToken::new()).await?;
+
+		assert!(matches!(
+			&unstable_output.rows[0],
+			ConflictRow::OrdinaryConflict { content_comparisons, .. }
+				if content_comparisons[0].state() == ContentState::Unstable
+		));
 
 		let ConflictRow::OrdinaryConflict {
 			content_comparisons: unavailable_comparisons,
