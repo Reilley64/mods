@@ -1120,7 +1120,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn multiple_losers_read_each_contender_once() -> Result<(), ErrorMarker> {
-		let files = vec![
+		let files = [
 			data_mod_file("Low", 0, "same.txt", ParticipationReason::EnabledMod),
 			data_mod_file("Middle", 1, "same.txt", ParticipationReason::EnabledMod),
 			data_mod_file("High", 2, "same.txt", ParticipationReason::EnabledMod),
@@ -1146,6 +1146,7 @@ mod tests {
 		let output = project_list(scan, true, read_content, CancellationToken::new()).await?;
 
 		assert_eq!(output.rows.len(), 1);
+		assert!(matches!(output.rows[0], ConflictRow::OrdinaryConflict { .. }));
 		let ConflictRow::OrdinaryConflict {
 			effective_file,
 			losing_files,
@@ -1153,7 +1154,7 @@ mod tests {
 			..
 		} = &output.rows[0]
 		else {
-			panic!("expected ordinary conflict");
+			return Ok(());
 		};
 		assert_eq!(effective_file, &files[2].provider);
 		assert_eq!(
