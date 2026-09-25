@@ -35,7 +35,9 @@ use domain::ModPriority;
 use domain::ParticipationReason;
 use domain::ProviderClass;
 use domain::ProviderReference;
+use domain::TombstoneIndex;
 use domain::case_fold_key;
+use domain::resolve_effective_file;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -743,7 +745,7 @@ fn apply_provider(
 	}
 
 	let mut path_tombstones = HashMap::new();
-	let mut directory_tombstones = HashMap::new();
+	let mut tombstone_index = TombstoneIndex::default();
 	for (path, directory_scope) in validate_metadata(directory, cancellation)? {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
@@ -757,30 +759,28 @@ fn apply_provider(
 			},
 			owner,
 		};
-		let key = path.comparison_key().to_owned();
-		if directory_scope {
-			directory_tombstones.insert(key.clone(), tombstone.clone());
-		}
-		path_tombstones.insert(key, (path, tombstone));
+		tombstone_index.insert(tombstone.clone());
+		path_tombstones.insert(path.comparison_key().to_owned(), (path, tombstone));
 	}
 
 	for (key, (_, effective)) in winners.iter_mut() {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		let mut controlling_tombstone = path_tombstones.get(key).map(|(_, tombstone)| tombstone);
-		for (boundary, _) in key.match_indices('/') {
+		let mut controlling_tombstone = None;
+		for controlling in tombstone_index.controlling_steps(key) {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			if controlling_tombstone.is_none() {
-				controlling_tombstone = directory_tombstones.get(&key[..boundary]);
-			}
+			controlling_tombstone = controlling;
 		}
 		if let Some(tombstone) = controlling_tombstone {
-			*effective = EffectiveResult::Absent {
-				controlling_tombstone: Some(tombstone.clone()),
+			let file = if let EffectiveResult::File(file) = effective {
+				Some(&*file)
+			} else {
+				None
 			};
+			*effective = resolve_effective_file(file, Some(tombstone));
 		}
 	}
 
@@ -968,18 +968,10 @@ fn dependency_kind(path: &DataRelativePath) -> FileDependencyKind {
 	}
 }
 
-#[derive(Clone)]
-struct AssessmentTombstone {
-	provider_index: usize,
-	path: DataRelativePath,
-	directory_scope: bool,
-	owner: ProviderReference,
-}
-
 #[derive(Default)]
 struct AssessmentTraversal {
-	files: HashMap<String, Vec<(usize, ProviderReference)>>,
-	tombstones: Vec<AssessmentTombstone>,
+	files: HashMap<String, Vec<ProviderReference>>,
+	tombstones: TombstoneIndex,
 }
 
 pub(crate) fn assess_installation(
@@ -991,7 +983,6 @@ pub(crate) fn assess_installation(
 	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::environment_invalid(None))?;
 	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
 	let mut traversal = AssessmentTraversal::default();
-	let mut provider_index = 0_usize;
 
 	let game = SafeDir::open_absolute(manifest_game_binding(&root, cancellation)?.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(None))?;
@@ -999,14 +990,12 @@ pub(crate) fn assess_installation(
 		Ok(data) => {
 			add_assessment_provider(
 				&data,
-				provider_index,
 				ProviderClass::SteamData,
 				None,
 				None,
 				&mut traversal,
 				cancellation,
 			)?;
-			provider_index += 1;
 		}
 		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {}
 		Err(error) => return Err(error.context(ErrorMarker::environment_invalid(None))),
@@ -1018,8 +1007,7 @@ pub(crate) fn assess_installation(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 		if plan.replacement && installed.name == plan.mod_name {
-			add_proposed_provider(plan, provider_index, &mut traversal, cancellation)?;
-			provider_index += 1;
+			add_proposed_provider(plan, &mut traversal, cancellation)?;
 			proposal_added = true;
 			continue;
 		}
@@ -1031,18 +1019,15 @@ pub(crate) fn assess_installation(
 			.context(ErrorMarker::environment_invalid(None))?;
 		add_assessment_provider(
 			&directory,
-			provider_index,
 			ProviderClass::DataMod,
 			Some(installed.name.clone()),
 			Some(installed.priority),
 			&mut traversal,
 			cancellation,
 		)?;
-		provider_index += 1;
 	}
 	if !proposal_added {
-		add_proposed_provider(plan, provider_index, &mut traversal, cancellation)?;
-		provider_index += 1;
+		add_proposed_provider(plan, &mut traversal, cancellation)?;
 	}
 
 	let overwrite = root
@@ -1050,7 +1035,6 @@ pub(crate) fn assess_installation(
 		.context(ErrorMarker::environment_invalid(None))?;
 	add_assessment_provider(
 		&overwrite,
-		provider_index,
 		ProviderClass::Overwrite,
 		None,
 		None,
@@ -1059,30 +1043,6 @@ pub(crate) fn assess_installation(
 	)?;
 
 	let AssessmentTraversal { files, tombstones } = traversal;
-	let mut path_tombstones = HashMap::new();
-	let mut directory_tombstones = HashMap::new();
-	for tombstone in &tombstones {
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let key = tombstone.path.comparison_key();
-		if tombstone.directory_scope
-			&& directory_tombstones
-				.get(key)
-				.copied()
-				.is_none_or(|current: &AssessmentTombstone| {
-					current.provider_index < tombstone.provider_index
-				}) {
-			directory_tombstones.insert(key, tombstone);
-		}
-		if path_tombstones
-			.get(key)
-			.copied()
-			.is_none_or(|current: &AssessmentTombstone| current.provider_index < tombstone.provider_index)
-		{
-			path_tombstones.insert(key, tombstone);
-		}
-	}
 
 	let mut selected_paths = Vec::new();
 	for candidate in &plan.candidates {
@@ -1105,18 +1065,12 @@ pub(crate) fn assess_installation(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let mut controlling_tombstone = path_tombstones.get(key).copied();
-		for (boundary, _) in key.match_indices('/') {
+		let mut controlling_tombstone = None;
+		for controlling in tombstones.controlling_steps(key) {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			let Some(ancestor) = directory_tombstones.get(&key[..boundary]).copied() else {
-				continue;
-			};
-			if controlling_tombstone.is_none_or(|current| current.provider_index < ancestor.provider_index)
-			{
-				controlling_tombstone = Some(ancestor);
-			}
+			controlling_tombstone = controlling;
 		}
 
 		let proposed_hypothetical = ProviderReference::DataMod {
@@ -1135,36 +1089,21 @@ pub(crate) fn assess_installation(
 				ParticipationReason::ProjectedDisabledMod
 			},
 		};
-		let mut last_unsuppressed = None;
+		let mut highest_file = None;
 		let mut overlapping_physical_files = Vec::new();
-		for (file_provider_index, provider) in contenders {
+		for provider in contenders {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			if controlling_tombstone
-				.is_none_or(|tombstone| tombstone.provider_index <= *file_provider_index)
-			{
-				last_unsuppressed = Some(provider);
+			if highest_file.is_none_or(|current: &ProviderReference| current.rank() < provider.rank()) {
+				highest_file = Some(provider);
 			}
 			if *provider != proposed_hypothetical {
 				overlapping_physical_files.push(provider.clone());
 			}
 		}
 
-		let hypothetical_enabled = if let Some(winner) = last_unsuppressed {
-			EffectiveResult::File(winner.clone())
-		} else {
-			EffectiveResult::Absent {
-				controlling_tombstone: controlling_tombstone.map(|tombstone| TombstoneReference {
-					scope: if tombstone.directory_scope {
-						TombstoneScope::DirectorySubtree
-					} else {
-						TombstoneScope::ExactFile
-					},
-					owner: tombstone.owner.clone(),
-				}),
-			}
-		};
+		let hypothetical_enabled = resolve_effective_file(highest_file, controlling_tombstone);
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -1207,7 +1146,6 @@ pub(crate) fn assess_installation(
 
 fn add_assessment_provider(
 	directory: &SafeDir,
-	provider_index: usize,
 	class: ProviderClass,
 	mod_name: Option<ModName>,
 	priority: Option<ModPriority>,
@@ -1223,10 +1161,7 @@ fn add_assessment_provider(
 				.files
 				.entry(path.comparison_key().to_owned())
 				.or_default()
-				.push((
-					provider_index,
-					provider_reference(class, mod_name.clone(), priority, path)?,
-				));
+				.push(provider_reference(class, mod_name.clone(), priority, path)?);
 		}
 	}
 	if cancellation.is_cancelled() {
@@ -1240,11 +1175,13 @@ fn add_assessment_provider(
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			traversal.tombstones.push(AssessmentTombstone {
-				provider_index,
-				owner: provider_reference(class, mod_name.clone(), priority, path.clone())?,
-				path,
-				directory_scope,
+			traversal.tombstones.insert(TombstoneReference {
+				owner: provider_reference(class, mod_name.clone(), priority, path)?,
+				scope: if directory_scope {
+					TombstoneScope::DirectorySubtree
+				} else {
+					TombstoneScope::ExactFile
+				},
 			});
 		}
 	}
@@ -1256,7 +1193,6 @@ fn add_assessment_provider(
 
 fn add_proposed_provider(
 	plan: &InstallPlan,
-	provider_index: usize,
 	traversal: &mut AssessmentTraversal,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
@@ -1273,15 +1209,12 @@ fn add_proposed_provider(
 			.files
 			.entry(path.comparison_key().to_owned())
 			.or_default()
-			.push((
-				provider_index,
-				ProviderReference::DataMod {
-					mod_name: plan.mod_name.clone(),
-					priority: plan.projected_state.priority,
-					original_path: path,
-					participation_reason: ParticipationReason::HypotheticalEnabledMod,
-				},
-			));
+			.push(ProviderReference::DataMod {
+				mod_name: plan.mod_name.clone(),
+				priority: plan.projected_state.priority,
+				original_path: path,
+				participation_reason: ParticipationReason::HypotheticalEnabledMod,
+			});
 	}
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));

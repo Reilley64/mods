@@ -1,6 +1,7 @@
 use crate::PathMapping;
 use domain::DataRelativePath;
 use domain::case_fold_key;
+use domain::profile_test_file_slots;
 use rootcause::Result;
 use rootcause::report;
 use std::collections::HashMap;
@@ -141,7 +142,6 @@ pub fn build_profile_configuration(
 		let text = profile_texts.get(&case_fold_key(name)).copied().unwrap_or_default();
 		let mut section = "";
 		let mut occurrences = [0; 5];
-		let mut slots: [Option<String>; 10] = Default::default();
 		for (index, line) in text.lines().enumerate() {
 			let line = line.trim();
 			if line.starts_with([';', '#']) {
@@ -195,12 +195,6 @@ pub fn build_profile_configuration(
 					}));
 				}
 			}
-			if section.eq_ignore_ascii_case("General")
-				&& let Some(slot) =
-					(0..10).find(|slot| key.eq_ignore_ascii_case(&format!("sTestFile{}", slot + 1)))
-			{
-				slots[slot] = plugin_path(value).map(|path| path.comparison_key().to_owned());
-			}
 		}
 		if *name == "Fallout.ini" && occurrences != [1; 5] {
 			return Err(report!(ProfileConfigurationError {
@@ -210,10 +204,10 @@ pub fn build_profile_configuration(
 				expected: "all five required archive and save routing keys"
 			}));
 		}
-		for (slot, plugin) in slots.into_iter().enumerate() {
-			if let Some(plugin) = plugin {
+		for (slot, value) in profile_test_file_slots(text).into_iter().enumerate() {
+			if let Some(plugin) = value.and_then(plugin_path) {
 				test_files.push((
-					plugin,
+					plugin.comparison_key().to_owned(),
 					ActivationSource::TestFile {
 						file: (*name).into(),
 						key: format!("sTestFile{}", slot + 1),
@@ -611,6 +605,45 @@ mod tests {
 		};
 		assert_eq!(error.current_context().file, "plugins.txt");
 		assert_eq!(error.current_context().line, 2);
+		Ok(())
+	}
+
+	#[test]
+	fn test_file_assignments_settle_independently_before_execution_eligibility()
+	-> Result<(), ProfileConfigurationError> {
+		let fallout = format!("{VALID}sTestFile1=First.esp\nsTestFile2=First.esp\nsTestFile2=Light.esl\n");
+		let output = build(
+			&[
+				ProfileText {
+					name: "Fallout.ini",
+					text: &fallout,
+				},
+				ProfileText {
+					name: "GECKCustom.ini",
+					text: "[general]\nsTESTfile1=Second.ESP\nsTestFile01=First.esp\n",
+				},
+			],
+			&[
+				visible("First.esp", 1),
+				visible("Second.esp", 2),
+				visible("Light.esl", 3),
+			],
+		)?;
+		assert_eq!(output.plugins.len(), 2);
+		assert_eq!(
+			output.plugins[0].activation_sources,
+			[ActivationSource::TestFile {
+				file: "Fallout.ini".into(),
+				key: "sTestFile1".into()
+			}]
+		);
+		assert_eq!(
+			output.plugins[1].activation_sources,
+			[ActivationSource::TestFile {
+				file: "GECKCustom.ini".into(),
+				key: "sTestFile1".into()
+			}]
+		);
 		Ok(())
 	}
 

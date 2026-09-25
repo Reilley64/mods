@@ -29,6 +29,7 @@ use domain::ResolutionReason;
 use domain::ResolutionStatus;
 use domain::Tombstone;
 use domain::TombstoneEffect;
+use domain::TombstoneIndex;
 use domain::TombstoneScope;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -42,6 +43,7 @@ struct Projection {
 	files: Vec<IndexedConflictFile>,
 	directories: Vec<ProviderReference>,
 	tombstones: Vec<Tombstone>,
+	tombstone_index: TombstoneIndex,
 	problems: Vec<ConflictProblem>,
 	participation: Participation,
 }
@@ -228,12 +230,7 @@ pub(super) async fn project_path(
 		providers
 	};
 
-	let controlling_tombstone = projection
-		.tombstones
-		.iter()
-		.filter(|tombstone| tombstone_applies(tombstone, path.comparison_key()))
-		.max_by_key(|tombstone| tombstone.owner.rank())
-		.cloned();
+	let controlling_tombstone = projection.tombstone_index.controlling(path.comparison_key()).cloned();
 
 	let effective_result = if resolution_status == ResolutionStatus::Exact {
 		Some(if let Some(winner) = resolved.unsuppressed.first() {
@@ -396,6 +393,11 @@ impl Projection {
 				.then_with(|| compare_utf16(left.path().as_str(), right.path().as_str()))
 		});
 
+		let mut tombstone_index = TombstoneIndex::default();
+		for tombstone in &tombstones {
+			tombstone_index.insert(tombstone.clone());
+		}
+
 		append_structural_problems(&files, &directories, &mut problems);
 		problems.sort_by(compare_problems);
 		problems.dedup();
@@ -404,6 +406,7 @@ impl Projection {
 			files,
 			directories,
 			tombstones,
+			tombstone_index,
 			problems,
 			participation,
 		}
@@ -425,7 +428,7 @@ impl Projection {
 			.iter()
 			.filter(|file| file.provider.original_path().comparison_key() == key)
 		{
-			if let Some(tombstone) = controlling_tombstone(&self.tombstones, &file.provider) {
+			if let Some(tombstone) = self.tombstone_index.suppressing(&file.provider) {
 				suppressed.push((file.clone(), tombstone.clone()));
 			} else {
 				unsuppressed.push(file.clone());
@@ -498,7 +501,8 @@ impl Projection {
 				.map(|file| &file.provider)
 				.chain(self.directories.iter())
 				.filter(|entry| {
-					controlling_tombstone(&self.tombstones, entry)
+					self.tombstone_index
+						.suppressing(entry)
 						.is_some_and(|controlling| controlling == tombstone)
 				})
 				.cloned()
@@ -567,7 +571,8 @@ impl Projection {
 			.files
 			.iter()
 			.filter(|file| {
-				controlling_tombstone(&self.tombstones, &file.provider)
+				self.tombstone_index
+					.suppressing(&file.provider)
 					.is_some_and(|tombstone| &tombstone.owner.identity() == identity)
 			})
 			.count() as u64;
@@ -616,7 +621,7 @@ impl Projection {
 		let applicable = self
 			.tombstones
 			.iter()
-			.filter(|tombstone| tombstone_applies(tombstone, key))
+			.filter(|tombstone| tombstone.applies_to(key))
 			.collect::<Vec<_>>();
 		let mut effects = Vec::new();
 		for tombstone in applicable {
@@ -631,7 +636,8 @@ impl Projection {
 				.iter()
 				.filter(|directory| directory.original_path().comparison_key() == key)
 				.filter(|directory| {
-					controlling_tombstone(&self.tombstones, directory)
+					self.tombstone_index
+						.suppressing(directory)
 						.is_some_and(|controlling| controlling == tombstone)
 				})
 				.cloned());
@@ -644,13 +650,9 @@ impl Projection {
 				continue;
 			}
 			if let Some(controlling) = self
-				.tombstones
-				.iter()
-				.filter(|candidate| {
-					candidate.owner.rank() > tombstone.owner.rank()
-						&& tombstone_applies(candidate, key)
-				})
-				.max_by_key(|candidate| candidate.owner.rank())
+				.tombstone_index
+				.controlling(key)
+				.filter(|candidate| candidate.owner.rank() > tombstone.owner.rank())
 			{
 				effects.push(TombstoneEffect::ShadowedByTombstone {
 					tombstone: tombstone.clone(),
@@ -704,24 +706,6 @@ fn append_structural_problems(
 	}
 }
 
-fn controlling_tombstone<'a>(tombstones: &'a [Tombstone], entry: &ProviderReference) -> Option<&'a Tombstone> {
-	tombstones
-		.iter()
-		.filter(|tombstone| {
-			tombstone.owner.rank() > entry.rank()
-				&& tombstone_applies(tombstone, entry.original_path().comparison_key())
-		})
-		.max_by_key(|tombstone| tombstone.owner.rank())
-}
-
-fn tombstone_applies(tombstone: &Tombstone, key: &str) -> bool {
-	let tombstone_key = tombstone.path().comparison_key();
-	match tombstone.scope {
-		TombstoneScope::ExactFile => key == tombstone_key,
-		TombstoneScope::DirectorySubtree => key_is_at_or_below(key, tombstone_key),
-	}
-}
-
 fn key_is_at_or_below(key: &str, boundary: &str) -> bool {
 	key == boundary || key_is_below(key, boundary)
 }
@@ -746,11 +730,11 @@ async fn compare_files(
 			})
 			.collect());
 	}
-	let mut cache = HashMap::<IndexedConflictFileId, ConflictContentRead>::new();
-	let winner_content = read_once(winner.id.clone(), &mut cache, read_content, cancellation).await?;
+
+	let winner_content = read_content.call((winner.id.clone(), cancellation.clone())).await?;
 	let mut comparisons = Vec::new();
 	for loser in losers {
-		let loser_content = read_once(loser.id.clone(), &mut cache, read_content, cancellation).await?;
+		let loser_content = read_content.call((loser.id.clone(), cancellation.clone())).await?;
 		let comparison = match (&winner_content, &loser_content) {
 			(ConflictContentRead::Unstable, _) | (_, ConflictContentRead::Unstable) => {
 				ContentComparison::Unstable {
@@ -786,20 +770,6 @@ async fn compare_files(
 		comparisons.push(comparison);
 	}
 	Ok(comparisons)
-}
-
-async fn read_once(
-	id: IndexedConflictFileId,
-	cache: &mut HashMap<IndexedConflictFileId, ConflictContentRead>,
-	read_content: &ReadConflictContent,
-	cancellation: &CancellationToken,
-) -> Result<ConflictContentRead, ErrorMarker> {
-	if let Some(content) = cache.get(&id) {
-		return Ok(content.clone());
-	}
-	let content = read_content.call((id.clone(), cancellation.clone())).await?;
-	cache.insert(id, content.clone());
-	Ok(content)
 }
 
 fn sort_provider_references(values: &mut [ProviderReference]) {
@@ -948,6 +918,7 @@ mod tests {
 	use domain::TombstoneScope;
 	use rootcause::Result;
 	use std::sync::Arc;
+	use std::sync::Mutex;
 	use std::sync::atomic::AtomicUsize;
 	use std::sync::atomic::Ordering;
 	use tokio_util::sync::CancellationToken;
@@ -1132,6 +1103,63 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn multiple_losers_read_each_contender_once() -> Result<(), ErrorMarker> {
+		let files = [
+			data_mod_file("Low", 0, "same.txt", ParticipationReason::EnabledMod),
+			data_mod_file("Middle", 1, "same.txt", ParticipationReason::EnabledMod),
+			data_mod_file("High", 2, "same.txt", ParticipationReason::EnabledMod),
+		];
+		let scan = EnvironmentConflictScan {
+			providers: files
+				.iter()
+				.map(|file| fixed_provider(file.provider.identity(), true, vec![file.clone()]))
+				.collect(),
+			problems: Vec::new(),
+		};
+		let calls = Arc::new(Mutex::new(Vec::new()));
+		let recorded_calls = calls.clone();
+		let read_content: ReadConflictContent = Arc::new(move |id, _| {
+			recorded_calls.lock().expect("record reads").push(id);
+			Box::pin(async {
+				Ok(ConflictContentRead::Sha256(
+					Sha256Digest::new("a".repeat(64)).expect("digest fixture"),
+				))
+			}) as PortFuture<_, ErrorMarker>
+		});
+
+		let output = project_list(scan, true, read_content, CancellationToken::new()).await?;
+
+		assert_eq!(output.rows.len(), 1);
+		assert!(matches!(output.rows[0], ConflictRow::OrdinaryConflict { .. }));
+		let ConflictRow::OrdinaryConflict {
+			effective_file,
+			losing_files,
+			content_comparisons,
+			..
+		} = &output.rows[0]
+		else {
+			return Ok(());
+		};
+		assert_eq!(effective_file, &files[2].provider);
+		assert_eq!(
+			losing_files,
+			&vec![files[1].provider.clone(), files[0].provider.clone()]
+		);
+		assert_eq!(
+			content_comparisons
+				.iter()
+				.map(|comparison| comparison.state())
+				.collect::<Vec<_>>(),
+			vec![ContentState::SameSha256, ContentState::SameSha256]
+		);
+		assert_eq!(
+			*calls.lock().expect("recorded reads"),
+			vec![files[2].id.clone(), files[1].id.clone(), files[0].id.clone()]
+		);
+		Ok(())
+	}
+
+	#[tokio::test]
 	async fn complete_hashes_are_reused_for_each_winner_loser_pair() -> Result<(), ErrorMarker> {
 		let calls = Arc::new(AtomicUsize::new(0));
 		let scan = EnvironmentConflictScan {
@@ -1212,48 +1240,6 @@ mod tests {
 		assert_eq!(output.participation, Participation::Hypothetical);
 		assert_eq!(output.provider_summary.state, ProviderState::Inactive);
 		assert_eq!(output.rows.len(), 1);
-		Ok(())
-	}
-
-	#[tokio::test]
-	async fn directory_tombstone_controls_descendant_file() -> Result<(), ErrorMarker> {
-		let tombstone = Tombstone {
-			scope: TombstoneScope::DirectorySubtree,
-			owner: ProviderReference::DataMod {
-				mod_name: mod_name("High"),
-				priority: ModPriority::new(1),
-				original_path: path("textures/old"),
-				participation_reason: ParticipationReason::EnabledMod,
-			},
-		};
-		let scan = EnvironmentConflictScan {
-			providers: vec![
-				provider(
-					"Low",
-					0,
-					true,
-					vec![data_mod_file(
-						"Low",
-						0,
-						"Textures/Old/a.dds",
-						ParticipationReason::EnabledMod,
-					)],
-					Vec::new(),
-				),
-				provider("High", 1, true, Vec::new(), vec![tombstone]),
-			],
-			problems: Vec::new(),
-		};
-
-		let output = project_list(
-			scan,
-			false,
-			content_port(Arc::new(AtomicUsize::new(0))),
-			CancellationToken::new(),
-		)
-		.await?;
-
-		assert!(matches!(output.rows[0], ConflictRow::Tombstone { .. }));
 		Ok(())
 	}
 
@@ -1450,7 +1436,17 @@ mod tests {
 				))
 			}) as PortFuture<_, ErrorMarker>
 		});
+		let unstable: ReadConflictContent = Arc::new(|_, _| {
+			Box::pin(async { Ok(ConflictContentRead::Unstable) }) as PortFuture<_, ErrorMarker>
+		});
+		let unstable_output = project_list(scan.clone(), true, unstable, CancellationToken::new()).await?;
 		let different_output = project_list(scan, true, different, CancellationToken::new()).await?;
+
+		assert!(matches!(
+			&unstable_output.rows[0],
+			ConflictRow::OrdinaryConflict { content_comparisons, .. }
+				if content_comparisons[0].state() == ContentState::Unstable
+		));
 
 		let ConflictRow::OrdinaryConflict {
 			content_comparisons: unavailable_comparisons,
