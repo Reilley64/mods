@@ -12,9 +12,9 @@ mod list_settings;
 mod set_game_directory;
 
 use domain::EnvironmentRoot;
-pub use execution::CapturedOutput;
-pub use execution::CapturedStream;
-pub use execution::ExecutionCapture;
+pub use infrastructure_execution::CapturedOutput;
+pub use infrastructure_execution::CapturedStream;
+pub use infrastructure_execution::ExecutionCapture;
 use infrastructure_archive::ArchiveAdapter;
 use infrastructure_environment::EnvironmentAdapter;
 use infrastructure_game_platform::GamePlatformAdapter;
