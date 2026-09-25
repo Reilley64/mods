@@ -9,6 +9,7 @@ mod installation;
 mod mods;
 mod paths;
 mod profile_state;
+mod provider_resolution;
 mod providers;
 mod tombstones;
 
@@ -67,6 +68,8 @@ pub use mods::ModPriority;
 pub use paths::DataRelativePath;
 pub use paths::InvalidDataRelativePath;
 pub use profile_state::profile_test_file_slots;
+pub use provider_resolution::TombstoneIndex;
+pub use provider_resolution::resolve_effective_file;
 pub use providers::ParticipationReason;
 pub use providers::ProviderClass;
 pub use providers::ProviderIdentity;

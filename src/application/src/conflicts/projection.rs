@@ -29,6 +29,7 @@ use domain::ResolutionReason;
 use domain::ResolutionStatus;
 use domain::Tombstone;
 use domain::TombstoneEffect;
+use domain::TombstoneIndex;
 use domain::TombstoneScope;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -42,6 +43,7 @@ struct Projection {
 	files: Vec<IndexedConflictFile>,
 	directories: Vec<ProviderReference>,
 	tombstones: Vec<Tombstone>,
+	tombstone_index: TombstoneIndex,
 	problems: Vec<ConflictProblem>,
 	participation: Participation,
 }
@@ -228,12 +230,7 @@ pub(super) async fn project_path(
 		providers
 	};
 
-	let controlling_tombstone = projection
-		.tombstones
-		.iter()
-		.filter(|tombstone| tombstone_applies(tombstone, path.comparison_key()))
-		.max_by_key(|tombstone| tombstone.owner.rank())
-		.cloned();
+	let controlling_tombstone = projection.tombstone_index.controlling(path.comparison_key()).cloned();
 
 	let effective_result = if resolution_status == ResolutionStatus::Exact {
 		Some(if let Some(winner) = resolved.unsuppressed.first() {
@@ -396,6 +393,11 @@ impl Projection {
 				.then_with(|| compare_utf16(left.path().as_str(), right.path().as_str()))
 		});
 
+		let mut tombstone_index = TombstoneIndex::default();
+		for tombstone in &tombstones {
+			tombstone_index.insert(tombstone.clone());
+		}
+
 		append_structural_problems(&files, &directories, &mut problems);
 		problems.sort_by(compare_problems);
 		problems.dedup();
@@ -404,6 +406,7 @@ impl Projection {
 			files,
 			directories,
 			tombstones,
+			tombstone_index,
 			problems,
 			participation,
 		}
@@ -425,7 +428,7 @@ impl Projection {
 			.iter()
 			.filter(|file| file.provider.original_path().comparison_key() == key)
 		{
-			if let Some(tombstone) = controlling_tombstone(&self.tombstones, &file.provider) {
+			if let Some(tombstone) = self.tombstone_index.suppressing(&file.provider) {
 				suppressed.push((file.clone(), tombstone.clone()));
 			} else {
 				unsuppressed.push(file.clone());
@@ -498,7 +501,8 @@ impl Projection {
 				.map(|file| &file.provider)
 				.chain(self.directories.iter())
 				.filter(|entry| {
-					controlling_tombstone(&self.tombstones, entry)
+					self.tombstone_index
+						.suppressing(entry)
 						.is_some_and(|controlling| controlling == tombstone)
 				})
 				.cloned()
@@ -567,7 +571,8 @@ impl Projection {
 			.files
 			.iter()
 			.filter(|file| {
-				controlling_tombstone(&self.tombstones, &file.provider)
+				self.tombstone_index
+					.suppressing(&file.provider)
 					.is_some_and(|tombstone| &tombstone.owner.identity() == identity)
 			})
 			.count() as u64;
@@ -616,7 +621,7 @@ impl Projection {
 		let applicable = self
 			.tombstones
 			.iter()
-			.filter(|tombstone| tombstone_applies(tombstone, key))
+			.filter(|tombstone| tombstone.applies_to(key))
 			.collect::<Vec<_>>();
 		let mut effects = Vec::new();
 		for tombstone in applicable {
@@ -631,7 +636,8 @@ impl Projection {
 				.iter()
 				.filter(|directory| directory.original_path().comparison_key() == key)
 				.filter(|directory| {
-					controlling_tombstone(&self.tombstones, directory)
+					self.tombstone_index
+						.suppressing(directory)
 						.is_some_and(|controlling| controlling == tombstone)
 				})
 				.cloned());
@@ -644,13 +650,9 @@ impl Projection {
 				continue;
 			}
 			if let Some(controlling) = self
-				.tombstones
-				.iter()
-				.filter(|candidate| {
-					candidate.owner.rank() > tombstone.owner.rank()
-						&& tombstone_applies(candidate, key)
-				})
-				.max_by_key(|candidate| candidate.owner.rank())
+				.tombstone_index
+				.controlling(key)
+				.filter(|candidate| candidate.owner.rank() > tombstone.owner.rank())
 			{
 				effects.push(TombstoneEffect::ShadowedByTombstone {
 					tombstone: tombstone.clone(),
@@ -701,24 +703,6 @@ fn append_structural_problems(
 				},
 			});
 		}
-	}
-}
-
-fn controlling_tombstone<'a>(tombstones: &'a [Tombstone], entry: &ProviderReference) -> Option<&'a Tombstone> {
-	tombstones
-		.iter()
-		.filter(|tombstone| {
-			tombstone.owner.rank() > entry.rank()
-				&& tombstone_applies(tombstone, entry.original_path().comparison_key())
-		})
-		.max_by_key(|tombstone| tombstone.owner.rank())
-}
-
-fn tombstone_applies(tombstone: &Tombstone, key: &str) -> bool {
-	let tombstone_key = tombstone.path().comparison_key();
-	match tombstone.scope {
-		TombstoneScope::ExactFile => key == tombstone_key,
-		TombstoneScope::DirectorySubtree => key_is_at_or_below(key, tombstone_key),
 	}
 }
 
