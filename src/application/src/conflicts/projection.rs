@@ -1244,48 +1244,6 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn directory_tombstone_controls_descendant_file() -> Result<(), ErrorMarker> {
-		let tombstone = Tombstone {
-			scope: TombstoneScope::DirectorySubtree,
-			owner: ProviderReference::DataMod {
-				mod_name: mod_name("High"),
-				priority: ModPriority::new(1),
-				original_path: path("textures/old"),
-				participation_reason: ParticipationReason::EnabledMod,
-			},
-		};
-		let scan = EnvironmentConflictScan {
-			providers: vec![
-				provider(
-					"Low",
-					0,
-					true,
-					vec![data_mod_file(
-						"Low",
-						0,
-						"Textures/Old/a.dds",
-						ParticipationReason::EnabledMod,
-					)],
-					Vec::new(),
-				),
-				provider("High", 1, true, Vec::new(), vec![tombstone]),
-			],
-			problems: Vec::new(),
-		};
-
-		let output = project_list(
-			scan,
-			false,
-			content_port(Arc::new(AtomicUsize::new(0))),
-			CancellationToken::new(),
-		)
-		.await?;
-
-		assert!(matches!(output.rows[0], ConflictRow::Tombstone { .. }));
-		Ok(())
-	}
-
-	#[tokio::test]
 	async fn ordinary_and_exact_tombstone_rows_share_a_key_in_stable_kind_order() -> Result<(), ErrorMarker> {
 		let tombstone = Tombstone {
 			scope: TombstoneScope::ExactFile,

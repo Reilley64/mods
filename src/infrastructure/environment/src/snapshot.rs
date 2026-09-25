@@ -767,7 +767,14 @@ fn apply_provider(
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		if let Some(tombstone) = tombstone_index.controlling(key) {
+		let mut controlling_tombstone = None;
+		for controlling in tombstone_index.controlling_steps(key) {
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
+			}
+			controlling_tombstone = controlling;
+		}
+		if let Some(tombstone) = controlling_tombstone {
 			let file = if let EffectiveResult::File(file) = effective {
 				Some(&*file)
 			} else {
@@ -1058,7 +1065,13 @@ pub(crate) fn assess_installation(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let controlling_tombstone = tombstones.controlling(key);
+		let mut controlling_tombstone = None;
+		for controlling in tombstones.controlling_steps(key) {
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
+			}
+			controlling_tombstone = controlling;
+		}
 
 		let proposed_hypothetical = ProviderReference::DataMod {
 			mod_name: plan.mod_name.clone(),

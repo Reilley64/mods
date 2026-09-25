@@ -3,53 +3,71 @@ use crate::ProviderReference;
 use crate::Tombstone;
 use crate::TombstoneScope;
 use std::collections::HashMap;
+use std::iter::once;
 
 /// Callers select participating providers and validate their namespaces before resolution.
-/// Insertions are incremental so effectful callers retain their cancellation checkpoints.
+/// Insertions and lookup steps let effectful callers retain cancellation checkpoints.
 #[derive(Default)]
 pub struct TombstoneIndex {
-	paths: HashMap<String, (usize, Tombstone)>,
-	directories: HashMap<String, (usize, Tombstone)>,
+	paths: HashMap<String, IndexedTombstone>,
+	directories: HashMap<String, IndexedTombstone>,
 	next_order: usize,
+}
+
+#[derive(Clone)]
+struct IndexedTombstone {
+	insertion_order: usize,
+	tombstone: Tombstone,
 }
 
 impl TombstoneIndex {
 	pub fn insert(&mut self, tombstone: Tombstone) {
 		let key = tombstone.path().comparison_key().to_owned();
-		let order = self.next_order;
+		let entry = IndexedTombstone {
+			insertion_order: self.next_order,
+			tombstone,
+		};
 		self.next_order += 1;
 
-		if tombstone.scope == TombstoneScope::DirectorySubtree
+		if entry.tombstone.scope == TombstoneScope::DirectorySubtree
 			&& self.directories
 				.get(&key)
-				.is_none_or(|(_, current)| current.owner.rank() <= tombstone.owner.rank())
+				.is_none_or(|current| current.tombstone.owner.rank() <= entry.tombstone.owner.rank())
 		{
-			self.directories.insert(key.clone(), (order, tombstone.clone()));
+			self.directories.insert(key.clone(), entry.clone());
 		}
 		if self.paths
 			.get(&key)
-			.is_none_or(|(_, current)| current.owner.rank() <= tombstone.owner.rank())
+			.is_none_or(|current| current.tombstone.owner.rank() <= entry.tombstone.owner.rank())
 		{
-			self.paths.insert(key, (order, tombstone));
+			self.paths.insert(key, entry);
 		}
 	}
 
 	/// `key` must be a Data-relative comparison key. Equal ranks retain the last insertion.
-	/// Lookup visits path ancestors, not the complete provider metadata collection.
 	pub fn controlling(&self, key: &str) -> Option<&Tombstone> {
-		let mut controlling = self.paths.get(key);
-		for (boundary, _) in key.match_indices('/') {
-			let Some(ancestor) = self.directories.get(&key[..boundary]) else {
-				continue;
-			};
-			if controlling.is_none_or(|current| {
-				(current.1.owner.rank(), current.0) < (ancestor.1.owner.rank(), ancestor.0)
-			}) {
-				controlling = Some(ancestor);
-			}
-		}
+		self.controlling_steps(key).last().flatten()
+	}
 
-		controlling.map(|(_, tombstone)| tombstone)
+	/// Yields the controlling value after the exact path and then each ancestor lookup,
+	/// including missing ancestors, so callers can check cancellation between bounded steps.
+	/// `key` must be a Data-relative comparison key.
+	pub fn controlling_steps<'a>(&'a self, key: &str) -> impl Iterator<Item = Option<&'a Tombstone>> {
+		let entries = once(self.paths.get(key)).chain(key
+			.match_indices('/')
+			.map(|(boundary, _)| self.directories.get(&key[..boundary])));
+
+		entries.scan(None::<&IndexedTombstone>, |controlling, candidate| {
+			if let Some(candidate) = candidate
+				&& controlling.is_none_or(|current| {
+					(current.tombstone.owner.rank(), current.insertion_order)
+						< (candidate.tombstone.owner.rank(), candidate.insertion_order)
+				}) {
+				*controlling = Some(candidate);
+			}
+
+			Some(controlling.map(|entry| &entry.tombstone))
+		})
 	}
 
 	pub fn suppressing(&self, entry: &ProviderReference) -> Option<&Tombstone> {
@@ -166,6 +184,41 @@ mod tests {
 		assert!(!exact.applies_to("meshes/gun/part.nif"));
 		assert!(broad.applies_to("meshes"));
 		assert!(!broad.applies_to("meshes-other/gun"));
+		Ok(())
+	}
+
+	#[test]
+	fn exact_tombstone_suppresses_only_its_path_and_equal_rank_keeps_last_metadata_entry()
+	-> StdResult<(), Box<dyn Error>> {
+		let file = data_mod(2, "Meshes/Gun")?;
+		let exact = Tombstone {
+			owner: data_mod(8, "Meshes/Gun")?,
+			scope: TombstoneScope::ExactFile,
+		};
+		let broad = Tombstone {
+			owner: data_mod(8, "Meshes")?,
+			scope: TombstoneScope::DirectorySubtree,
+		};
+		let mut index = TombstoneIndex::default();
+		index.insert(exact.clone());
+
+		assert_eq!(index.suppressing(&file), Some(&exact));
+		assert_eq!(index.controlling("meshes/gun/part.nif"), None);
+		assert_eq!(
+			resolve_effective_file(Some(&file), index.controlling("meshes/gun")),
+			EffectiveResult::Absent {
+				controlling_tombstone: Some(exact.clone())
+			}
+		);
+
+		index.insert(broad.clone());
+
+		assert_eq!(index.controlling("meshes/gun"), Some(&broad));
+
+		index.insert(exact.clone());
+
+		assert_eq!(index.controlling("meshes/gun"), Some(&exact));
+		assert_eq!(index.controlling("meshes/gun/part.nif"), Some(&broad));
 		Ok(())
 	}
 
