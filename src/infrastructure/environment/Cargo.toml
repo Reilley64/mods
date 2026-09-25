@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 application = { workspace = true }
 domain = { workspace = true }
-cap-fs-ext = "3.4.6"
+cap-fs-ext = "4.0.3"
 cap-std = { workspace = true }
 encoding_rs = { workspace = true }
 rootcause = { workspace = true }

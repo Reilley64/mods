@@ -18,7 +18,7 @@ license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 application = { path = "src/application", version = "0.0.0" }
-cap-std = "3.4.6"
+cap-std = "4.0.3"
 domain = { path = "src/domain", version = "0.0.0" }
 encoding_rs = "0.8.41"
 infrastructure-dependencies = { path = "src/infrastructure/dependencies", version = "0.0.0" }
