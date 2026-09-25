@@ -109,6 +109,7 @@ mod tests {
 	use super::ProfileActivation;
 	use crate::safe_fs::SafeDir;
 	use domain::DataRelativePath;
+	use rootcause::Result as RootResult;
 	use std::error::Error;
 	use std::fs;
 	use std::result::Result as StdResult;
@@ -116,7 +117,7 @@ mod tests {
 	use tokio_util::sync::CancellationToken;
 
 	#[test]
-	fn reads_numbered_slots_from_utf16_profile_ini() -> StdResult<(), Box<dyn Error>> {
+	fn reads_numbered_slots_from_utf16_profile_ini() -> RootResult<()> {
 		let temp = TempDir::new()?;
 		fs::write(temp.path().join("plugins.txt"), b"")?;
 		let mut bytes = vec![0xff, 0xfe];
@@ -124,12 +125,10 @@ mod tests {
 			.encode_utf16()
 			.flat_map(u16::to_le_bytes));
 		fs::write(temp.path().join("Fallout.ini"), bytes)?;
-		let profile = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "profile directory must open")?;
+		let profile = SafeDir::open_absolute(&temp.path().canonicalize()?)?;
 
-		let activation = ProfileActivation::load(&profile, &CancellationToken::new())
-			.map_err(|_| "activation must load")?;
-		let path = DataRelativePath::new("café.esp".to_owned()).map_err(|_| "plugin path must be valid")?;
+		let activation = ProfileActivation::load(&profile, &CancellationToken::new())?;
+		let path = DataRelativePath::new("café.esp".to_owned())?;
 		assert!(activation.is_active(&path));
 		Ok(())
 	}
