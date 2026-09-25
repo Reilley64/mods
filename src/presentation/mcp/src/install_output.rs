@@ -280,7 +280,7 @@ fn candidate(value: &PlannedCandidate) -> Result<Value, ErrorData> {
 		json!({"candidate_id": item.candidate_id, "origin": origin, "phase": phase(item.phase), "declared_priority": item.declared_priority,
  "descriptor_order": item.descriptor_order, "source_member": item.source_member, "destination": item.destination.as_str(),
  "current_winner": effective_result(&value.current_winner),
- "proposed_winner": {"candidate_id": value.proposed_winner.candidate_id, "source_member": value.proposed_winner.source_member}, "decision": decision}),
+ "proposed_winner": {"kind": "archive_candidate", "candidate_id": value.proposed_winner.candidate_id, "source_member": value.proposed_winner.source_member}, "decision": decision}),
 	)
 }
 
@@ -380,19 +380,103 @@ pub(crate) fn warning(value: &InstallWarning) -> Value {
 mod tests {
 	use super::additional_selections;
 	use super::installed;
+	use super::preview;
 	use crate::contract::Contracts;
 	use application::conflicts::ListEffectiveConflictsOutput;
 	use application::installation::AdditionalSelectionsRequired;
+	use application::installation::CandidateDecision;
 	use application::installation::InstallMode;
 	use application::installation::InstallPlan;
+	use application::installation::InstallPreview;
 	use application::installation::InstalledArchive;
+	use application::installation::PlanCandidateReference;
+	use application::installation::PlannedCandidate;
 	use application::installation::ProjectedModState;
+	use application::installation::WinnerReason;
 	use domain::ArchiveIdentity;
+	use domain::DataRelativePath;
+	use domain::EffectiveResult;
+	use domain::InstallCandidate;
+	use domain::InstallCandidateOrigin;
+	use domain::InstallationPhase;
 	use domain::ModName;
 	use domain::ModPriority;
 	use domain::ResolutionStatus;
 	use domain::Sha256Digest;
 	use rootcause::Result;
+
+	#[test]
+	fn nonempty_install_plans_match_preview_and_installed_contracts() -> Result<()> {
+		let name = ModName::new("Example".into())?;
+		let plan = InstallPlan {
+			archive_identity: ArchiveIdentity::DataArchive {
+				archive_sha256: Sha256Digest::new("c".repeat(64))?,
+				package_root: "Data".into(),
+			},
+			mod_name: name.clone(),
+			replacement: false,
+			accepted_choices: vec![],
+			automatic_events: vec![],
+			resolved_flags: vec![],
+			warnings: vec![],
+			candidates: vec![PlannedCandidate {
+				origin_condition_evaluation: None,
+				candidate: InstallCandidate {
+					candidate_id: 1,
+					origin: InstallCandidateOrigin::Required,
+					phase: InstallationPhase::Required,
+					declared_priority: 0,
+					descriptor_order: 0,
+					source_member: "Data/example.esp".into(),
+					destination: DataRelativePath::new("example.esp".into())?,
+				},
+				current_winner: EffectiveResult::Absent {
+					controlling_tombstone: None,
+				},
+				proposed_winner: PlanCandidateReference {
+					candidate_id: 1,
+					source_member: "Data/example.esp".into(),
+				},
+				decision: CandidateDecision::Winner {
+					reason: WinnerReason::OnlyCandidate,
+				},
+			}],
+			projected_state: ProjectedModState {
+				mode: InstallMode::NewInstall,
+				mod_name: name,
+				priority: ModPriority::new(0),
+				list_position: 0,
+				enabled: false,
+				overlaps: vec![],
+			},
+		};
+		let conflicts = ListEffectiveConflictsOutput {
+			resolution_status: ResolutionStatus::Exact,
+			rows: vec![],
+			problems: vec![],
+		};
+
+		let preview_value = preview(&InstallPreview {
+			plan: plan.clone(),
+			hypothetical_enabled_conflicts: conflicts.clone(),
+		})?;
+		let installed_value = installed(&InstalledArchive {
+			plan,
+			conflicts,
+			warnings: vec![],
+		})?;
+
+		let contracts = Contracts::new()?;
+		assert_eq!(
+			[
+				contracts.output_matches("mods_install", &preview_value),
+				contracts.output_matches("mods_install", &installed_value),
+			],
+			[true, true],
+			"nonempty preview and installed plans must satisfy the frozen contract"
+		);
+		Ok(())
+	}
 
 	#[test]
 	fn installed_success_preserves_committed_new_and_replacement_facts() -> Result<()> {
