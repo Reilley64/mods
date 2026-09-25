@@ -91,6 +91,16 @@ Evidence: `execution-smoke-20260925-01/debug-standalone-parent` and `debug-repla
 
 Read-only mapping-contract review found no documented prohibition on verbatim-prefixed paths or identity directory mappings, so neither was treated as an established mods defect. It identified different native path-decomposition code in parent traversal versus insertion as an unconfirmed lead. No speculative normalization, mapping omission or native patch was applied. Further diagnosis requires an approved symbol-enabled native diagnostic build/comparison plan; it must not substitute rebuilt symbols for the original DLL or silently change the release pin.
 
+## Symbol-enabled native comparison
+
+The owner approved a separate symbol-enabled diagnostic build and one comparison. The exact archived fork/upstream source was built with its existing Release configuration, which already enables full PDB output. Both architectures were built solely to satisfy the unchanged four-artifact interface. A separate controller from clean `82467db` embedded the real diagnostic artifact hashes. Original package/source/pins stayed unchanged. This was an online build, not offline source-closure evidence.
+
+The diagnostic DLL's CodeView GUID/age matched its private PDB. The single comparison reproduced the same second directory mapping, read address `0x60`, instruction and DLL RVA `0x60210`. Matching symbols identify `assertPathExists` at `src/usvfs_dll/usvfs.cpp:591`, inlined `DirectoryTree::exists`, called by `usvfsVirtualLinkDirectoryStatic` at line 726. This source localization applies to the matched diagnostic binary; its PDB was not substituted for the original DLL.
+
+Subsequent offline inspection of the same full dump recovered `current = NULL`, iterator component `Games` at position 7, destination parent Data, and verbatim-prefixed Data/Music paths. The prior branch/returned node was not recoverable, so the suspected path-decomposition mismatch remains unproved. No normalization, skipped mapping, null-check patch or other native/product fix has been applied.
+
+Evidence is retained in `C:/Users/prime/mods-issue-33/native-symbols-20260925-01`, including build logs, matching PDBs, separate controller and comparison dump (SHA-256 `c52a8f09341df690705a06ce90b7b7660edb88bb4b4529f75e12fbc504cbe2ea`). All 304 archived fork files and original package hashes remain unchanged. All 311 Steam Data hashes match; standard saves remain absent and relevant processes are gone. Additional controlled runtime comparisons require owner approval.
+
 ## Native source inventory evidence
 
 The published native source asset SHA-256 matched `961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199`. A local archive audit verified all 16,347 declared files, all 66 source-map resource SHA-512 values, and the nested fork revision/file inventory. No missing mapped library-source asset was identified. This is inventory evidence, not a native rebuild result or an unconditional source-completeness certification.
