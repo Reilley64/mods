@@ -12,7 +12,7 @@ workspace = true
 application = { workspace = true }
 crc32fast = "1.5.2"
 domain = { workspace = true }
-lzma-rust2 = { version = "0.20.1", default-features = false, features = ["std"] }
+lzma-rust2 = { version = "0.21.0", default-features = false, features = ["std"] }
 quick-xml = { version = "0.42.0", default-features = false, features = ["encoding"] }
 rars = "0.9.4"
 rootcause = { workspace = true }
