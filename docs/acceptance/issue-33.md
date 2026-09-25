@@ -77,6 +77,20 @@ The test stopped immediately: no x86/MCP execution, descendant or cancellation t
 
 Evidence is retained at `C:/Users/prime/mods-issue-33/execution-smoke-20260925-01/evidence` (exact argv, status, streams, Windows crash events, PE/hashes, process and file inventories). Successful execution acceptance remains blocked pending focused diagnosis and an approved repair/retest plan.
 
+## Debugger diagnosis evidence
+
+The SSH account has an enabled administrator token. Registering the existing WinDbg package for that account succeeded but did not remove the WindowsApps CDB access denial. The owner then approved standalone Debugging Tools installation. The Microsoft-signed cached SDK installer installed only `OptionId.WindowsDesktopDebuggers` with quiet/no-restart options; exit 0, no reboot. Standalone CDB `10.0.26100.7705` works. No WindowsApps permissions were changed.
+
+Analysis of the verified original dump localized the crash to directory mapping (`usvfsVirtualLinkDirectoryStatic+0x8e` calling the faulting code at DLL RVA `0x60210`). Export-nearest `userDisconnected+0x7370` is not a reliable source function name. Matching private symbols were unavailable.
+
+One owner-approved debugger replay then logged two directory entries: Overwrite to Game Installation Data (flags 4), followed by an identity mapping of `Data\Music` (flags 0). Both identity-mapping inputs were verbatim-prefixed Windows paths. The first access violation followed the second entry and matched the original RVA/read-address `0x60`. This confirms the input and boundary, not the root cause. The first mapping's return was not independently logged; reaching entry 2 is the observation.
+
+The debugger saved a full dump and quit without resuming after the fault. Live `.ecxr` was unavailable; current stopped registers/stack were captured instead. Debugger timing/heap/stdio differences are recorded, so exact non-debugger equivalence is not claimed. No further replay occurred. Final checks found no test/debugger processes; all 311 Data hashes were unchanged and the standard save directory remained absent.
+
+Evidence: `execution-smoke-20260925-01/debug-standalone-parent` and `debug-replay-directory-20260925-01` beneath the existing isolated workspace. Replay dump SHA-256: `2f0fe712a791ca677666b742116abeea1e8ea9e67064adf4b1a97f0977655e32`. Read-only review of the native mapping input requirements is in progress; no native/source repair is approved or claimed.
+
+Read-only mapping-contract review found no documented prohibition on verbatim-prefixed paths or identity directory mappings, so neither was treated as an established mods defect. It identified different native path-decomposition code in parent traversal versus insertion as an unconfirmed lead. No speculative normalization, mapping omission or native patch was applied. Further diagnosis requires an approved symbol-enabled native diagnostic build/comparison plan; it must not substitute rebuilt symbols for the original DLL or silently change the release pin.
+
 ## Native source inventory evidence
 
 The published native source asset SHA-256 matched `961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199`. A local archive audit verified all 16,347 declared files, all 66 source-map resource SHA-512 values, and the nested fork revision/file inventory. No missing mapped library-source asset was identified. This is inventory evidence, not a native rebuild result or an unconditional source-completeness certification.
