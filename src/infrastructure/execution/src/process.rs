@@ -21,6 +21,8 @@ use windows::Win32::Foundation::ERROR_TIMEOUT;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Foundation::WAIT_FAILED;
 use windows::Win32::Foundation::WAIT_OBJECT_0;
+use windows::Win32::System::Console::CTRL_BREAK_EVENT;
+use windows::Win32::System::Console::GenerateConsoleCtrlEvent;
 use windows::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows::Win32::System::JobObjects::CreateJobObjectW;
 use windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -40,6 +42,7 @@ use windows::Win32::System::Threading::WaitForSingleObject;
 /// Already-resolved Windows launch inputs. #31 owns command-line quoting,
 /// resolution, stream policy, cancellation, and complete Job draining.
 pub struct LaunchRequest<'a> {
+	pub new_process_group: bool,
 	pub application: &'a Path,
 	pub command_line: &'a OsStr,
 	pub directory: &'a Path,
@@ -58,6 +61,7 @@ pub struct HookedProcess {
 	process: OwnedHandle,
 	thread: OwnedHandle,
 	resume_attempted: bool,
+	cancellation_group: Option<u32>,
 }
 
 impl VirtualGameView {
@@ -102,6 +106,7 @@ impl VirtualGameView {
 			request.directory,
 			&mut startup,
 			request.standard_streams.is_some(),
+			request.new_process_group,
 		)?;
 		// SAFETY: successful shim launch exclusively transfers the non-null process
 		// and thread handles returned by CreateProcessW. Each enters one owner.
@@ -143,11 +148,27 @@ impl VirtualGameView {
 			process,
 			thread,
 			resume_attempted: false,
+			cancellation_group: request.new_process_group.then_some(created.dwProcessId),
 		})
 	}
 }
 
 impl HookedProcess {
+	/// CLI retains its existing console grace. MCP only grants grace after the
+	/// OS accepts delivery to the private child group; it never broadcasts.
+	pub fn request_cancellation_grace(&self) -> bool {
+		let Some(group) = self.cancellation_group else {
+			return true;
+		};
+		if group == 0 {
+			return false;
+		}
+
+		// SAFETY: the nonzero ID belongs to the owned root launched with
+		// CREATE_NEW_PROCESS_GROUP. This cannot address the controller group.
+		unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, group) }.is_ok()
+	}
+
 	/// Resumes the root once, after successful Job assignment.
 	///
 	/// # Errors

@@ -1,5 +1,7 @@
 use super::projection::project_list;
+use crate::ports::ProgressEvent;
 use crate::ports::ReadConflictContent;
+use crate::ports::ReportProgress;
 use crate::ports::ScanEnvironmentConflicts;
 use domain::ConflictProblem;
 use domain::ConflictRow;
@@ -11,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct ListEffectiveConflictsDependencies {
+	pub report_progress: Option<ReportProgress>,
 	pub scan_environment: ScanEnvironmentConflicts,
 	pub read_conflict_content: ReadConflictContent,
 }
@@ -37,11 +40,19 @@ pub async fn list_effective_conflicts(
 	compare_content: bool,
 	cancellation: CancellationToken,
 ) -> Result<ListEffectiveConflictsOutput, ListEffectiveConflictsError> {
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ScanningConflicts,)).await;
+	}
+
 	let scan = dependencies
 		.scan_environment
 		.call((cancellation.clone(),))
 		.await
 		.context(ListEffectiveConflictsError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ConflictsScanned,)).await;
+	}
 
 	project_list(scan, compare_content, dependencies.read_conflict_content, cancellation)
 		.await

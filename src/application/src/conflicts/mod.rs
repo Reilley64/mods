@@ -16,6 +16,8 @@ pub use list_effective_conflicts::ListEffectiveConflictsDependencies;
 pub use list_effective_conflicts::ListEffectiveConflictsError;
 pub use list_effective_conflicts::ListEffectiveConflictsOutput;
 pub use list_effective_conflicts::list_effective_conflicts;
+pub(crate) use projection::InstallationParticipation;
+pub(crate) use projection::project_installation;
 pub use types::ConflictContentRead;
 pub use types::EnvironmentConflictScan;
 pub use types::IndexedConflictFile;

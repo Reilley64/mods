@@ -9,6 +9,11 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 pub trait ManagedProcess {
+	/// Returns whether cancellation may wait for cooperative exit.
+	/// CLI preserves its existing grace; MCP requires successful group delivery.
+	fn request_cancellation_grace(&self) -> bool {
+		true
+	}
 	fn resume(&mut self) -> Result<(), ExecutionError>;
 	fn job_is_empty(&self) -> Result<bool, ExecutionError>;
 	fn root_status(&self) -> Result<Option<u32>, ExecutionError>;
@@ -18,6 +23,9 @@ pub trait ManagedProcess {
 
 #[cfg(windows)]
 impl ManagedProcess for HookedProcess {
+	fn request_cancellation_grace(&self) -> bool {
+		self.request_cancellation_grace()
+	}
 	fn resume(&mut self) -> Result<(), ExecutionError> {
 		self.resume()
 	}
@@ -60,7 +68,11 @@ pub async fn supervise(
 			}
 			if !forced {
 				if cancellation.is_cancelled() && deadline.is_none() {
-					deadline = Some(Instant::now() + Duration::from_secs(5));
+					deadline = Some(if process.request_cancellation_grace() {
+						Instant::now() + Duration::from_secs(5)
+					} else {
+						Instant::now()
+					});
 				}
 				if force.is_cancelled() || deadline.is_some_and(|deadline| Instant::now() >= deadline) {
 					process.terminate(0xc000013a)?;
@@ -113,8 +125,12 @@ mod tests {
 		finished: bool,
 		resume_failure: bool,
 		termination_failure: bool,
+		console_delivery: bool,
 	}
 	impl ManagedProcess for Process {
+		fn request_cancellation_grace(&self) -> bool {
+			self.console_delivery
+		}
 		fn resume(&mut self) -> Result<(), ExecutionError> {
 			if self.resume_failure {
 				return Err(report!(NativeFailure {
@@ -163,6 +179,7 @@ mod tests {
 			finished: false,
 			resume_failure: false,
 			termination_failure: false,
+			console_delivery: true,
 		}
 	}
 
@@ -271,6 +288,22 @@ mod tests {
 		assert!(process.finished);
 		Ok(())
 	}
+	#[tokio::test(start_paused = true)]
+	async fn unavailable_console_delivery_terminates_without_grace() -> Result<(), ExecutionError> {
+		let mut process = process(0, usize::MAX);
+		process.console_delivery = false;
+		let cancellation = CancellationToken::new();
+		cancellation.cancel();
+		let started = Instant::now();
+
+		let status = supervise(&mut process, cancellation, CancellationToken::new()).await?;
+
+		assert_eq!(status.status, 0xc000013a);
+		assert!(started.elapsed() < Duration::from_secs(5));
+		assert!(process.finished);
+		Ok(())
+	}
+
 	#[tokio::test(start_paused = true)]
 	async fn force_cancellation_does_not_wait_for_grace() -> Result<(), ExecutionError> {
 		let mut process = process(0, usize::MAX);

@@ -1,4 +1,6 @@
 use crate::execution::ExecutionWarning;
+use crate::ports::ProgressEvent;
+use crate::ports::ReportProgress;
 use crate::ports::RunManagedProgram;
 use domain::OutputTarget;
 use domain::ProcessStatus;
@@ -12,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct ExecuteProgramDependencies {
+	pub report_progress: Option<ReportProgress>,
 	pub run_managed_program: RunManagedProgram,
 }
 
@@ -38,11 +41,28 @@ pub async fn execute_program(
 	arguments: Vec<ProgramArgument>,
 	cancellation: CancellationToken,
 ) -> Result<ExecuteProgramOutput, ExecuteProgramError> {
-	dependencies
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::PreparingExecution,)).await;
+	}
+
+	let output = dependencies
 		.run_managed_program
-		.call((output_target, working_directory, program, arguments, cancellation))
+		.call((
+			output_target,
+			working_directory,
+			program,
+			arguments,
+			dependencies.report_progress.clone(),
+			cancellation,
+		))
 		.await
-		.context(ExecuteProgramError)
+		.context(ExecuteProgramError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ExecutionFinished,)).await;
+	}
+
+	Ok(output)
 }
 
 #[cfg(test)]
@@ -67,7 +87,8 @@ mod tests {
 		let cancellation = CancellationToken::new();
 		let observed_cancellation = cancellation.clone();
 		let dependencies = ExecuteProgramDependencies {
-			run_managed_program: Arc::new(move |target, directory, program, arguments, token| {
+			report_progress: None,
+			run_managed_program: Arc::new(move |target, directory, program, arguments, _, token| {
 				assert_eq!(target, OutputTarget::Overwrite);
 				assert!(directory.is_none());
 				assert_eq!(program.as_os_str(), "tool.exe");
@@ -107,7 +128,8 @@ mod tests {
 	#[tokio::test]
 	async fn preserves_launcher_cause_under_fixed_use_case_context() -> Result<(), ErrorMarker> {
 		let dependencies = ExecuteProgramDependencies {
-			run_managed_program: Arc::new(|_, _, _, _, _| {
+			report_progress: None,
+			run_managed_program: Arc::new(|_, _, _, _, _, _| {
 				Box::pin(async { Err(report!(ErrorMarker::program_not_found())) }) as PortFuture<_>
 			}),
 		};

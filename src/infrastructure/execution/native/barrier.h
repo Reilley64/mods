@@ -26,7 +26,7 @@ ModsResult mods_usvfs_clear_bypasses(ModsUsvfs* session) MODS_NOEXCEPT;
 ModsResult mods_usvfs_link_file(ModsUsvfs* session, const wchar_t* source, const wchar_t* destination) MODS_NOEXCEPT;
 ModsResult mods_usvfs_link_directory(ModsUsvfs* session, const wchar_t* source, const wchar_t* destination, unsigned int flags) MODS_NOEXCEPT;
 ModsResult mods_usvfs_launch(ModsUsvfs* session, const wchar_t* application, wchar_t* command,
-                            const wchar_t* directory, STARTUPINFOW* startup, BOOL inherit_handles,
+                            const wchar_t* directory, STARTUPINFOW* startup, BOOL inherit_handles, BOOL new_process_group,
                             PROCESS_INFORMATION* output) MODS_NOEXCEPT;
 ModsResult mods_usvfs_close(ModsUsvfs* session) MODS_NOEXCEPT;
 #ifdef __cplusplus

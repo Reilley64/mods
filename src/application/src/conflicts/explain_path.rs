@@ -1,5 +1,7 @@
 use super::projection::project_path;
+use crate::ports::ProgressEvent;
 use crate::ports::ReadConflictContent;
+use crate::ports::ReportProgress;
 use crate::ports::ScanEnvironmentConflicts;
 use domain::ConflictProblem;
 use domain::ContentComparison;
@@ -16,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct ExplainPathDependencies {
+	pub report_progress: Option<ReportProgress>,
 	pub scan_environment: ScanEnvironmentConflicts,
 	pub read_conflict_content: ReadConflictContent,
 }
@@ -49,11 +52,19 @@ pub async fn explain_path(
 	compare_content: bool,
 	cancellation: CancellationToken,
 ) -> Result<ExplainPathOutput, ExplainPathError> {
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ScanningConflicts,)).await;
+	}
+
 	let scan = dependencies
 		.scan_environment
 		.call((cancellation.clone(),))
 		.await
 		.context(ExplainPathError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::ConflictsScanned,)).await;
+	}
 
 	project_path(
 		scan,

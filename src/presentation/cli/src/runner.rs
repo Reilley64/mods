@@ -594,6 +594,7 @@ mod tests {
 		let inspect_scan = scan.clone();
 		let explain_scan = scan;
 		let list = ListEffectiveConflictsDependencies {
+			report_progress: None,
 			scan_environment: Arc::new(move |_| {
 				let scan = list_scan.clone();
 				Box::pin(async move { Ok(scan) }) as PortFuture<_>
@@ -603,6 +604,7 @@ mod tests {
 			}),
 		};
 		let inspect = InspectModConflictsDependencies {
+			report_progress: None,
 			scan_environment: Arc::new(move |_| {
 				let scan = inspect_scan.clone();
 				Box::pin(async move { Ok(scan) }) as PortFuture<_>
@@ -612,6 +614,7 @@ mod tests {
 			}),
 		};
 		let explain = ExplainPathDependencies {
+			report_progress: None,
 			scan_environment: Arc::new(move |_| {
 				let scan = explain_scan.clone();
 				Box::pin(async move { Ok(scan) }) as PortFuture<_>
@@ -625,6 +628,7 @@ mod tests {
 
 	fn unavailable_list_effective_conflicts_dependencies() -> ListEffectiveConflictsDependencies {
 		ListEffectiveConflictsDependencies {
+			report_progress: None,
 			scan_environment: Arc::new(|_| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
@@ -636,6 +640,7 @@ mod tests {
 
 	fn unavailable_inspect_mod_conflicts_dependencies() -> InspectModConflictsDependencies {
 		InspectModConflictsDependencies {
+			report_progress: None,
 			scan_environment: Arc::new(|_| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
@@ -647,6 +652,7 @@ mod tests {
 
 	fn unavailable_explain_path_dependencies() -> ExplainPathDependencies {
 		ExplainPathDependencies {
+			report_progress: None,
 			scan_environment: Arc::new(|_| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
@@ -658,13 +664,20 @@ mod tests {
 
 	fn unavailable_install_archive_dependencies() -> InstallArchiveDependencies {
 		InstallArchiveDependencies {
+			report_progress: None,
+			scan_environment_conflicts: Arc::new(|_| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
+			read_conflict_content: Arc::new(|_, _| {
+				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+			}),
 			load_installation_state: Arc::new(|_, _| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
 			assess_installation: Arc::new(|_, _| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
-			index_archive: Arc::new(|_, _| {
+			index_archive: Arc::new(|_, _, _| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
 			read_game_version: Arc::new(|_, _| {
@@ -676,7 +689,7 @@ mod tests {
 			begin_installation: Arc::new(|_, _| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
-			extract_approved_files: Arc::new(|_, _, _, _, _| {
+			extract_approved_files: Arc::new(|_, _, _, _, _, _| {
 				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
 			}),
 		}
@@ -692,7 +705,8 @@ mod tests {
 		Dependencies {
 			execution_force_cancellation: CancellationToken::new(),
 			execute_program: ExecuteProgramDependencies {
-				run_managed_program: Arc::new(|_, _, _, _, _| {
+				report_progress: None,
+				run_managed_program: Arc::new(|_, _, _, _, _, _| {
 					Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
 				}),
 			},
@@ -728,12 +742,14 @@ mod tests {
 			},
 			list_settings,
 			get_setting: GetSettingDependencies {
+				report_progress: None,
 				load_settings: Arc::new(move || {
 					let resolved = resolved.clone();
 					Box::pin(async move { Ok(resolved) }) as PortFuture<_>
 				}),
 			},
 			set_game_directory: SetGameDirectoryDependencies {
+				report_progress: None,
 				check_settings_readiness: Arc::new(|_| Box::pin(async { Ok(()) }) as PortFuture<_>),
 				validate_game_directory: Arc::new({
 					let binding = binding.clone();
@@ -787,6 +803,7 @@ mod tests {
 		Ok(dependencies_with_list(
 			binding,
 			ListSettingsDependencies {
+				report_progress: None,
 				load_settings: Arc::new(move || {
 					let binding = listed_binding.clone();
 					Box::pin(async move {
@@ -807,7 +824,7 @@ mod tests {
 		for status in [0, 1, 125, 126, 127, 256, 259, 0xC000_0005] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 			dependencies.execute_program.run_managed_program =
-				Arc::new(move |target, cwd, program, arguments, _| {
+				Arc::new(move |target, cwd, program, arguments, _, _| {
 					assert_eq!(target, OutputTarget::Overwrite);
 					assert!(cwd.is_none());
 					assert_eq!(program.as_os_str(), "tool.exe");
@@ -842,7 +859,7 @@ mod tests {
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let called = Arc::new(AtomicBool::new(false));
 		let observed = called.clone();
-		dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _| {
+		dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _, _| {
 			observed.store(true, Ordering::SeqCst);
 			Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
 		});

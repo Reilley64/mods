@@ -13,6 +13,9 @@ application = { workspace = true }
 domain = { workspace = true }
 rootcause = { workspace = true }
 sha2 = { workspace = true }
+os_pipe = "1.2.3"
+tempfile = { workspace = true }
+uuid = { version = "1.26.1", features = ["v4"] }
 tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
 tokio-util = { workspace = true }
 

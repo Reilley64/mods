@@ -125,6 +125,7 @@ impl VirtualGameView {
 		directory: &Path,
 		startup: &mut STARTUPINFOW,
 		inherit: bool,
+		new_process_group: bool,
 	) -> Result<PROCESS_INFORMATION, ExecutionError> {
 		if !application.is_absolute() || !directory.is_absolute() {
 			return Err(report!(ExecutionError));
@@ -150,6 +151,7 @@ impl VirtualGameView {
 				directory.as_ptr(),
 				startup,
 				i32::from(inherit),
+				i32::from(new_process_group),
 				&mut output,
 			)
 		};

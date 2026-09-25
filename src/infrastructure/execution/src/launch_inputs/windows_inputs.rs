@@ -265,6 +265,37 @@ impl InheritedStreams {
 		Ok(Self { handles })
 	}
 
+	pub(crate) fn duplicate(streams: [BorrowedHandle<'_>; 3]) -> Result<Self, LaunchInputError> {
+		let mut handles = Vec::new();
+		for source in streams {
+			// SAFETY: GetCurrentProcess returns the live process pseudo handle.
+			let process = unsafe { GetCurrentProcess() };
+			let mut duplicate = HANDLE::default();
+			// SAFETY: each source is borrowed for this call; duplication transfers
+			// a distinct owned inheritable handle without changing the source flags.
+			unsafe {
+				DuplicateHandle(
+					process,
+					HANDLE(source.as_raw_handle()),
+					process,
+					&mut duplicate,
+					0,
+					true,
+					DUPLICATE_SAME_ACCESS,
+				)
+			}
+			.context(LaunchInputError::StandardStreams)?;
+			// SAFETY: DuplicateHandle succeeded and transferred this valid handle.
+			handles.push(unsafe { OwnedHandle::from_raw_handle(duplicate.0) });
+		}
+
+		let handles = handles
+			.try_into()
+			.map_err(|_| report!(LaunchInputError::StandardStreams))?;
+
+		Ok(Self { handles })
+	}
+
 	pub fn borrowed(&self) -> [BorrowedHandle<'_>; 3] {
 		[
 			self.handles[0].as_handle(),

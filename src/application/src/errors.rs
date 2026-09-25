@@ -1,3 +1,4 @@
+use domain::ModName;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +92,7 @@ struct SelectionDetails {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorMarker {
 	code: ErrorCode,
+	mod_name: Option<Box<ModName>>,
 	phase: Option<&'static str>,
 	field: Option<&'static str>,
 	setting_key: Option<&'static str>,
@@ -104,6 +106,7 @@ impl ErrorMarker {
 	fn simple(code: ErrorCode) -> Self {
 		Self {
 			code,
+			mod_name: None,
 			phase: None,
 			field: None,
 			setting_key: None,
@@ -159,6 +162,7 @@ impl ErrorMarker {
 	pub fn game_build_mismatch(expected: u64, actual: u64) -> Self {
 		Self {
 			code: ErrorCode::GameBuildMismatch,
+			mod_name: None,
 			phase: None,
 			field: None,
 			setting_key: None,
@@ -207,13 +211,13 @@ impl ErrorMarker {
 		Self::simple(ErrorCode::UnsupportedInstaller)
 	}
 	pub fn dependency_unsatisfied() -> Self {
-		Self::simple(ErrorCode::DependencyUnsatisfied)
+		Self::simple(ErrorCode::DependencyUnsatisfied).with_phase("fomod_evaluation")
 	}
 	pub fn unsafe_archive() -> Self {
 		Self::simple(ErrorCode::UnsafeArchive)
 	}
 	pub fn ambiguous_install_plan() -> Self {
-		Self::simple(ErrorCode::AmbiguousInstallPlan)
+		Self::simple(ErrorCode::AmbiguousInstallPlan).with_phase("planning")
 	}
 	pub fn invalid_mod_name() -> Self {
 		Self::simple(ErrorCode::InvalidModName)
@@ -284,6 +288,22 @@ impl ErrorMarker {
 			message_override: Some("environment variables are invalid; only MODS_GAME_DIR is accepted"),
 			..Self::game_install_invalid()
 		}
+	}
+
+	pub fn set_phase_if_missing(&mut self, phase: &'static str) {
+		self.phase.get_or_insert(phase);
+	}
+
+	pub fn with_phase(mut self, phase: &'static str) -> Self {
+		self.phase = Some(phase);
+		self
+	}
+	pub fn with_mod_name(mut self, name: ModName) -> Self {
+		self.mod_name = Some(Box::new(name));
+		self
+	}
+	pub fn mod_name(&self) -> Option<&ModName> {
+		self.mod_name.as_deref()
 	}
 
 	pub fn code(&self) -> ErrorCode {

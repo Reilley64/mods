@@ -1,4 +1,6 @@
 use crate::ports::LoadSettings;
+use crate::ports::ProgressEvent;
+use crate::ports::ReportProgress;
 use crate::settings::types::SettingRecord;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -6,6 +8,7 @@ use std::fmt;
 
 #[derive(Clone)]
 pub struct ListSettingsDependencies {
+	pub report_progress: Option<ReportProgress>,
 	pub load_settings: LoadSettings,
 }
 
@@ -26,6 +29,10 @@ impl fmt::Display for ListSettingsError {
 #[tracing::instrument(skip_all)]
 pub async fn list_settings(dependencies: ListSettingsDependencies) -> Result<ListSettingsOutput, ListSettingsError> {
 	let resolved = dependencies.load_settings.call(()).await.context(ListSettingsError)?;
+
+	if let Some(progress) = &dependencies.report_progress {
+		progress.call((ProgressEvent::SettingsLoaded,)).await;
+	}
 
 	Ok(ListSettingsOutput {
 		settings: resolved.settings,
@@ -76,6 +83,7 @@ mod tests {
 			manifest_binding: binding,
 		};
 		let dependencies = ListSettingsDependencies {
+			report_progress: None,
 			load_settings: Arc::new(move || {
 				let value = resolved.clone();
 				Box::pin(async move { Ok(value) }) as PortFuture<_>
@@ -91,6 +99,7 @@ mod tests {
 	#[tokio::test]
 	async fn use_case_context_preserves_the_port_report_tree() {
 		let dependencies = ListSettingsDependencies {
+			report_progress: None,
 			load_settings: Arc::new(|| {
 				Box::pin(async {
 					Err(report!(IoError::other("manifest read failed"))

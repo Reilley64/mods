@@ -13,6 +13,22 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+futures-util = { version = "0.3.32", features = ["sink"] }
 application = { workspace = true }
 domain = { workspace = true }
 infrastructure = { workspace = true }
+rmcp = { version = "=3.3.0", default-features = false, features = ["server", "transport-io"] }
+serde_json = "1.0.151"
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "sync"] }
+tokio-util = { workspace = true, features = ["rt", "codec"] }
+jsonschema = { version = "0.57.0", default-features = false }
+clap = { version = "4.6.7", features = ["derive"] }
+rootcause = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["json"] }
+uuid = { version = "1.26.1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

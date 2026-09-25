@@ -1,7 +1,13 @@
 //! Small configuration and ownership adapter for unmodified upstream usvfs.
+mod child_output;
 #[cfg(any(windows, test))]
 mod configuration;
 mod error;
+pub use child_output::CapturedOutput;
+pub use child_output::CapturedStream;
+pub use child_output::ExecutionCapture;
+#[cfg(windows)]
+pub use child_output::PrivateStreams;
 #[cfg(windows)]
 mod process;
 #[cfg(any(windows, test))]

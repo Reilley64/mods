@@ -1,10 +1,18 @@
 use crate::errors::ErrorMarker;
 use crate::installation::AcceptedChoice;
+use crate::installation::AutomaticAction;
+use crate::installation::AutomaticCause;
+use crate::installation::AutomaticChoiceEvent;
+use crate::installation::ChoiceSource;
+use crate::installation::ConditionEvaluation;
 use crate::installation::FileDependencyFact;
 use crate::installation::FileDependencyKind;
+use crate::installation::FlagWriter;
 use crate::installation::FomodInstaller;
 use crate::installation::FomodOption;
 use crate::installation::InstallWarning;
+use crate::installation::OptionSelectionState;
+use crate::installation::ResolvedFlag;
 use crate::installation::UnresolvedGroup;
 use crate::installation::VisibleOption;
 use domain::FileDependencyState;
@@ -40,7 +48,9 @@ impl EvaluationBudget {
 
 	fn spend(&mut self) -> Result<(), ErrorMarker> {
 		let Some(remaining) = self.remaining.checked_sub(1) else {
-			return Err(report!(ErrorMarker::unsupported_installer()));
+			return Err(report!(
+				ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")
+			));
 		};
 		self.remaining = remaining;
 		Ok(())
@@ -55,7 +65,10 @@ pub(super) struct DependencyFacts<'a> {
 
 #[derive(Debug)]
 pub(super) struct FomodEvaluation {
+	pub candidate_conditions: HashMap<u64, ConditionEvaluation>,
 	pub choices: Vec<AcceptedChoice>,
+	pub automatic_events: Vec<AutomaticChoiceEvent>,
+	pub resolved_flags: Vec<ResolvedFlag>,
 	pub warnings: Vec<InstallWarning>,
 	pub unresolved_groups: Vec<UnresolvedGroup>,
 	pub candidates: Vec<InstallCandidate>,
@@ -88,7 +101,9 @@ pub(super) fn condition_tree_matches(
 	}
 	for group in &installer.groups {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		if condition_matches_predicate(&group.condition, predicate, &mut budget, cancellation)? {
@@ -96,7 +111,9 @@ pub(super) fn condition_tree_matches(
 		}
 		for option in &group.options {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if condition_matches_predicate(&option.condition, predicate, &mut budget, cancellation)? {
@@ -104,7 +121,9 @@ pub(super) fn condition_tree_matches(
 			}
 			for pattern in &option.type_patterns {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if condition_matches_predicate(
@@ -120,7 +139,9 @@ pub(super) fn condition_tree_matches(
 	}
 	for pattern in &installer.conditional_candidates {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		if condition_matches_predicate(&pattern.condition, predicate, &mut budget, cancellation)? {
@@ -139,7 +160,9 @@ pub(super) fn evaluate(
 	let mut budget = EvaluationBudget::new();
 
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+		));
 	}
 
 	let mut unsupported_file_dependency = false;
@@ -164,11 +187,14 @@ pub(super) fn evaluate(
 		cancellation,
 	)?;
 	if unsupported_file_dependency {
-		return Err(report!(ErrorMarker::unsupported_installer()));
+		return Err(report!(
+			ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")
+		));
 	}
 
 	let mut selected = Vec::new();
 	let mut supplied_events = Vec::new();
+	let mut automatic_events = Vec::new();
 	let mut next_sequence = 0_u64;
 	if !condition_matches(
 		&installer.module_condition,
@@ -177,9 +203,11 @@ pub(super) fn evaluate(
 		&mut budget,
 		cancellation,
 	)? {
-		return Err(report!(ErrorMarker::dependency_unsatisfied()));
+		return Err(report!(
+			ErrorMarker::dependency_unsatisfied().with_phase("fomod_evaluation")
+		));
 	}
-	stabilize_automatic(
+	automatic_events.extend(stabilize_automatic(
 		installer,
 		&facts,
 		&mut selected,
@@ -187,11 +215,13 @@ pub(super) fn evaluate(
 		&mut next_sequence,
 		&mut budget,
 		cancellation,
-	)?;
+	)?);
 
 	for choice in choices {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		let supplied_sequence = next_sequence;
@@ -199,7 +229,9 @@ pub(super) fn evaluate(
 		let mut matched_group = None;
 		for (index, group) in installer.groups.iter().enumerate() {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if group.id == choice.group_id {
@@ -227,7 +259,9 @@ pub(super) fn evaluate(
 			let mut group_has_selection = false;
 			for item in &selected {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if item.group_index == group_index {
@@ -238,7 +272,9 @@ pub(super) fn evaluate(
 			let mut group_acknowledged = false;
 			for event in &supplied_events {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if event.group_id == group.id {
@@ -263,14 +299,16 @@ pub(super) fn evaluate(
 				group_id: group.id.clone(),
 				option_id: "none".to_owned(),
 			});
-			next_sequence = next_sequence
-				.checked_add(1)
-				.ok_or_else(|| report!(ErrorMarker::unsupported_installer()))?;
+			next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
+				report!(ErrorMarker::unsupported_installer().with_phase("fomod_evaluation"))
+			})?;
 		} else {
 			let mut matched_option = None;
 			for (index, option) in group.options.iter().enumerate() {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if option.id == choice.option_id {
@@ -289,7 +327,9 @@ pub(super) fn evaluate(
 			let mut already_selected = false;
 			for item in &selected {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if item.group_index == group_index && item.option_index == option_index {
@@ -300,7 +340,9 @@ pub(super) fn evaluate(
 			let mut none_supplied = false;
 			for event in &supplied_events {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if event.group_id == group.id && event.option_id == "none" {
@@ -329,14 +371,16 @@ pub(super) fn evaluate(
 				group_id: group.id.clone(),
 				option_id: option.id.clone(),
 			});
-			next_sequence = next_sequence
-				.checked_add(1)
-				.ok_or_else(|| report!(ErrorMarker::unsupported_installer()))?;
+			next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
+				report!(ErrorMarker::unsupported_installer().with_phase("fomod_evaluation"))
+			})?;
 			let flags = resolved_flag_map(installer, &selected, &mut budget, cancellation)?;
 			let mut selected_count = 0;
 			for item in &selected {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if item.group_index == group_index
@@ -359,7 +403,7 @@ pub(super) fn evaluate(
 				)));
 			}
 		}
-		stabilize_automatic(
+		automatic_events.extend(stabilize_automatic(
 			installer,
 			&facts,
 			&mut selected,
@@ -367,7 +411,7 @@ pub(super) fn evaluate(
 			&mut next_sequence,
 			&mut budget,
 			cancellation,
-		)?;
+		)?);
 	}
 
 	validate_supplied_selections(
@@ -383,7 +427,9 @@ pub(super) fn evaluate(
 	let mut unresolved_groups = Vec::new();
 	for (group_index, group) in installer.groups.iter().enumerate() {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		if !condition_matches(&group.condition, &flags, &facts, &mut budget, cancellation)? {
@@ -392,7 +438,9 @@ pub(super) fn evaluate(
 		let mut selected_count = 0;
 		for item in &selected {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if item.group_index == group_index
@@ -409,7 +457,9 @@ pub(super) fn evaluate(
 		let mut acknowledged = false;
 		for event in &supplied_events {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if event.group_id == group.id {
@@ -420,7 +470,9 @@ pub(super) fn evaluate(
 		let mut selectable_count = 0;
 		for option in &group.options {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if option_is_selectable(option, &flags, &facts, &mut budget, cancellation)? {
@@ -444,20 +496,49 @@ pub(super) fn evaluate(
 				group.cardinality,
 				FomodCardinality::SelectExactlyOne | FomodCardinality::SelectAtLeastOne
 			) {
-			return Err(report!(ErrorMarker::unsupported_installer()));
+			return Err(report!(
+				ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")
+			));
 		}
 
 		let mut options = Vec::new();
 		for option in &group.options {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if !condition_matches(&option.condition, &flags, &facts, &mut budget, cancellation)? {
 				continue;
 			}
 			let resolved_type = resolve_option_type(option, &flags, &facts, &mut budget, cancellation)?;
+			let selection_state = if let Some(selection) = selected.iter().find(|selection| {
+				selection.group_index == group_index
+					&& group.options[selection.option_index].id == option.id
+			}) {
+				if !selection.automatic {
+					OptionSelectionState::Supplied
+				} else if resolved_type == ResolvedOptionType::Required {
+					OptionSelectionState::AutomaticRequired
+				} else {
+					OptionSelectionState::AutomaticSelectAll
+				}
+			} else {
+				OptionSelectionState::Unselected
+			};
 			options.push(VisibleOption {
+				condition: option.condition.clone(),
+				condition_evaluation: condition_evaluation(
+					&option.condition,
+					&flags,
+					&facts,
+					&mut budget,
+					cancellation,
+				)?,
+				flag_effects: option.flag_writes.clone(),
+				file_effects: option.file_effects.clone(),
+				selection_state,
 				id: option.id.clone(),
 				label: option.label.clone(),
 				description: option.description.clone(),
@@ -471,6 +552,14 @@ pub(super) fn evaluate(
 			FomodCardinality::SelectAtMostOne | FomodCardinality::SelectAny
 		) {
 			options.push(VisibleOption {
+				condition_evaluation: ConditionEvaluation {
+					result: true,
+					children: Vec::new(),
+				},
+				condition: FomodCondition::Constant(true),
+				flag_effects: Vec::new(),
+				file_effects: Vec::new(),
+				selection_state: OptionSelectionState::Unselected,
 				id: "none".to_owned(),
 				label: "None".to_owned(),
 				description: "Select no option".to_owned(),
@@ -480,9 +569,19 @@ pub(super) fn evaluate(
 			});
 		}
 		if options.is_empty() {
-			return Err(report!(ErrorMarker::unsupported_installer()));
+			return Err(report!(
+				ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")
+			));
 		}
 		unresolved_groups.push(UnresolvedGroup {
+			condition: group.condition.clone(),
+			condition_evaluation: condition_evaluation(
+				&group.condition,
+				&flags,
+				&facts,
+				&mut budget,
+				cancellation,
+			)?,
 			id: group.id.clone(),
 			label: group.label.clone(),
 			description: group.description.clone(),
@@ -494,66 +593,92 @@ pub(super) fn evaluate(
 	let mut ordered = Vec::with_capacity(selected.len());
 	for item in &selected {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		ordered.push(item.clone());
 	}
 	ordered.sort_by_key(|item| item.sequence);
-	let mut flag_values = BTreeMap::<String, Vec<String>>::new();
+	let mut flag_writers = BTreeMap::<String, Vec<FlagWriter>>::new();
 	for item in ordered {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
-		for write in &installer.groups[item.group_index].options[item.option_index].flag_writes {
+		let group = &installer.groups[item.group_index];
+		let option = &group.options[item.option_index];
+		for (order, write) in option.flag_writes.iter().enumerate() {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
-			flag_values
-				.entry(write.name.clone())
-				.or_default()
-				.push(write.value.clone());
+			flag_writers.entry(write.name.clone()).or_default().push(FlagWriter {
+				sequence: item.sequence,
+				flag_effect_order: order as u64,
+				source: if item.automatic {
+					ChoiceSource::Automatic
+				} else {
+					ChoiceSource::Supplied
+				},
+				group_id: group.id.clone(),
+				option_id: option.id.clone(),
+				value: write.value.clone(),
+			});
 		}
 	}
+
 	let mut warnings = Vec::new();
-	for (name, values) in flag_values {
+	let mut resolved_flags = Vec::new();
+	for (name, writers) in flag_writers {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
-		let Some(resolved_value) = values.last().cloned() else {
+		let Some(winning_event) = writers.last().cloned() else {
 			continue;
 		};
-		let mut distinct_values = BTreeSet::new();
-		for value in values {
+
+		resolved_flags.push(ResolvedFlag {
+			name: name.clone(),
+			value: winning_event.value.clone(),
+			winning_event: winning_event.clone(),
+		});
+
+		let mut values = BTreeSet::new();
+		for writer in &writers {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
-			distinct_values.insert(value);
+			values.insert(writer.value.clone());
 		}
-		if distinct_values.len() > 1 {
-			let mut values = Vec::with_capacity(distinct_values.len());
-			for value in distinct_values {
-				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
-				}
-				budget.spend()?;
-				values.push(value);
-			}
+
+		if values.len() > 1 {
 			warnings.push(InstallWarning::FomodConflictingFlagValues {
 				flag_name: name,
-				values,
-				resolved_value,
+				values: values.into_iter().collect(),
+				resolved_value: winning_event.value.clone(),
+				writers,
+				winning_event,
 			});
 		}
 	}
 
 	for warning in &installer.warnings {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		warnings.push(warning.clone());
@@ -561,7 +686,9 @@ pub(super) fn evaluate(
 
 	for item in &selected {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		if item.automatic {
@@ -602,7 +729,9 @@ pub(super) fn evaluate(
 	)?;
 	for (path, state) in ordinary_file_dependencies {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		warnings.push(InstallWarning::FomodNonPluginFileDependencyPolicyUsed {
@@ -625,7 +754,9 @@ pub(super) fn evaluate(
 	)?;
 	for version in fomm_versions {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		warnings.push(InstallWarning::FomodFommDependencyAssumedCompatible {
@@ -633,23 +764,30 @@ pub(super) fn evaluate(
 		});
 	}
 
+	let mut candidate_conditions = HashMap::new();
 	let mut candidates = Vec::with_capacity(installer.required_candidates.len());
 	for candidate in &installer.required_candidates {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		candidates.push(candidate.clone());
 	}
 	for (group_index, group) in installer.groups.iter().enumerate() {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		let group_visible = condition_matches(&group.condition, &flags, &facts, &mut budget, cancellation)?;
 		for (option_index, option) in group.options.iter().enumerate() {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			let option_visible =
@@ -657,7 +795,9 @@ pub(super) fn evaluate(
 			let mut selected_option = false;
 			for item in &selected {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if item.group_index == group_index && item.option_index == option_index {
@@ -670,7 +810,9 @@ pub(super) fn evaluate(
 				!= ResolvedOptionType::NotUsable;
 			for candidate in &option.file_candidates {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				let include = match &candidate.origin {
@@ -696,37 +838,51 @@ pub(super) fn evaluate(
 	}
 	for pattern in &installer.conditional_candidates {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		if !condition_matches(&pattern.condition, &flags, &facts, &mut budget, cancellation)? {
 			continue;
 		}
 
+		let evaluated = condition_evaluation(&pattern.condition, &flags, &facts, &mut budget, cancellation)?;
 		for candidate in &pattern.candidates {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
+			candidate_conditions.insert(candidate.candidate_id, evaluated.clone());
 			candidates.push(candidate.clone());
 		}
 	}
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+		));
 	}
 	let mut choices = Vec::with_capacity(supplied_events.len());
 	for choice in supplied_events {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		choices.push(AcceptedChoice {
+			sequence: choice.sequence,
 			group_id: choice.group_id,
 			option_id: choice.option_id,
 		});
 	}
 	Ok(FomodEvaluation {
+		candidate_conditions,
 		choices,
+		automatic_events,
+		resolved_flags,
 		warnings,
 		unresolved_groups,
 		candidates,
@@ -741,18 +897,23 @@ fn stabilize_automatic(
 	next_sequence: &mut u64,
 	budget: &mut EvaluationBudget,
 	cancellation: &CancellationToken,
-) -> Result<(), ErrorMarker> {
+) -> Result<Vec<AutomaticChoiceEvent>, ErrorMarker> {
+	let mut automatic_events = Vec::new();
 	let mut seen_automatic_states = BTreeSet::new();
 	loop {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		let flags = resolved_flag_map(installer, selected_options, budget, cancellation)?;
 		let mut desired_automatic = BTreeSet::new();
 		for (group_index, group) in installer.groups.iter().enumerate() {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if !condition_matches(&group.condition, &flags, dependency_facts, budget, cancellation)? {
@@ -760,7 +921,9 @@ fn stabilize_automatic(
 			}
 			for (option_index, option) in group.options.iter().enumerate() {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if !condition_matches(
@@ -786,27 +949,40 @@ fn stabilize_automatic(
 		let mut previous_automatic = BTreeSet::new();
 		for item in selected_options.iter() {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if item.automatic {
 				previous_automatic.insert((item.group_index, item.option_index));
 			}
 		}
-		for _ in previous_automatic.difference(&desired_automatic) {
+		for (group_index, option_index) in previous_automatic.difference(&desired_automatic) {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
-			*next_sequence = next_sequence
-				.checked_add(1)
-				.ok_or_else(|| report!(ErrorMarker::unsupported_installer()))?;
+			automatic_events.push(AutomaticChoiceEvent {
+				sequence: *next_sequence,
+				action: AutomaticAction::Withdrawn,
+				group_id: installer.groups[*group_index].id.clone(),
+				option_id: installer.groups[*group_index].options[*option_index].id.clone(),
+				active_causes: Vec::new(),
+			});
+			*next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
+				report!(ErrorMarker::unsupported_installer().with_phase("fomod_evaluation"))
+			})?;
 		}
 
 		let mut retained = Vec::with_capacity(selected_options.len());
 		for item in selected_options.drain(..) {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if !item.automatic || desired_automatic.contains(&(item.group_index, item.option_index)) {
@@ -816,14 +992,18 @@ fn stabilize_automatic(
 		*selected_options = retained;
 		for (group_index, option_index) in &desired_automatic {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			let mut automatic_present = false;
 			let mut supplied_sequence = None;
 			for item in selected_options.iter() {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if item.group_index == *group_index && item.option_index == *option_index {
@@ -847,15 +1027,35 @@ fn stabilize_automatic(
 				)));
 			}
 
+			let group = &installer.groups[*group_index];
+			let option = &group.options[*option_index];
+			let mut active_causes = Vec::new();
+			if resolve_option_type(option, &flags, dependency_facts, budget, cancellation)?
+				== ResolvedOptionType::Required
+			{
+				active_causes.push(AutomaticCause::Required);
+			}
+			if group.cardinality == FomodCardinality::SelectAll {
+				active_causes.push(AutomaticCause::SelectAll);
+			}
+
+			automatic_events.push(AutomaticChoiceEvent {
+				sequence: *next_sequence,
+				action: AutomaticAction::Selected,
+				group_id: group.id.clone(),
+				option_id: option.id.clone(),
+				active_causes,
+			});
+
 			selected_options.push(SelectedOption {
 				group_index: *group_index,
 				option_index: *option_index,
 				sequence: *next_sequence,
 				automatic: true,
 			});
-			*next_sequence = next_sequence
-				.checked_add(1)
-				.ok_or_else(|| report!(ErrorMarker::unsupported_installer()))?;
+			*next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
+				report!(ErrorMarker::unsupported_installer().with_phase("fomod_evaluation"))
+			})?;
 		}
 
 		if previous_automatic == desired_automatic {
@@ -871,13 +1071,16 @@ fn stabilize_automatic(
 			let flags = resolved_flag_map(installer, selected_options, budget, cancellation)?;
 			for (group_index, group) in installer.groups.iter().enumerate() {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				let mut selected_count = 0;
 				for item in selected_options.iter() {
 					if cancellation.is_cancelled() {
-						return Err(report!(ErrorMarker::operation_cancelled()));
+						return Err(report!(ErrorMarker::operation_cancelled()
+							.with_phase("fomod_evaluation")));
 					}
 					budget.spend()?;
 					if item.group_index == group_index
@@ -892,14 +1095,18 @@ fn stabilize_automatic(
 					}
 				}
 				if exceeds_maximum(group.cardinality, selected_count) {
-					return Err(report!(ErrorMarker::unsupported_installer()));
+					return Err(report!(
+						ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")
+					));
 				}
 			}
 
-			return Ok(());
+			return Ok(automatic_events);
 		}
 		if !seen_automatic_states.insert(desired_automatic) {
-			return Err(report!(ErrorMarker::unsupported_installer()));
+			return Err(report!(
+				ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")
+			));
 		}
 	}
 }
@@ -915,13 +1122,17 @@ fn validate_supplied_selections(
 	let flags = resolved_flag_map(installer, selected_options, budget, cancellation)?;
 	for supplied_event in supplied_events {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		let mut matched_group = None;
 		for (group_index, group) in installer.groups.iter().enumerate() {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if group.id == supplied_event.group_id {
@@ -949,7 +1160,9 @@ fn validate_supplied_selections(
 		if supplied_event.option_id == "none" {
 			for item in selected_options {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if item.group_index == group_index {
@@ -967,7 +1180,9 @@ fn validate_supplied_selections(
 		let mut matched_option = None;
 		for option in &group.options {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if option.id == supplied_event.option_id {
@@ -1011,7 +1226,9 @@ fn option_is_selectable(
 	cancellation: &CancellationToken,
 ) -> Result<bool, ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+		));
 	}
 	budget.spend()?;
 
@@ -1031,7 +1248,9 @@ fn resolve_option_type(
 ) -> Result<ResolvedOptionType, ErrorMarker> {
 	for pattern in &option.type_patterns {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		if condition_matches(&pattern.condition, flags, facts, budget, cancellation)? {
@@ -1042,6 +1261,38 @@ fn resolve_option_type(
 	Ok(option.default_type)
 }
 
+fn condition_evaluation(
+	condition: &FomodCondition,
+	flags: &BTreeMap<String, String>,
+	facts: &DependencyFacts<'_>,
+	budget: &mut EvaluationBudget,
+	cancellation: &CancellationToken,
+) -> Result<ConditionEvaluation, ErrorMarker> {
+	if cancellation.is_cancelled() {
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+		));
+	}
+	budget.spend()?;
+
+	let mut children = Vec::new();
+	let result = match condition {
+		FomodCondition::All(conditions) | FomodCondition::Any(conditions) => {
+			for child in conditions {
+				children.push(condition_evaluation(child, flags, facts, budget, cancellation)?);
+			}
+			if matches!(condition, FomodCondition::All(_)) {
+				children.iter().all(|child| child.result)
+			} else {
+				children.iter().any(|child| child.result)
+			}
+		}
+		_ => condition_matches(condition, flags, facts, budget, cancellation)?,
+	};
+
+	Ok(ConditionEvaluation { result, children })
+}
+
 fn condition_matches(
 	condition: &FomodCondition,
 	flags: &BTreeMap<String, String>,
@@ -1050,7 +1301,9 @@ fn condition_matches(
 	cancellation: &CancellationToken,
 ) -> Result<bool, ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+		));
 	}
 	budget.spend()?;
 
@@ -1059,7 +1312,9 @@ fn condition_matches(
 		FomodCondition::All(children) => {
 			for child in children {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if !condition_matches(child, flags, facts, budget, cancellation)? {
@@ -1071,7 +1326,9 @@ fn condition_matches(
 		FomodCondition::Any(children) => {
 			for child in children {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				if condition_matches(child, flags, facts, budget, cancellation)? {
@@ -1115,7 +1372,9 @@ fn resolved_flag_map(
 	let mut ordered = Vec::with_capacity(selected.len());
 	for item in selected {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		ordered.push(item.clone());
@@ -1124,12 +1383,16 @@ fn resolved_flag_map(
 	let mut flags = BTreeMap::new();
 	for item in ordered {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		for write in &installer.groups[item.group_index].options[item.option_index].flag_writes {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			flags.insert(write.name.clone(), write.value.clone());
@@ -1147,19 +1410,25 @@ fn visit_installer_conditions(
 	visit_condition(&installer.module_condition, visitor, budget, cancellation)?;
 	for group in &installer.groups {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		visit_condition(&group.condition, visitor, budget, cancellation)?;
 		for option in &group.options {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			visit_condition(&option.condition, visitor, budget, cancellation)?;
 			for pattern in &option.type_patterns {
 				if cancellation.is_cancelled() {
-					return Err(report!(ErrorMarker::operation_cancelled()));
+					return Err(report!(
+						ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+					));
 				}
 				budget.spend()?;
 				visit_condition(&pattern.condition, visitor, budget, cancellation)?;
@@ -1168,7 +1437,9 @@ fn visit_installer_conditions(
 	}
 	for pattern in &installer.conditional_candidates {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		visit_condition(&pattern.condition, visitor, budget, cancellation)?;
@@ -1183,14 +1454,18 @@ fn visit_condition(
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+		));
 	}
 	budget.spend()?;
 	visitor(condition)?;
 	if let FomodCondition::All(children) | FomodCondition::Any(children) = condition {
 		for child in children {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			visit_condition(child, visitor, budget, cancellation)?;
@@ -1206,7 +1481,9 @@ fn condition_matches_predicate(
 	cancellation: &CancellationToken,
 ) -> Result<bool, ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(
+			ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+		));
 	}
 	budget.spend()?;
 	if predicate(condition) {
@@ -1215,7 +1492,9 @@ fn condition_matches_predicate(
 	if let FomodCondition::All(children) | FomodCondition::Any(children) = condition {
 		for child in children {
 			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+				return Err(report!(
+					ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+				));
 			}
 			budget.spend()?;
 			if condition_matches_predicate(child, predicate, budget, cancellation)? {
@@ -1247,12 +1526,14 @@ fn parse_version(
 	let mut parts = Vec::new();
 	for part in value.split('.') {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
-		let part = part
-			.parse::<u32>()
-			.map_err(|error| report!(error).context(ErrorMarker::unsupported_installer()))?;
+		let part = part.parse::<u32>().map_err(|error| {
+			report!(error).context(ErrorMarker::unsupported_installer().with_phase("fomod_evaluation"))
+		})?;
 		parts.push(part);
 	}
 	Ok(parts)
@@ -1267,7 +1548,9 @@ fn version_less_than(
 	let len = actual.len().max(required.len());
 	for index in 0..len {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(
+				ErrorMarker::operation_cancelled().with_phase("fomod_evaluation")
+			));
 		}
 		budget.spend()?;
 		let actual_part = actual.get(index).copied().unwrap_or(0);
@@ -1346,6 +1629,7 @@ mod tests {
 					value: "set".to_owned(),
 				}],
 				file_candidates: Vec::new(),
+				file_effects: Vec::new(),
 			}],
 		}
 	}
@@ -1472,6 +1756,7 @@ mod tests {
 				type_patterns: Vec::new(),
 				flag_writes: Vec::new(),
 				file_candidates: Vec::new(),
+				file_effects: Vec::new(),
 			}],
 		}]);
 		let file_dependencies = HashMap::new();

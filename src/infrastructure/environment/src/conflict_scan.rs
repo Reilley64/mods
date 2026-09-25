@@ -51,17 +51,19 @@ const WINDOWS_ERROR_LOCK_VIOLATION: i32 = 33;
 
 pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result<EnvironmentConflictScan, ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
 	let root = SafeDir::open_absolute(root_path).map_err(|error| {
 		if error.current_context().kind() == io::ErrorKind::NotFound {
 			error.context(ErrorMarker::environment_not_initialized())
 		} else {
-			error.context(ErrorMarker::io_failure())
+			error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
 		}
 	})?;
-	if !root.exists("mods.toml").context(ErrorMarker::io_failure())? {
+	if !root.exists("mods.toml")
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+	{
 		return Err(report!(ErrorMarker::environment_not_initialized()));
 	}
 	let profile = open_required_directory(&root, "profile")?;
@@ -77,13 +79,13 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 		&profile,
 		"modlist.txt",
 		MAX_PROFILE_BYTES,
-		ErrorMarker::io_failure(),
+		ErrorMarker::io_failure().with_phase("conflict_scan"),
 		cancellation,
 	)?;
 	let (installed_mods, mut problems) = parse_modlist(&modlist);
 	let mut mod_directories = enumerate_mod_directories(&mods, cancellation, &mut problems)?;
 	if mod_directories.len() > MAX_MODS {
-		return Err(report!(ErrorMarker::io_failure()));
+		return Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan")));
 	}
 
 	let mut providers = Vec::new();
@@ -106,12 +108,12 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 			});
 			providers.push(provider);
 		}
-		Err(error) => return Err(error.context(ErrorMarker::io_failure())),
+		Err(error) => return Err(error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))),
 	}
 
 	for installed in installed_mods {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
 		let key = installed.name.comparison_key().to_owned();
@@ -132,7 +134,9 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 			mod_name: canonical_name,
 			priority: installed.priority,
 		};
-		let directory = mods.open_dir(&directory_name).context(ErrorMarker::io_failure())?;
+		let directory = mods
+			.open_dir(&directory_name)
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		providers.push(scan_provider(
 			&directory,
 			identity,
@@ -165,29 +169,35 @@ pub(crate) fn read_content(
 	cancellation: &CancellationToken,
 ) -> Result<ConflictContentRead, ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
-	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::io_failure())?;
+	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let provider = match id.identity() {
 		ProviderIdentity::SteamData => {
 			let binding = manifest_game_binding(&root, cancellation)?;
 			let game = SafeDir::open_absolute(binding.game_directory().as_path())
-				.context(ErrorMarker::io_failure())?;
-			game.open_dir("Data").context(ErrorMarker::io_failure())?
+				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+			game.open_dir("Data")
+				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
 		}
 		ProviderIdentity::DataMod { mod_name, .. } => {
-			let mods = root.open_dir("mods").context(ErrorMarker::io_failure())?;
-			mods.open_dir(mod_name.as_str()).context(ErrorMarker::io_failure())?
+			let mods = root
+				.open_dir("mods")
+				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+			mods.open_dir(mod_name.as_str())
+				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
 		}
-		ProviderIdentity::Overwrite => root.open_dir("overwrite").context(ErrorMarker::io_failure())?,
+		ProviderIdentity::Overwrite => root
+			.open_dir("overwrite")
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?,
 	};
 
 	let mut current = provider;
 	let mut components = id.path().components().peekable();
 	while let Some(component) = components.next() {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
 		if components.peek().is_none() {
@@ -196,23 +206,33 @@ pub(crate) fn read_content(
 				Err(error) if content_access_is_unavailable(error.current_context()) => {
 					return Ok(ConflictContentRead::Unavailable);
 				}
-				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
+				Err(error) => {
+					return Err(
+						error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
+					);
+				}
 			};
 			if !metadata.is_file() || metadata.nlink() != 1 {
-				return Err(report!(ErrorMarker::io_failure()));
+				return Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan")));
 			}
 			let file = match current.open_regular(component) {
 				Ok(file) => file,
 				Err(error) if content_access_is_unavailable(error.current_context()) => {
 					return Ok(ConflictContentRead::Unavailable);
 				}
-				Err(error) => return Err(error.context(ErrorMarker::io_failure())),
+				Err(error) => {
+					return Err(
+						error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
+					);
+				}
 			};
 			return sha256(file, cancellation);
 		}
-		current = current.open_dir(component).context(ErrorMarker::io_failure())?;
+		current = current
+			.open_dir(component)
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	}
-	Err(report!(ErrorMarker::io_failure()))
+	Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan")))
 }
 
 fn content_access_is_unavailable(error: &io::Error) -> bool {
@@ -249,7 +269,7 @@ fn open_required_directory(root: &SafeDir, name: &str) -> Result<SafeDir, ErrorM
 		if error.current_context().kind() == io::ErrorKind::NotFound {
 			error.context(ErrorMarker::environment_not_initialized())
 		} else {
-			error.context(ErrorMarker::io_failure())
+			error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
 		}
 	})
 }
@@ -257,19 +277,20 @@ fn open_required_directory(root: &SafeDir, name: &str) -> Result<SafeDir, ErrorM
 fn directory_has_entries(directory: &SafeDir, cancellation: &CancellationToken) -> Result<bool, ErrorMarker> {
 	let opened = directory.entries();
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
-	let mut entries = opened.context(ErrorMarker::io_failure())?;
+	let mut entries = opened.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let next = entries.next();
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
 	let Some(entry) = next else {
 		return Ok(false);
 	};
-	entry.into_report().context(ErrorMarker::io_failure())?;
+	entry.into_report()
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	Ok(true)
 }
 
@@ -343,20 +364,22 @@ fn enumerate_mod_directories(
 ) -> Result<HashMap<String, (OsString, ModName)>, ErrorMarker> {
 	let opened = mods.entries();
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
-	let mut entries = opened.context(ErrorMarker::io_failure())?;
+	let mut entries = opened.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let mut result = HashMap::new();
 	loop {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
 		let Some(entry) = entries.next() else {
 			break;
 		};
-		let entry = entry.into_report().context(ErrorMarker::io_failure())?;
+		let entry = entry
+			.into_report()
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		let os_name = entry.file_name();
 		let Some(spelling) = os_name.to_str() else {
 			problems.push(ConflictProblem {
@@ -369,7 +392,9 @@ fn enumerate_mod_directories(
 			problems.push(modlist_problem());
 			continue;
 		};
-		let metadata = mods.entry_metadata(&os_name).context(ErrorMarker::io_failure())?;
+		let metadata = mods
+			.entry_metadata(&os_name)
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		if is_reparse(&metadata) || !metadata.is_dir() {
 			problems.push(ConflictProblem {
 				kind: if is_reparse(&metadata) {
@@ -414,7 +439,9 @@ fn scan_provider(
 		MAX_TRAVERSAL_DEPTH,
 	)?;
 
-	let metadata_exists = directory.exists("meta.toml").context(ErrorMarker::io_failure())?;
+	let metadata_exists = directory
+		.exists("meta.toml")
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	if require_metadata && !metadata_exists {
 		problems.push(ConflictProblem {
 			kind: ConflictProblemKind::InvalidTombstoneMetadata,
@@ -447,31 +474,33 @@ fn scan_provider_directory(
 	remaining_depth: usize,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
 	let opened = directory.entries();
 	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
-	let mut entries = opened.context(ErrorMarker::io_failure())?;
+	let mut entries = opened.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let mut directory_entries = 0_usize;
 	loop {
 		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
 		let Some(entry) = entries.next() else {
 			break;
 		};
-		let entry = entry.into_report().context(ErrorMarker::io_failure())?;
+		let entry = entry
+			.into_report()
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		budget.consume(&mut directory_entries)
-			.context(ErrorMarker::io_failure())?;
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		if remaining_depth == 0 {
 			return Err(
 				report!(io::Error::other("provider traversal depth changed during scan"))
-					.context(ErrorMarker::io_failure()),
+					.context(ErrorMarker::io_failure().with_phase("conflict_scan")),
 			);
 		}
 		let os_name = entry.file_name();
@@ -488,8 +517,8 @@ fn scan_provider_directory(
 			&& identity.class() != ProviderClass::SteamData
 		{
 			if spelling != "meta.toml" {
-				let path =
-					DataRelativePath::new(spelling.to_owned()).context(ErrorMarker::io_failure())?;
+				let path = DataRelativePath::new(spelling.to_owned())
+					.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 				problems.push(path_problem(ConflictProblemKind::ReservedPath, &path));
 			}
 			continue;
@@ -512,7 +541,9 @@ fn scan_provider_directory(
 			problems.push(path_problem(ConflictProblemKind::ReservedPath, &path));
 			continue;
 		}
-		let metadata = directory.entry_metadata(&os_name).context(ErrorMarker::io_failure())?;
+		let metadata = directory
+			.entry_metadata(&os_name)
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		if is_reparse(&metadata) {
 			problems.push(path_problem(ConflictProblemKind::ReparsePoint, &path));
 			continue;
@@ -525,8 +556,12 @@ fn scan_provider_directory(
 		if is_directory {
 			let reference = provider_reference(identity, path.clone(), enabled);
 			provider.directories.push(reference);
-			let child = directory.open_dir(&os_name).context(ErrorMarker::io_failure())?;
-			if !root.is_ancestor_of(&child).context(ErrorMarker::io_failure())? {
+			let child = directory
+				.open_dir(&os_name)
+				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+			if !root.is_ancestor_of(&child)
+				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+			{
 				problems.push(path_problem(ConflictProblemKind::ContainmentEscape, &path));
 				continue;
 			}
@@ -553,7 +588,9 @@ fn scan_provider_directory(
 			problems.push(path_problem(ConflictProblemKind::HardLink, &path));
 			continue;
 		}
-		directory.open_regular(&os_name).context(ErrorMarker::io_failure())?;
+		directory
+			.open_regular(&os_name)
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		let reference = provider_reference(identity, path.clone(), enabled);
 		provider.files.push(IndexedConflictFile {
 			id: IndexedConflictFileId::new(identity.clone(), path),
@@ -591,7 +628,7 @@ fn read_tombstones(
 		directory,
 		"meta.toml",
 		MAX_PROVIDER_METADATA_BYTES,
-		ErrorMarker::io_failure(),
+		ErrorMarker::io_failure().with_phase("conflict_scan"),
 		cancellation,
 	)?;
 	let Ok(text) = from_utf8(&bytes) else {
