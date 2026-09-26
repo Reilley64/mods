@@ -12,6 +12,7 @@ pub(crate) fn executed(output: ExecuteProgramOutput, captured: CapturedOutput) -
 	    "outcome": "executed", "status": {"origin": "child", "value": output.status.value()},
 	    "stdout": stream(captured.stdout), "stderr": stream(captured.stderr), "warnings": []
 	}));
+
 	for warning in output.warnings {
 		let text = match warning {
 			ExecutionWarning::LoadOrderNotEnforced => {
@@ -105,8 +106,8 @@ mod tests {
 		assert!(visible.contains("warning: duplicate entry Duplicate.esp in plugins.txt; analysis projection uses the first occurrence; canonical file is unchanged."));
 		assert!(visible.contains("warning: analysis projection: Unlisted.esp is absent from loadorder.txt; projected order uses backing-file modification time."));
 		assert!(visible.contains("warning: retained profile state is invalid after execution"));
-		let value = result.structured_content.ok_or_else(|| report!("missing output"))?;
 
+		let value = result.structured_content.ok_or_else(|| report!("missing output"))?;
 		assert!(Contracts::new()?.output_matches("mods_exec", &value));
 		assert_eq!(
 			value,

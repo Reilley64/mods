@@ -182,6 +182,7 @@ impl ExecutionAdapter {
 
 		let view = VirtualGameView::configure(&configuration)
 			.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
+
 		if let Err(mut failure) = environment.revalidate_execution(&self.root, &prepared, &cancellation) {
 			if let Err(cleanup) = view.close() {
 				failure.children_mut().push(cleanup.into_dynamic().into_cloneable());

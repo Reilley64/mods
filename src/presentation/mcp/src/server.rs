@@ -609,7 +609,6 @@ fn invalid_arguments(problems: Value) -> CallToolResult {
 #[cfg(test)]
 mod tests {
 	use super::Server;
-	use super::invalid_arguments;
 	use crate::commands::LogLevel;
 	use domain::EnvironmentRoot;
 	use infrastructure_dependencies::ExecutionCapture;
@@ -624,19 +623,6 @@ mod tests {
 	use tokio::time::timeout;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn invalid_input_is_a_tool_error_without_rejected_values() {
-		let result = invalid_arguments(json!([{"field": "archive", "kind": "missing"}]));
-
-		assert_eq!(result.is_error, Some(true));
-		assert_eq!(
-			result.structured_content,
-			Some(json!({"outcome": "error", "error": {
-				"code": "invalid_arguments", "message": "tool arguments are invalid", "retryable": false,
-				"details": {"problems": [{"field": "archive", "kind": "missing"}]}
-			}}))
-		);
-	}
 	#[tokio::test]
 	async fn busy_admission_precedes_validation_and_releases_without_queueing() -> Result<()> {
 		let root = TempDir::new()?;
@@ -709,6 +695,13 @@ mod tests {
 			.await?;
 
 		assert_eq!(result.is_error, Some(true));
+		assert_eq!(
+			result.structured_content,
+			Some(json!({"outcome": "error", "error": {
+				"code": "invalid_arguments", "message": "tool arguments are invalid", "retryable": false,
+				"details": {"problems": [{"field": "arguments", "kind": "wrong_type"}]}
+			}}))
+		);
 		assert!(!absent.exists());
 		assert!(!to_string(&result)?.contains("not echoed"));
 

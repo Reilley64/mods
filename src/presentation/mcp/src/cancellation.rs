@@ -343,6 +343,7 @@ mod tests {
 		let mut output = BufReader::new(output);
 		let lifecycle = Arc::new(Lifecycle::default());
 		let mut transport = io_transport(reader, writer, lifecycle.clone());
+
 		input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"mods_exec\",\"_meta\":{\"progressToken\":\"p\"}}}\n").await?;
 		assert!(transport.receive().await.is_some());
 

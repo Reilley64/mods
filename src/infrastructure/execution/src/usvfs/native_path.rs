@@ -11,6 +11,7 @@ const VERBATIM_UNC_PREFIX: [u16; 8] = [92, 92, 63, 92, 85, 78, 67, 92];
 
 pub(super) fn wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError> {
 	let mut value: Vec<u16> = value.encode_wide().collect();
+
 	if value.is_empty() || value.contains(&0) {
 		return Err(report!(ExecutionError));
 	}
@@ -42,6 +43,7 @@ pub(super) fn native_path_wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError
 /// Returns [`ExecutionError`] when the path is empty, contains an embedded NUL, or contains a verbatim component whose meaning would change after conversion.
 pub(super) fn physical_path_wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError> {
 	let value = wide(value)?;
+
 	if value.starts_with(&VERBATIM_UNC_PREFIX) {
 		let ordinary_characters = value.len() - 1 - (VERBATIM_UNC_PREFIX.len() - 2);
 		if ordinary_characters >= MAX_PATH_CHARACTERS {
@@ -104,6 +106,7 @@ fn is_dos_device_name(component: &[u16]) -> bool {
 		.iter()
 		.rposition(|value| *value != u16::from(b' '))
 		.map_or(0, |index| index + 1)];
+
 	if [
 		b"CON".as_slice(),
 		b"PRN",
@@ -170,6 +173,7 @@ mod tests {
 	#[test]
 	fn preserves_other_namespace_paths() -> Result<(), ExecutionError> {
 		let volume = r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\Data";
+
 		assert_eq!(native_path_wide(OsStr::new(volume))?, wide(OsStr::new(volume))?);
 
 		Ok(())
@@ -180,6 +184,7 @@ mod tests {
 		let segment = "a".repeat(300);
 		let verbatim = format!(r"\\?\C:\{segment}");
 		let ordinary = format!(r"C:\{segment}");
+
 		assert_eq!(native_path_wide(OsStr::new(&verbatim))?, wide(OsStr::new(&ordinary))?);
 
 		Ok(())
@@ -217,6 +222,7 @@ mod tests {
 		let segment = "a".repeat(MAX_PATH_CHARACTERS - 1 - ordinary_prefix.encode_utf16().count());
 		let ordinary = format!(r"{ordinary_prefix}{segment}");
 		let verbatim = format!(r"\\?\UNC\server\share\{segment}");
+
 		assert_eq!(ordinary.encode_utf16().count(), MAX_PATH_CHARACTERS - 1);
 		assert_eq!(physical_path_wide(OsStr::new(&verbatim))?, wide(OsStr::new(&ordinary))?);
 
@@ -229,6 +235,7 @@ mod tests {
 		let segment = "a".repeat(MAX_PATH_CHARACTERS - ordinary_prefix.encode_utf16().count());
 		let ordinary = format!(r"{ordinary_prefix}{segment}");
 		let verbatim = format!(r"\\?\UNC\server\share\{segment}");
+
 		assert_eq!(ordinary.encode_utf16().count(), MAX_PATH_CHARACTERS);
 		assert_eq!(physical_path_wide(OsStr::new(&verbatim))?, wide(OsStr::new(&verbatim))?);
 

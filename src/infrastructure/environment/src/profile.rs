@@ -146,6 +146,7 @@ fn validate_profile_mode(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let allowed = PROFILE_FILES.iter().copied().chain(["modlist.txt", "saves"]);
 	let mut expected = allowed.collect::<HashSet<_>>();
 	let allowed_count = expected.len();
@@ -264,6 +265,7 @@ fn validate_saves_inner(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let opened = directory.entries();
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -334,6 +336,7 @@ pub(crate) fn stage_plugin_maintenance(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let before = visible_plugins(root, None, cancellation)?;
 	let after = visible_plugins(root, Some((mod_name, staged_mod)), cancellation)?;
 	let unavailable = before
