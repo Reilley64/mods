@@ -53,7 +53,7 @@ Two or more unsuppressed active non-base providers containing an ordinary file a
 _Avoid_: Directory merge, ordinary Steam-base override, predicted archive-member winner
 
 **Tombstone**:
-Canonical provider-owned metadata that suppresses a lower-priority file or inclusive directory subtree without supplying a file. The effective path is absent when no higher file overrides the controlling tombstone.
+Canonical provider-owned metadata that suppresses a lower-priority file or inclusive directory subtree during installation and conflict analysis, without supplying a file. In that analysis, the effective path is absent when no higher file overrides the controlling tombstone. Tombstones do not require suppression in managed execution.
 _Avoid_: File winner, deletion from Steam Data
 
 **Overwrite**:

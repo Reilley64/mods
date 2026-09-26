@@ -1,5 +1,13 @@
 # Issue 33: Rust Data-overlay prototype
 
+## Owner adoption
+
+The owner adopted this design into the issue #33 candidate after the isolated prototype, diagnostics update and source/compile reviews. Commits `51efc0f`, `b74a2dd` and `88d559b` were integrated as `7fb99ae`, `ba1b28f` and `b3fe423`. Runtime root-metadata exclusion and Tombstone filtering remain waived; installation/conflict analysis keeps its existing rules. Native usvfs and generated bindings remain unchanged.
+
+This supersedes the historical "do not adopt/merge" recommendations below: those paragraphs record the experiment's earlier status. Adoption is a design decision, not proof of successful managed execution, crash repair or release readiness. Current-branch CI, candidate build and runtime evidence must identify their actual revisions. Publication remains disabled.
+
+During integration, an advisory phase-spacing finding prompted only additional blank lines between test phases; non-whitespace Rust content remains identical to the reviewed prototype. Other advisory findings were assessed explicitly: profile comments carry necessary analysis/runtime contracts; the CLI/MCP presentation functions and infrastructure configuration constructor are outside the application use-case parameter-order rule. No gate override was used.
+
 ## Frozen scope and owner decision
 
 This isolated prototype starts at `origin/main` `86e9563` on

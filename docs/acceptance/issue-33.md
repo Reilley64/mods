@@ -6,6 +6,22 @@ Status: **incomplete; no controlled Windows 11 sign-off or full acceptance is re
 
 **Partial acceptance only.** Native execution/save-routing and real stable distribution remain blocked. The owner waived the disconnected-rebuild check; it is skipped, not passed. Native usvfs was not changed, raw FFI remains bindgen-generated, and no speculative Rust workaround was applied. This checkpoint supersedes the older blanket pending statements for diagnostics, profile-source preservation, and ordinary interruption/refusal below.
 
+### Owner adoption — recursive Data overlays and qualified diagnostics
+
+The owner adopted the Rust prototype into the issue #33 candidate. Prototype commits `51efc0f`, `b74a2dd`, `88d559b` were integrated as `7fb99ae`, `ba1b28f`, `b3fe423`. Enabled non-base provider roots now map recursively in Mod Priority order; Overwrite remains last and the selected Output Target is marked at its ordinary rank. Per-file Data winner links are replaced, while validation, canonical Profile State file mappings, invalidation and recursive save routing remain in place. Native source, generated bindings, dependency pins and lifecycle code remain unchanged.
+
+CLI and MCP plugin warnings now describe the analytical Data projection and leave runtime availability unestablished. Traces say "advisory plugin projection" with explicit basis, unobserved-runtime status and projected order/activation fields. Warning codes, MCP structured shape and canonical-state warnings remain unchanged. Installation and conflict analysis keep their original metadata/Tombstone semantics; runtime root metadata visibility and lack of Tombstone filtering are owner-approved.
+
+Prototype evidence: 419 local Rust and 71 tooling tests, independent source review, x64 workspace and x86 dependency compile-only checks passed for the exact recorded prototype patch. These are not current-branch runtime results. The combined issue branch passed `bun run check` on macOS with 422 Rust tests and 80 tooling tests, including formatting, Clippy and dependency checks (`/tmp/mods-33-adopted-overlay-full-check.log`). Hosted Windows CI and a new candidate build remain pending. The original crash has not been replayed or established fixed. No design-adoption claim closes successful managed-execution/save acceptance. Publication remains disabled; #33 stays open.
+
+All five integration style alerts were assessed: the phase-spacing finding received whitespace-only test separation; `profile.rs` comments document required non-obvious semantic contracts; parameter-order findings in CLI, MCP and the infrastructure configuration constructor are outside the application use-case rubric. No accepted finding is described as a clean automated gate verdict and no override was made. See `docs/research/issue-33-rust-overlay-prototype.md` for the exact evidence and historical limits.
+
+### Owner supersession — Data runtime projection
+
+The owner removed the runtime requirements to exclude provider-root `meta.toml` and apply existing Tombstone suppression. Those files may be visible through ordinary recursive Data overlays. Installation and conflict analysis keep their existing metadata/Tombstone rules; this change is not permission to stop validating inputs or alter canonical metadata. The analytical projection need not exactly match runtime visibility for these entries.
+
+This resolves the two design obstacles identified by the MO2 comparison and isolated mapping-plan prototype (`prototype/issue-33-data-plan`, local commit `80920e5`). It permits further Rust-side whole-provider Data-overlay design, but is not a completed implementation or verified crash fix. Preserve Mod Priority, enabled-only participation, Overwrite, independent Output Target selection, Profile State, invalidation and save routing. Native source/pins remain unchanged and raw FFI remains bindgen-generated. See `docs/research/issue-33-view-mapping-model.md` for the scope and superseded analysis.
+
 ### Fresh local validation and reviewed scope
 
 - Clean baseline `c195642ab4f43c7f7903c3887f54202ff17410a1`: `bun run check` passed on macOS with **415 Rust tests and 80 tooling tests** (749 assertions). `/tmp/mods-33-current-check.log` was refreshed by this continuation; it now belongs to this baseline, not the older runtime candidate. The older `/tmp/mods-33-final-local-check.log` records 414 tests and must not be cited as a 415-test run.
@@ -70,6 +86,23 @@ Measurements used the same verified `82467db` executable/ZIP identities recorded
 
 Evidence: `C:/Users/prime/mods-issue-33/safe-smoke-20260925-02/performance-20260925-02` (query samples and stopped preview), `C:/Users/prime/mods-issue-33/approved-preview-3ea490229474` (move inventories, successful preview argv/streams/status/timings and canonical comparisons), and the new backup metadata. Local reports: `/tmp/mods-33-performance-retry.md`, `/tmp/mods-33-preview-settings-diagnosis.md`, `/tmp/mods-33-approved-archive-move-and-preview.md`. Two pre-product orchestration errors (ZIP-member assumption and later runner quoting) are retained separately; neither is a product defect or successful sample. No further remote work remains active.
 
+### Current committed candidate — connected rebuild passed
+
+At exact commit `bc0c7e6b5931d934c6e47eacddffc99840eb74f9`, [Windows CI 36221889613](https://github.com/Reilley64/mods/actions/runs/36221889613) passed: 433 workspace tests (zero skipped), 31 i686 adapter tests and 80 tooling tests. Native release validation, pinned fetch and Rust checks passed; preview-ready and preview stayed skipped. Title check passed. No release workflow was enabled.
+
+A new clean detached worktree on the approved Windows 11 host ran the unchanged `scripts/package-windows.ps1`. Package build and verification passed. Candidate root: `C:/Users/prime/mods-issue-33/current-bc0c7e6-9aeee20b`.
+
+- ZIP: `dist/mods-bc0c7e6b5931d934c6e47eacddffc99840eb74f9-x86_64-pc-windows-msvc.zip`; 114,264,713 bytes; SHA-256 `d21a1313f1e90973667c38d36a737bf10a618b986fe31205270bd100de6f2004`. External `SHA256SUMS` matched.
+- Packaged `mods-source.tar.gz` SHA-256: `394592624c4923f9c23ee41bad876517b8393f257c0b1d4b6a8bcbf9436c10aa`. All 260 tracked source files matched `git archive` of the exact revision. `SOURCE-REVISION.txt` and all seven required native headers matched. Vendoring/source replacement configuration was retained.
+- Exact 25-file package layout passed: both executables, exactly four native runtimes, root license/copyright/build instructions/source archive, eight upstream license files and seven native-release notices. Runtime and notice bytes matched the verified inputs; no metadata marker or external checksum was incorrectly shipped inside the ZIP.
+- Both packaged executables returned exit 0 for `--help` and `--version`. Presentation versions remain `0.0.0`, not stable aggregate-version evidence.
+- Fresh source extraction used initially empty Cargo home and target directories. `cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins` passed in 3m09s with networking connected. This compiled both Rust packages and their shim from packaged source without a missing input or substitute dependency; it did not rebuild native usvfs. No byte-identical reproducibility or disconnected result is claimed.
+- Packaged `mods.exe` SHA-256: `b65de8d40a686a59cd81c4eacee79312d69efac9d4270660f1141acb978c4b2e`; packaged `mods-mcp.exe`: `62aeea60da0f7dc44b9046f2912ac005bb5fc5476584eb7a1ace3438aa21ef6a`. Rebuilt executable hashes differ and are retained in the report; byte reproducibility is not an acceptance claim.
+
+Tools were already installed: PowerShell 7.6.6, Git 2.55.0.windows.3, bsdtar 3.8.8, nightly Rust 2026-08-21, LLVM 23.1.2, VS 2022 17.14.37710.0 and SDK 10.0.26100.0. The exact native ZIP/source hashes remain pinned and unchanged. The included native source is the same previously audited 16,347-file/66-resource archive; no new native rebuild, original collector report, or unconditional source-completeness certification is inferred.
+
+Evidence under the candidate root: `packaging.log`, `verification-consumer.log`, `verification-consumer-resume.log`, `dist`, `extracted`, `consumer`, `consumer-cargo-home` and `consumer-target`. Local report `/tmp/mods-33-current-candidate.md` records commands, hashes and scratch verification corrections. CI captures are `/tmp/mods-33-waiver-ci-{metadata.json,log}`. The worktree was clean before/after. Earlier 82467db Windows runtime scenarios remain evidence for that older artifact; only help/version was run from this new package. No game/managed execution, install/remove trial, source/native edit, networking change, publication or Winget action occurred.
+
 ### Owner supersession — disconnected rebuild check waived
 
 The owner approved removing and skipping the disconnected Windows Rust/native rebuild check. Keep networking connected on `prime@192.168.86.155`; no disconnected environment, isolation method or offline recovery path is required for #33. This supersedes all older disconnected-rebuild gates in this ledger and `docs/distribution.md`. Record the check as **waived/skipped**, not passed.
@@ -90,7 +123,7 @@ Still required before full acceptance:
 2. Complete corresponding-source and notice verification with accurately identified build evidence. The disconnected Rust/native trial is waived as recorded above; neither host disconnection nor recovery of the collector report solely for that trial is required. Do not relabel connected/origin-blocked evidence as disconnected evidence.
 3. Clean stable ZIP install/run/remove and broader representative-workload measurements. Small-fixture conflict and preview timings are now recorded above; installation-commit and native/game performance remain unmeasured. Do not infer clean removal or stable-artifact behavior from candidate extraction/help or these previews.
 4. Approved Release Please/version outcome, real stable ZIP URL/hash, real Winget manifest/validation/install/remove and human-controlled initial submission. Aggregate remains `0.0.0`; publication gates remain disabled. No release, dispatch, merge, submission, fabricated manifest or credentials claim was made.
-5. Final artifact-specific sign-off. Windows CI now passed for checkpoint `4226ada` as recorded above; the runtime candidate remains `82467db`. Keep #33 open and PR #103 partial/draft. Manual ledger review found no factual blockers in the checkpoint; the later measurement update was checked against retained result records. The CI outcome was recorded on #33; no release publication occurred.
+5. Final artifact-specific runtime sign-off. Windows CI and candidate packaging/connected source rebuild passed at `bc0c7e6` as recorded above. Earlier controlled CLI/MCP runtime scenarios apply to `82467db`; they are not automatically new-package runtime results. Keep #33 open and PR #103 partial/draft. No stable publication occurred.
 
 ## Previous status — 2026-09-25 reconciliation
 

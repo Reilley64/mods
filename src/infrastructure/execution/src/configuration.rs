@@ -340,6 +340,7 @@ mod tests {
 				Call::File(mapping("profile/invalidation.bsa", "Data/invalidation.bsa")),
 				Call::Target(mapping("profile/saves", "Data/__mods_saves"), true),
 			]);
+
 			assert_eq!(recorder.calls, expected);
 		}
 		Ok(())
@@ -351,7 +352,9 @@ mod tests {
 		fixture.winners.clear();
 		let configuration = fixture.configure(None).map_err(|_| "configuration")?;
 		let mut recorder = Recorder::default();
+
 		configuration.apply(&mut recorder).map_err(|_| "apply")?;
+
 		assert_eq!(
 			&recorder.calls[..4],
 			&[
@@ -370,6 +373,7 @@ mod tests {
 			let selected = ModName::new(name.to_owned()).map_err(|_| "name")?;
 			assert!(Fixture::new()?.configure(Some(selected)).is_err());
 		}
+
 		let mut fixture = Fixture::new()?;
 		fixture.providers[0].enabled = false;
 		assert!(fixture.configure(None).is_err());
@@ -383,12 +387,15 @@ mod tests {
 			fail_clear: true,
 			..Default::default()
 		};
+
 		assert!(configuration.apply(&mut recorder).is_err());
 		assert_eq!(recorder.calls, vec![Call::Clear]);
+
 		let mut recorder = Recorder {
 			fail_directory: true,
 			..Default::default()
 		};
+
 		assert!(configuration.apply(&mut recorder).is_err());
 		assert_eq!(
 			recorder.calls,
