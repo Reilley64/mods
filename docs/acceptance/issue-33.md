@@ -4,7 +4,7 @@ Status: **incomplete; no controlled Windows 11 sign-off or full acceptance is re
 
 ## Current status — non-execution acceptance continuation
 
-**Partial acceptance only.** Native execution/save-routing, disconnected rebuilds and real stable distribution remain blocked. Native usvfs was not changed, raw FFI remains bindgen-generated, and no speculative Rust workaround was applied. This checkpoint supersedes the older blanket pending statements for diagnostics, profile-source preservation, and ordinary interruption/refusal below.
+**Partial acceptance only.** Native execution/save-routing and real stable distribution remain blocked. The owner waived the disconnected-rebuild check; it is skipped, not passed. Native usvfs was not changed, raw FFI remains bindgen-generated, and no speculative Rust workaround was applied. This checkpoint supersedes the older blanket pending statements for diagnostics, profile-source preservation, and ordinary interruption/refusal below.
 
 ### Fresh local validation and reviewed scope
 
@@ -70,6 +70,16 @@ Measurements used the same verified `82467db` executable/ZIP identities recorded
 
 Evidence: `C:/Users/prime/mods-issue-33/safe-smoke-20260925-02/performance-20260925-02` (query samples and stopped preview), `C:/Users/prime/mods-issue-33/approved-preview-3ea490229474` (move inventories, successful preview argv/streams/status/timings and canonical comparisons), and the new backup metadata. Local reports: `/tmp/mods-33-performance-retry.md`, `/tmp/mods-33-preview-settings-diagnosis.md`, `/tmp/mods-33-approved-archive-move-and-preview.md`. Two pre-product orchestration errors (ZIP-member assumption and later runner quoting) are retained separately; neither is a product defect or successful sample. No further remote work remains active.
 
+### Owner supersession — disconnected rebuild check waived
+
+The owner approved removing and skipping the disconnected Windows Rust/native rebuild check. Keep networking connected on `prime@192.168.86.155`; no disconnected environment, isolation method or offline recovery path is required for #33. This supersedes all older disconnected-rebuild gates in this ledger and `docs/distribution.md`. Record the check as **waived/skipped**, not passed.
+
+Complete corresponding-source packaging, notices and source/hash verification remain required. Existing connected and origin-blocked build evidence keeps its original limits. The original collector report remains unavailable; no replacement was fabricated. Its recovery is no longer an acceptance blocker solely for the skipped disconnected trial. Any future use of the native validator must still satisfy its genuine input contract. All four mandatory helper archives were recovered and hash-verified; details are in `/tmp/mods-33-build-input-recovery.md`.
+
+This waiver does not change native code, generated bindings, release pins, publication gates, stable lifecycle or Winget requirements. No host networking was changed. #33 remains open.
+
+The earlier local-checkpoint pending-CI statement is also superseded: pushed commit `4226ada6c236e279ed71448ce3824830d5a078c7` passed [Windows CI 36221269020](https://github.com/Reilley64/mods/actions/runs/36221269020), with 433 workspace tests, 31 i686 adapter tests and 80 tooling tests; preview stayed skipped. These results cover that checkpoint, not a new runtime package or this later documentation-only waiver.
+
 ### Distribution provenance and remaining gates
 
 Read-only inspection of original native [run 36086098511](https://github.com/Reilley64/usvfs-rs/actions/runs/36086098511), exact revision `eb4949fb2439fe5b98901e2fb1afceee752a6133`, confirms successful packaging required a genuine matching collector report. The workflow uploaded only three packaged files, not its `usvfs-stage` or `reports/source-collection-status.json`. Logs do not contain that report's bytes; earlier locally retained collector reports bind different source hashes. The sole nonexpired release-preparation artifact does not recover the missing stage. This is an evidence-retention gap, not proof that library source is missing. No substitute collector report was created. Details: `/tmp/mods-33-collector-provenance.md`, `/tmp/mods-33-remaining-distribution-audit.md`.
@@ -77,10 +87,10 @@ Read-only inspection of original native [run 36086098511](https://github.com/Rei
 Still required before full acceptance:
 
 1. Successful managed execution, x86/x64 child/descendant lifecycle, cancellation/output and actual save routing. The native crash remains unresolved; no Rust binding defect or justified Rust-only fix was found. No fault replay or native edit was performed in this continuation.
-2. Genuine disconnected Rust consumer and native source rebuilds. Existing connected/cache-assisted and origin-blocked results remain separately credited. The supported native validator needs genuine matching stage inputs; request the original operator's unaltered run-36086098511 attempt-1 stage backup. If unavailable, producing fresh collector evidence requires a separate approved plan. No approved disconnected environment or safe control/recovery method is established; do not disconnect the SSH host.
+2. Complete corresponding-source and notice verification with accurately identified build evidence. The disconnected Rust/native trial is waived as recorded above; neither host disconnection nor recovery of the collector report solely for that trial is required. Do not relabel connected/origin-blocked evidence as disconnected evidence.
 3. Clean stable ZIP install/run/remove and broader representative-workload measurements. Small-fixture conflict and preview timings are now recorded above; installation-commit and native/game performance remain unmeasured. Do not infer clean removal or stable-artifact behavior from candidate extraction/help or these previews.
 4. Approved Release Please/version outcome, real stable ZIP URL/hash, real Winget manifest/validation/install/remove and human-controlled initial submission. Aggregate remains `0.0.0`; publication gates remain disabled. No release, dispatch, merge, submission, fabricated manifest or credentials claim was made.
-5. Final committed-revision Windows CI and artifact-specific sign-off. The local test additions are not yet a clean committed Windows result. Keep #33 open and PR #103 partial/draft. Final manual review found no factual blockers in the new ledger checkpoint; the later measurement update was checked against the retained result records. No tracker changes or publication occurred.
+5. Final artifact-specific sign-off. Windows CI now passed for checkpoint `4226ada` as recorded above; the runtime candidate remains `82467db`. Keep #33 open and PR #103 partial/draft. Manual ledger review found no factual blockers in the checkpoint; the later measurement update was checked against retained result records. The CI outcome was recorded on #33; no release publication occurred.
 
 ## Previous status — 2026-09-25 reconciliation
 

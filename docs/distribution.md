@@ -35,16 +35,21 @@ upstream binaries. `SHA256SUMS` accompanies the final ZIP; it is not inside it.
 Windows 11 and both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables
 are runtime prerequisites. Keep `usvfs/` beside both executables.
 
-## Offline consumer rebuild
+## Consumer source rebuild
+
+The owner waived the disconnected-rebuild acceptance check for #33. Keep host
+networking connected; no network-isolated build or offline environment is required.
+This waiver does not waive complete corresponding source, notices, source/hash
+verification, or accurate build evidence. It is a skipped check, not an offline pass.
 
 Extract `mods-source.tar.gz` into a fresh directory. Preinstall the toolchain,
-MSVC, Windows SDK, LLVM/libclang and PowerShell listed above before disconnecting
-the network. Use a new empty Cargo home and target directory, with the installed
-Rust toolchain available through rustup. From the extracted source root:
+MSVC, Windows SDK, LLVM/libclang and PowerShell listed above. Use a new empty
+Cargo home and target directory, with the installed Rust toolchain available
+through rustup. From the extracted source root:
 
 ```powershell
-$env:CARGO_HOME = "$pwd/offline-cargo-home"
-$env:CARGO_TARGET_DIR = "$pwd/offline-target"
+$env:CARGO_HOME = "$pwd/consumer-cargo-home"
+$env:CARGO_TARGET_DIR = "$pwd/consumer-target"
 $env:LIBCLANG_PATH = "C:/Program Files/LLVM/bin"
 $release = Get-Content -Raw native/usvfs-release.json | ConvertFrom-Json
 ./native/fetch.ps1 -BundleArchive "native/archives/$($release.bundleAsset)"
@@ -52,7 +57,7 @@ $sourceHash = (Get-FileHash -Algorithm SHA256 "native/archives/$($release.source
 if ($sourceHash -ne $release.sourceSha256) { throw "Native source hash mismatch" }
 $env:MODS_USVFS_ARTIFACTS = "$pwd/native/artifacts/bin"
 cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins
-if ($LASTEXITCODE -ne 0) { throw "Offline rebuild failed" }
+if ($LASTEXITCODE -ne 0) { throw "Consumer rebuild failed" }
 ```
 
 Keep `.cargo/config.toml`, `vendor/`, and root `include/` intact. The pinned
@@ -71,17 +76,17 @@ uses that configuration. No registry or Git download is required by Cargo.
 This consumer rebuild compiles the Rust packages and shim against the pinned
 native runtime; it does **not** rebuild upstream usvfs. Extract the included
 native corresponding-source archive and follow its own build instructions for
-that step. Required native build inputs and offline availability must be audited
-and demonstrated on Windows; a hash check alone does not establish completeness.
+that step. Required native source/build inputs must remain accounted for;
+a hash check alone does not establish source completeness.
 
 ## Evidence and publication gate
 
-A packaging build with `--frozen` is not a clean-host offline rebuild proof:
-installed toolchains, caches and native build inputs may hide missing material.
-Before enabling any publication, record a clean disconnected Windows consumer
-rebuild and native corresponding-source rebuild, including tool versions,
-commands, inputs, hashes and results. Confirm all required source and notices
-are present. This evidence is currently blocked, not passed.
+The disconnected Windows Rust/native rebuild check is waived by the owner.
+Do not claim that `--frozen`, a connected build, or origin blocking proves a
+disconnected build. Preserve the recorded source inventory and actual build
+evidence, including source identities, tool versions, commands, inputs, hashes
+and results. Complete corresponding source and required notices remain mandatory.
+The waiver does not enable publication or waive the remaining acceptance checks.
 
 The disabled preview recipe delegates to the shared script and uploads the ZIP
 and checksum with full-SHA naming and 90-day retention. Enabling it additionally
@@ -99,8 +104,8 @@ with its existing exact `vX.Y.Z` tag. It checks out `refs/tags/<tag>`, runs
 `bun run check`, and calls the same clean committed packaging script as previews.
 The nonzero aggregate `version.txt` must match the tag. No component tag qualifies.
 The workflow has an explicit false job gate. Remove only the `false &&` portion
-of the stable condition after recording and accepting the clean disconnected
-rebuild evidence above and required Windows acceptance evidence. Keep its event
+of the stable condition after accepting the source/build evidence above
+and required Windows acceptance evidence. Keep its event
 condition. Do not replace this with a new manual approval environment: merging
 the release PR is publication approval.
 
