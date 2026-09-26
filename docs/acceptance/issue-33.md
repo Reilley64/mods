@@ -6,6 +6,16 @@ Status: **incomplete; no controlled Windows 11 sign-off or full acceptance is re
 
 **Partial acceptance only.** Native execution/save-routing and real stable distribution remain blocked. The owner waived the disconnected-rebuild check; it is skipped, not passed. Native usvfs was not changed, raw FFI remains bindgen-generated, and no speculative Rust workaround was applied. This checkpoint supersedes the older blanket pending statements for diagnostics, profile-source preservation, and ordinary interruption/refusal below.
 
+### Adopted candidate ordinary runtime acceptance — failed
+
+A single bounded ordinary functional check of candidate `3706f53ae3577ff6ac5daa9fb5b0478a1815f2a9` ran on the owner-confirmed disposable `prime` account with a new synthetic Game Installation and Environment Root. ZIP SHA-256 remained `4c565bb8f6f53048111dd1e69e1fd0eb25ef8892f7909bc77c6f94f5e9d01573`. Normal initialization and config readback passed. The subsequent marker-only managed command exited with `0xC0000005` and empty stdout/stderr; its expected marker was absent. This is failed managed-execution acceptance, not successful child launch or proof of a particular crash cause.
+
+The sequence stopped immediately. No retry, cancellation scenario, synthetic-save write, debugger, crash/event inspection or fault investigation followed. Cancellation, descendant lifecycle and save routing remain unverified. Stable/Winget verification and publication remain blocked.
+
+Postfailure preservation matched the complete baseline: all 311 real Game Installation Data files (paths, sizes and SHA-256), directory entries, measured standard save/profile absence markers, and package/executable hashes were unchanged. No test process remained and no forced termination or original-path restoration was needed. Unmeasured metadata is not covered.
+
+Retained fixture: `C:/Users/prime/mods-issue-33/functional-3706f53-2b0083fe`. Reports: `/tmp/mods-33-synthetic-runtime-preflight.md` and `/tmp/mods-33-synthetic-runtime-initial.md`; before/after inventories and ordinary process results are listed in the latter. No product code changed. This result supersedes earlier statements that the adopted candidate had not been exercised; prior compilation/package/portable checks remain valid only for their stated scope.
+
 ### Owner adoption — recursive Data overlays and qualified diagnostics
 
 The owner adopted the Rust prototype into the issue #33 candidate. Prototype commits `51efc0f`, `b74a2dd`, `88d559b` were integrated as `7fb99ae`, `ba1b28f`, `b3fe423`. Enabled non-base provider roots now map recursively in Mod Priority order; Overwrite remains last and the selected Output Target is marked at its ordinary rank. Per-file Data winner links are replaced, while validation, canonical Profile State file mappings, invalidation and recursive save routing remain in place. Native source, generated bindings, dependency pins and lifecycle code remain unchanged.
