@@ -1,3 +1,7 @@
+/// Adapts canonical namespace paths because upstream usvfs disagrees internally
+/// when parsing verbatim roots; canonical project state remains unchanged.
+mod native_path;
+
 use crate::ExecutionError;
 use crate::NativeFailure;
 use crate::PathMapping;
@@ -16,6 +20,9 @@ use ffi::mods_usvfs_launch;
 use ffi::mods_usvfs_link_directory;
 use ffi::mods_usvfs_link_file;
 use ffi::mods_usvfs_open;
+use native_path::native_path_wide;
+use native_path::physical_path_wide;
+use native_path::wide;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -26,7 +33,6 @@ use std::ffi::CString;
 use std::ffi::OsStr;
 use std::fs::read;
 use std::marker::PhantomData;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::process::id;
 use std::ptr::NonNull;
@@ -129,9 +135,9 @@ impl VirtualGameView {
 		if !application.is_absolute() || !directory.is_absolute() {
 			return Err(report!(ExecutionError));
 		}
-		let application = wide(application.as_os_str())?;
+		let application = physical_path_wide(application.as_os_str())?;
 		let mut command = wide(command)?;
-		let directory = wide(directory.as_os_str())?;
+		let directory = physical_path_wide(directory.as_os_str())?;
 		if command.len() > 32767 {
 			return Err(report!(ExecutionError));
 		}
@@ -202,8 +208,8 @@ impl ConfigureView for VirtualGameView {
 		check(unsafe { mods_usvfs_clear_bypasses(native.as_ptr()) })
 	}
 	fn create_target(&mut self, mapping: &PathMapping, recursive: bool) -> Result<(), ExecutionError> {
-		let source = wide(mapping.source.as_os_str())?;
-		let destination = wide(mapping.destination.as_os_str())?;
+		let source = physical_path_wide(mapping.source.as_os_str())?;
+		let destination = native_path_wide(mapping.destination.as_os_str())?;
 		let flags = LINKFLAG_CREATETARGET | if recursive { LINKFLAG_RECURSIVE } else { 0 };
 		let Some(native) = self.native else {
 			return Err(report!(ExecutionError));
@@ -215,8 +221,8 @@ impl ConfigureView for VirtualGameView {
 		})
 	}
 	fn link_directory(&mut self, mapping: &PathMapping, recursive: bool) -> Result<(), ExecutionError> {
-		let source = wide(mapping.source.as_os_str())?;
-		let destination = wide(mapping.destination.as_os_str())?;
+		let source = physical_path_wide(mapping.source.as_os_str())?;
+		let destination = native_path_wide(mapping.destination.as_os_str())?;
 		let flags = if recursive { LINKFLAG_RECURSIVE } else { 0 };
 		let Some(native) = self.native else {
 			return Err(report!(ExecutionError));
@@ -228,8 +234,8 @@ impl ConfigureView for VirtualGameView {
 		})
 	}
 	fn link_file(&mut self, mapping: &PathMapping) -> Result<(), ExecutionError> {
-		let source = wide(mapping.source.as_os_str())?;
-		let destination = wide(mapping.destination.as_os_str())?;
+		let source = physical_path_wide(mapping.source.as_os_str())?;
+		let destination = native_path_wide(mapping.destination.as_os_str())?;
 		let Some(native) = self.native else {
 			return Err(report!(ExecutionError));
 		};
@@ -237,15 +243,6 @@ impl ConfigureView for VirtualGameView {
 		// the native boundary does not retain their addresses.
 		check(unsafe { mods_usvfs_link_file(native.as_ptr(), source.as_ptr(), destination.as_ptr()) })
 	}
-}
-
-fn wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError> {
-	let mut value: Vec<u16> = value.encode_wide().collect();
-	if value.is_empty() || value.contains(&0) {
-		return Err(report!(ExecutionError));
-	}
-	value.push(0);
-	Ok(value)
 }
 
 fn check(result: ModsResult) -> Result<(), ExecutionError> {

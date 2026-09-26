@@ -1,10 +1,10 @@
 # Issue 33 acceptance evidence ledger
 
-Status: **incomplete; no controlled Windows 11 sign-off or full acceptance is recorded.** The current summary below reconciles retained evidence. The following chronological checkpoints and grouped audit matrix preserve historical pending states; they are not the current status authority.
+Status: **incomplete; no full controlled Windows 11 or stable-distribution sign-off is recorded.** The current summary below reconciles retained evidence. The following chronological checkpoints and grouped audit matrix preserve historical pending states; they are not the current status authority.
 
-## Current status — non-execution acceptance continuation
+## Current status — bounded managed-execution repair
 
-**Partial acceptance only.** Native execution/save-routing and real stable distribution remain blocked. The owner waived the disconnected-rebuild check; it is skipped, not passed. Native usvfs was not changed, raw FFI remains bindgen-generated, and no speculative Rust workaround was applied. This checkpoint supersedes the older blanket pending statements for diagnostics, profile-source preservation, and ordinary interruption/refusal below.
+**Partial acceptance only.** The repaired x64 candidate now passes the unchanged managed-child marker and a virtual Data-file read. x86 child execution, descendant lifecycle, cancellation, save routing, stable distribution and broader acceptance remain unverified. The owner waived the disconnected-rebuild check; it is skipped, not passed. Native usvfs, generated bindings and release pins remain unchanged; the bounded Rust repair normalizes filesystem path copies only at the existing native adapter boundary.
 
 ### Adopted candidate ordinary runtime acceptance — failed
 
@@ -15,6 +15,18 @@ The sequence stopped immediately. No retry, cancellation scenario, synthetic-sav
 Postfailure preservation matched the complete baseline: all 311 real Game Installation Data files (paths, sizes and SHA-256), directory entries, measured standard save/profile absence markers, and package/executable hashes were unchanged. No test process remained and no forced termination or original-path restoration was needed. Unmeasured metadata is not covered.
 
 Retained fixture: `C:/Users/prime/mods-issue-33/functional-3706f53-2b0083fe`. Reports: `/tmp/mods-33-synthetic-runtime-preflight.md` and `/tmp/mods-33-synthetic-runtime-initial.md`; before/after inventories and ordinary process results are listed in the latter. No product code changed. This result supersedes earlier statements that the adopted candidate had not been exercised; prior compilation/package/portable checks remain valid only for their stated scope.
+
+### Verbatim-path crash diagnosis and bounded Rust repair
+
+A symbol-matched Debug replay of adopted source `3706f53ae3577ff6ac5daa9fb5b0478a1815f2a9` reproduced the same `0xC0000005` before child launch. CDB observed `assertPathExists` replace `current` with an empty `shared_ptr` after a duplicate insertion, then dereference it on the next component. The triggering destination was the invalidation archive under a canonical `\\?\C:\...\Data` path. Boost lookup treated `\\?\C:` as one root component, while the native insertion parser decomposed it differently. The first-fault dump is retained at `C:/Users/prime/mods-issue-33/debug-takeover-20260926-01/cdb-transition-01/first-av.dmp`, SHA-256 `7bf26f758187b914ecedb594d6a511e4f3a1481b4c4e5d892cd42b8e29b02d54`.
+
+A native parser prototype made its focused regression test pass and removed the access violation, but it was rejected as the production direction. It did not alias ordinary and verbatim path spellings across the complete hook path and left child launch paths in namespace form. The owner selected a mods-owned boundary repair instead. `infrastructure-execution` now converts normalization-stable copies of verbatim drive and UNC paths to ordinary DOS/UNC spelling when calling native mapping and launch APIs. Long verbatim UNC physical paths keep their valid namespace spelling because the pinned native release otherwise constructs an invalid prefix; paths with trailing dots/spaces, alternate-stream separators or reserved DOS device components fail before conversion rather than silently changing identity. Canonical project state and command-line buffers are unchanged. Other namespace forms remain unchanged. Native source revision `57f1ea5e6ad13f7435a7af184748e6c1312c5637`, fork pin `eb4949fb2439fe5b98901e2fb1afceee752a6133`, ABI generation and artifact bytes are unchanged.
+
+The final Release candidate used `mods.exe` SHA-256 `15d888dab7b460f20cf0f6489ebb94b6218f9f2e4ff6f9f3c8c6d9459c67d9f4` and unchanged x64 native DLL SHA-256 `775c2cf67f17201d1ed50efafd470c676f0f335789bd12ebaa9b6f261d0a015c`. The unchanged PowerShell marker harness passed with exit `0x00000000` and stdout `mods-issue33-exec-marker`. Evidence: `C:/Users/prime/mods-issue-33/path-normalization-prototype-20260926-01/production-marker-repro-final2/result.json`.
+
+A second final-candidate check launched `cmd.exe` through the managed view, compared the virtual `Data/Fallout - Invalidation.bsa` byte-for-byte with its 36-byte cache source, and emitted `mods-issue33-vfs-marker:36`; exit was 0. A separate `whoami.exe` child exited 0 with `officepc\prime`. The physical Data destination was absent before and after, so this was a virtual read rather than a copied game file. Expected diagnostic logs and the documented analytical-projection warning were produced. Evidence: `C:/Users/prime/mods-issue-33/path-normalization-prototype-20260926-01/production-runtime-final2/result.json`.
+
+All 44 `infrastructure-execution` tests passed on Windows against the unchanged pinned artifact bundle, including nine focused native-boundary policy tests and the packaged single-session test. `bun run check` passed on macOS with 422 Rust tests and 80 tooling tests, including formatting, Clippy and dependency checks. The conversion and regression tests live in the precise private `usvfs/native_path.rs` adapter module; they verify mods-owned FFI policy rather than duplicating native parser behavior. Per owner direction, the unrelated coding-style report is excluded from this review and is not presented as a clean verdict.
 
 ### Owner adoption — recursive Data overlays and qualified diagnostics
 
@@ -142,7 +154,7 @@ Read-only inspection of original native [run 36086098511](https://github.com/Rei
 
 Still required before full acceptance:
 
-1. Successful managed execution, x86/x64 child/descendant lifecycle, cancellation/output and actual save routing. The native crash remains unresolved; no Rust binding defect or justified Rust-only fix was found. No fault replay or native edit was performed in this continuation.
+1. Complete remaining managed execution acceptance: x86 child execution, x86/x64 descendant lifecycle, cancellation/output and actual save routing. The repaired x64 marker and virtual-file read now pass as recorded above; they do not establish these remaining scenarios.
 2. Complete corresponding-source and notice verification with accurately identified build evidence. The disconnected Rust/native trial is waived as recorded above; neither host disconnection nor recovery of the collector report solely for that trial is required. Do not relabel connected/origin-blocked evidence as disconnected evidence.
 3. Clean stable ZIP install/run/remove and broader representative-workload measurements. Small-fixture conflict and preview timings are now recorded above; installation-commit and native/game performance remain unmeasured. Do not infer clean removal or stable-artifact behavior from candidate extraction/help or these previews.
 4. Approved Release Please/version outcome, real stable ZIP URL/hash, real Winget manifest/validation/install/remove and human-controlled initial submission. Aggregate remains `0.0.0`; publication gates remain disabled. No release, dispatch, merge, submission, fabricated manifest or credentials claim was made.
