@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 
+import { backendIdentity } from "./provider";
+import { REQUEST_VERSION } from "./cache";
+import { declaresFileNamedEntryPoint } from "./snapshot";
+
 import type { GateConfig } from "./config";
 import type { StyleRule } from "./rules";
 import type { RustChange, RustSnapshot } from "./snapshot";
@@ -26,12 +30,16 @@ export function reviewFingerprint(
 ): string {
 	return hash([
 		config.model,
+		backendIdentity(),
+		String(REQUEST_VERSION),
 		...Object.entries(config.ruleThresholds)
 			.sort(([left], [right]) => left.localeCompare(right))
 			.flatMap(([id, threshold]) => [id, String(threshold)]),
 		...rules.flatMap((rule) => [rule.id, rule.title, rule.text, rule.violation, rule.compliant, ...rule.badExamples, ...rule.goodExamples]),
 		...changes.flatMap((change) => [
 			change.path,
+			change.before === undefined ? "added" : change.after === undefined ? "deleted" : "modified",
+			String(declaresFileNamedEntryPoint(change)),
 			change.patch,
 			change.after ?? "",
 			...(moduleReferences.get(change.path) ?? []),

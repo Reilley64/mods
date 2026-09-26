@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { createReviewClient } from "../provider";
 import { calibrationInput } from "./input";
 
 import { loadConfig, validateRuleThresholds } from "../config";
@@ -10,7 +10,7 @@ import { calibrationCases, type CalibrationCase } from "./cases";
 const config = await loadConfig(process.cwd());
 const rules = extractStyleRules(await readFile(config.styleFile, "utf8"));
 validateRuleThresholds(config.ruleThresholds, rules);
-const client = new TypeSafeClient({ defaultModel: config.model, logLevel: "warn", retry: { maxRetries: 1 }, timeout: 20_000 });
+const client = createReviewClient({ ...config, timeoutMs: 20_000 });
 
 async function scoreCase(sample: CalibrationCase) {
 	const input = calibrationInput(sample);
@@ -57,7 +57,7 @@ const configuredSummary = {
 };
 console.log(JSON.stringify({
 	model: config.model,
-	rules: rules.length,
+		rules: rules.length,
 	configuredThresholds: config.ruleThresholds,
 	configuredSummary,
 	rows,

@@ -74,3 +74,14 @@ describe("coding style gate configuration", () => {
 	});
 
 });
+
+test("migrates legacy session models, rejects unknown session IDs, and ignores local model before validation", async () => {
+	const root = await mkdtemp(join(tmpdir(), "coding-style-model-")); temporaryDirectories.push(root);
+	await mkdir(join(root, ".prime/agent"), { recursive: true });
+	const path = join(root, ".prime/agent/coding-style-gate.json");
+	await writeFile(path, JSON.stringify({ provider: "typesafe", model: "jev-1.13.0" }));
+	expect((await loadConfig(root)).model).toBe("typesafe/jev-1.13");
+	await writeFile(path, JSON.stringify({ provider: "typesafe", model: { invalid: true } }));
+	await expect(loadConfig(root)).rejects.toThrow("unsupported OpenRouter model");
+	expect((await loadConfig(root, "typesafe/jev-1.13")).model).toBe("typesafe/jev-1.13");
+});
