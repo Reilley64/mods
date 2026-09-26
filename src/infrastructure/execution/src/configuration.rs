@@ -86,6 +86,7 @@ impl ViewConfiguration {
 		let Some(target) = target else {
 			return Err(report!(ExecutionError));
 		};
+
 		let target_identity = target.identity.clone();
 		let mut enabled_providers: Vec<_> = providers
 			.iter()
@@ -319,7 +320,9 @@ mod tests {
 				.map_err(|_| "name")?;
 			let configuration = Fixture::new()?.configure(selection).map_err(|_| "configuration")?;
 			let mut recorder = Recorder::default();
+
 			configuration.apply(&mut recorder).map_err(|_| "apply")?;
+
 			let mut expected = vec![Call::Clear];
 			for source in ["low", "high", "overwrite"] {
 				let mapping = mapping(source, "Data");
@@ -399,12 +402,15 @@ mod tests {
 		let mut fixture = Fixture::new()?;
 		fixture.winners.push(fixture.winners[0].clone());
 		assert!(fixture.configure(None).is_err());
+
 		let mut fixture = Fixture::new()?;
 		fixture.providers[1].enabled = false;
 		assert!(fixture.configure(None).is_err());
+
 		let mut fixture = Fixture::new()?;
 		fixture.providers.remove(1);
 		assert!(fixture.configure(None).is_err());
+
 		let mut fixture = Fixture::new()?;
 		if let ProviderReference::DataMod { priority, .. } = &mut fixture.winners[0] {
 			*priority = ModPriority::new(99);
@@ -418,6 +424,7 @@ mod tests {
 		let mut fixture = Fixture::new()?;
 		fixture.providers.push(fixture.providers[0].clone());
 		assert!(fixture.configure(None).is_err());
+
 		let mut fixture = Fixture::new()?;
 		let mut duplicate = fixture.providers[1].clone();
 		if let ProviderIdentity::DataMod { priority, .. } = &mut duplicate.identity {

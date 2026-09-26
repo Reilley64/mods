@@ -59,3 +59,31 @@ The Rust design can express the approved ordered-overlay policy through the exis
 Capture this code only on `prototype/issue-33-rust-overlays`; do not merge or publish it as a release. Successful managed execution remains a separate unverified acceptance requirement. No further repair cycle was needed for this bounded implementation.
 
 Next: review the isolated implementation before deciding whether to carry the design forward. Do not describe compilation or recorder results as proof that the original crash is fixed.
+
+## Design review follow-up: spacing and plugin diagnostics
+
+The design-candidate review found one minor standards issue: phase spacing in configuration validation and recorder fixtures. Seven blank lines were added; all non-whitespace source content is identical to `51efc0f`. `cargo fmt --all -- --check`, the seven focused configuration tests and `git diff --check` passed. Independent bounded re-review confirmed the original blocker resolved. Reports: `/tmp/mods-33-overlay-spacing-tests.log`, `/tmp/mods-33-overlay-spacing-review.md`. Earlier full-suite and Windows compile evidence belongs to the pre-spacing patch; it was not rerun for this whitespace-only correction.
+
+### Diagnostic policy decision (not implemented)
+
+Keep the existing analytical plugin projection and qualify every diagnostic surface. It is advisory analysis, not an observed game/usvfs view. It may differ from runtime visibility in membership, activation sources and ordering after the runtime metadata/Tombstone waiver. Do not call it "effective plugin configuration" or imply that the runtime ignores an entry absent from that projection.
+
+The current consumer uses the computed plugin list for tracing and warnings only. Provider-root and canonical Profile State mappings do not depend on that list. Execution does not rewrite canonical plugin lists from the projection. Therefore explicit, complete qualification is sufficient for this consumer; a second namespace scan is not needed merely to produce these diagnostics. A future consumer that selects runtime plugins or rewrites Profile State would require a new design review.
+
+Recommended common explanation:
+
+> Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.
+
+Per-entry messages should say:
+
+- Missing from analytical Data: identify the source list and name; state that runtime availability is not established. Do not say the game will ignore the plugin.
+- Unlisted plugin: state that the name is absent from `loadorder.txt` and backing-file modification time determines its position in the analysis. Do not claim runtime order.
+- Duplicate list entry: state that analysis uses the first occurrence and does not change the canonical file.
+- Tracing: label the list "advisory plugin projection", qualify order/activation as projected, and identify `basis=analytical_data` and `runtime_observed=false` rather than implying observed visibility.
+- Post-run Profile State validation warnings remain separate; they are not analytical plugin-availability warnings.
+
+Preserve existing warning variants/codes and MCP response shape. If implemented, equivalent qualifications must appear in CLI text, MCP text and trace events; do not rename only a heading while leaving absolute claims elsewhere. No diagnostic code was changed in this step.
+
+Proposed separate implementation scope: existing warning rendering in CLI `runner.rs`, MCP `execution_output.rs`, and tracing in dependencies `execution_adapter/native.rs`; clarify projection-only contracts in `profile.rs` and `execution_preparation.rs`; update focused presentation assertions and the existing MCP contract-delta note. No algorithm, canonical-state, mapping, native, binding, pin or public-schema change. `/tmp/mods-33-plugin-diagnostic-policy.md` records the reviewed call chain and rejected second-projection alternative.
+
+Next: approve the bounded diagnostic-only edit before implementation. The isolated overlay implementation remains a design candidate, not an adopted implementation or verified crash repair.
