@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "application"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "domain",
  "rootcause",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "domain"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rootcause",
  "unicode-case-mapping",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "infrastructure-archive"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "crc32fast",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "infrastructure-dependencies"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "domain",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "infrastructure-environment"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "cap-fs-ext",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "infrastructure-execution"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "domain",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "infrastructure-game-platform"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "cap-std",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "infrastructure-settings"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "cap-std",
@@ -1241,7 +1241,7 @@ dependencies = [
 
 [[package]]
 name = "mods"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "clap",
@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "mods-mcp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "application",
  "clap",

@@ -1,13 +1,13 @@
 {
-  ".": "0.0.0",
-  "src/domain": "0.0.0",
-  "src/application": "0.0.0",
-  "src/infrastructure/environment": "0.0.0",
-  "src/infrastructure/settings": "0.0.0",
-  "src/infrastructure/game_platform": "0.0.0",
-  "src/infrastructure/archive": "0.0.0",
-  "src/infrastructure/execution": "0.0.0",
-  "src/infrastructure/dependencies": "0.0.0",
-  "src/presentation/cli": "0.0.0",
-  "src/presentation/mcp": "0.0.0"
+  ".": "0.1.0",
+  "src/domain": "0.1.0",
+  "src/application": "0.1.0",
+  "src/infrastructure/environment": "0.1.0",
+  "src/infrastructure/settings": "0.1.0",
+  "src/infrastructure/game_platform": "0.1.0",
+  "src/infrastructure/archive": "0.1.0",
+  "src/infrastructure/execution": "0.1.0",
+  "src/infrastructure/dependencies": "0.1.0",
+  "src/presentation/cli": "0.1.0",
+  "src/presentation/mcp": "0.1.0"
 }
