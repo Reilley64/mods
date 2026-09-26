@@ -82,11 +82,12 @@ Native rebuilding and shim tests belong in the fork, not this consumer tree.
 
 **Combined mods binary preview publishing remains disabled** by the literal
 false gate in the workflow. A native release does not itself satisfy mods' full
-corresponding-source requirements. The disabled packaging recipe checks the
-native source asset hash and includes its notices, but mods' Rust dependencies
-and other required source/build inputs still need a reviewed distribution
-arrangement. Registry references alone are not a substitute. Do not enable this
-job as part of the native dependency migration.
+corresponding-source requirements. The disabled packaging recipe now uses
+`scripts/package-windows.ps1`, which vendors locked Rust dependencies and includes
+the pinned native source and notices. See [distribution instructions](../docs/distribution.md).
+This is candidate packaging only. Clean disconnected Windows consumer and native
+source rebuild evidence is still required before the gate can change; neither
+static policy tests nor a warm-cache build establish source completeness.
 
 ## Owned lifecycle and tests
 

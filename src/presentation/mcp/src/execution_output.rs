@@ -12,22 +12,23 @@ pub(crate) fn executed(output: ExecuteProgramOutput, captured: CapturedOutput) -
 	    "outcome": "executed", "status": {"origin": "child", "value": output.status.value()},
 	    "stdout": stream(captured.stdout), "stderr": stream(captured.stderr), "warnings": []
 	}));
+
 	for warning in output.warnings {
 		let text = match warning {
 			ExecutionWarning::LoadOrderNotEnforced => {
-				"warning: derived plugin load order is not enforced by virtual timestamps".to_owned()
+				"warning: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.".to_owned()
 			}
 			ExecutionWarning::StalePluginEntry { name } => {
-				format!("warning: plugin entry is unavailable: {name}")
+				format!("warning: analysis projection: plugins.txt entry {name} is absent from the analytical Data view; runtime availability is not established.")
 			}
 			ExecutionWarning::StaleLoadOrderEntry { name } => {
-				format!("warning: load order entry is unavailable: {name}")
+				format!("warning: analysis projection: loadorder.txt entry {name} is absent from the analytical Data view; runtime availability is not established.")
 			}
 			ExecutionWarning::DuplicatePluginEntry { file, name } => {
-				format!("warning: duplicate plugin entry in {file}: {name}")
+				format!("warning: duplicate entry {name} in {file}; analysis projection uses the first occurrence; canonical file is unchanged.")
 			}
 			ExecutionWarning::UnlistedPlugin { name } => {
-				format!("warning: plugin uses fallback load order: {name}")
+				format!("warning: analysis projection: {name} is absent from loadorder.txt; projected order uses backing-file modification time.")
 			}
 			ExecutionWarning::ProfileStateInvalid => {
 				"warning: retained profile state is invalid after execution".to_owned()
@@ -72,6 +73,17 @@ mod tests {
 					ExecutionWarning::StalePluginEntry {
 						name: "Missing.esp".into(),
 					},
+					ExecutionWarning::StaleLoadOrderEntry {
+						name: "Ordered.esp".into(),
+					},
+					ExecutionWarning::DuplicatePluginEntry {
+						file: "plugins.txt".into(),
+						name: "Duplicate.esp".into(),
+					},
+					ExecutionWarning::UnlistedPlugin {
+						name: "Unlisted.esp".into(),
+					},
+					ExecutionWarning::ProfileStateInvalid,
 				],
 			},
 			CapturedOutput {
@@ -88,12 +100,25 @@ mod tests {
 			},
 		);
 		let visible = to_string(&result.content)?;
-		assert!(visible.contains("virtual timestamps"));
-		assert!(visible.contains("Missing.esp"));
-		let value = result.structured_content.ok_or_else(|| report!("missing output"))?;
+		assert!(visible.contains("warning: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps."));
+		assert!(visible.contains("warning: analysis projection: plugins.txt entry Missing.esp is absent from the analytical Data view; runtime availability is not established."));
+		assert!(visible.contains("warning: analysis projection: loadorder.txt entry Ordered.esp is absent from the analytical Data view; runtime availability is not established."));
+		assert!(visible.contains("warning: duplicate entry Duplicate.esp in plugins.txt; analysis projection uses the first occurrence; canonical file is unchanged."));
+		assert!(visible.contains("warning: analysis projection: Unlisted.esp is absent from loadorder.txt; projected order uses backing-file modification time."));
+		assert!(visible.contains("warning: retained profile state is invalid after execution"));
 
+		let value = result.structured_content.ok_or_else(|| report!("missing output"))?;
 		assert!(Contracts::new()?.output_matches("mods_exec", &value));
-		assert_eq!(value["stdout"]["text"], json!("secret"));
+		assert_eq!(
+			value,
+			json!({
+			"outcome": "executed",
+			"status": {"origin": "child", "value": 259},
+			"stdout": {"byte_count": 6, "sha256": "a".repeat(64), "binary_output": false, "text": "secret"},
+			"stderr": {"byte_count": 1, "sha256": "b".repeat(64), "binary_output": true},
+			"warnings": []
+			})
+		);
 		assert_eq!(value["status"]["value"], json!(259));
 		assert_eq!(value["stderr"]["binary_output"], json!(true));
 		assert!(value["stderr"].get("text").is_none());

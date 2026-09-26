@@ -126,7 +126,7 @@ impl ExecutionAdapter {
 		.context(ErrorMarker::environment_invalid(Some("execution")))?;
 
 		for (order, plugin) in profile.plugins.iter().enumerate() {
-			tracing::info!(plugin = %plugin.path, order, activation_sources = ?plugin.activation_sources, "effective plugin configuration");
+			tracing::info!(plugin = %plugin.path, basis = "analytical_data", runtime_observed = false, projected_order = order, projected_activation_sources = ?plugin.activation_sources, "advisory plugin projection");
 		}
 
 		let mut warnings: Vec<_> = profile
@@ -182,6 +182,7 @@ impl ExecutionAdapter {
 
 		let view = VirtualGameView::configure(&configuration)
 			.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
+
 		if let Err(mut failure) = environment.revalidate_execution(&self.root, &prepared, &cancellation) {
 			if let Err(cleanup) = view.close() {
 				failure.children_mut().push(cleanup.into_dynamic().into_cloneable());

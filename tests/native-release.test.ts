@@ -8,10 +8,14 @@ describe("native release consumption policy", () => {
 	test("repository tool checks run independently of native CI", async () => {
 		const tools = Bun.YAML.parse(await Bun.file(".github/workflows/tools.yml").text()) as any;
 		expect(named("Run repository tool checks")).toBeUndefined();
-		expect(tools.on).toHaveProperty("pull_request");
-		expect(tools.on.push.branches).toEqual(["main"]);
-		expect(tools.on).toHaveProperty("workflow_dispatch");
-		expect(tools.on.schedule).toEqual(workflow.on.schedule);
+		expect(tools.on).toEqual({ workflow_call: null });
+		expect(workflow.on).toHaveProperty("pull_request");
+		expect(workflow.on.push.branches).toEqual(["main"]);
+		expect(workflow.on).toHaveProperty("workflow_dispatch");
+		expect(workflow.on.schedule).toEqual([{ cron: "23 5 * * 1" }]);
+		expect(workflow.jobs.tools.uses).toBe("./.github/workflows/tools.yml");
+		expect(workflow.jobs.tools.needs).toBeUndefined();
+		expect(workflow.jobs.tools.if).toBeUndefined();
 		expect(tools.jobs.tools.needs).toBeUndefined();
 		expect(tools.jobs.tools.steps.some((step: any) => step.run === "bun run check:tools")).toBe(true);
 		expect(tools.jobs.tools.steps.some((step: any) => step.run === "bun install --frozen-lockfile")).toBe(true);

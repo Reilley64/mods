@@ -286,6 +286,7 @@ pub async fn install_archive(
 			}
 		}
 	};
+
 	if !evaluation.unresolved_groups.is_empty() {
 		let output =
 			InstallArchiveOutput::AdditionalSelectionsRequired(Box::new(AdditionalSelectionsRequired {
