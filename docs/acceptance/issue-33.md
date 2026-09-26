@@ -2,7 +2,87 @@
 
 Status: **incomplete; no controlled Windows 11 sign-off or full acceptance is recorded.** The current summary below reconciles retained evidence. The following chronological checkpoints and grouped audit matrix preserve historical pending states; they are not the current status authority.
 
-## Current status — 2026-09-25 reconciliation
+## Current status — non-execution acceptance continuation
+
+**Partial acceptance only.** Native execution/save-routing, disconnected rebuilds and real stable distribution remain blocked. Native usvfs was not changed, raw FFI remains bindgen-generated, and no speculative Rust workaround was applied. This checkpoint supersedes the older blanket pending statements for diagnostics, profile-source preservation, and ordinary interruption/refusal below.
+
+### Fresh local validation and reviewed scope
+
+- Clean baseline `c195642ab4f43c7f7903c3887f54202ff17410a1`: `bun run check` passed on macOS with **415 Rust tests and 80 tooling tests** (749 assertions). `/tmp/mods-33-current-check.log` was refreshed by this continuation; it now belongs to this baseline, not the older runtime candidate. The older `/tmp/mods-33-final-local-check.log` records 414 tests and must not be cited as a 415-test run.
+- After the two test-only changes below, `bun run check` passed with **417 Rust tests and 80 tooling tests** (749 assertions), including formatting, Clippy and dependency checks. Evidence: `/tmp/mods-33-final-acceptance-check.log`. This run covers the working-tree test changes atop `c195642`, not a new committed Windows artifact. No production code, dependencies, interfaces, release pins or publication gates changed.
+- `src/infrastructure/game_platform/src/profile_sources.rs`, existing `profile_sources_are_read_from_known_folder_capabilities`: now compares physical before/after directory entries and file bytes for disposable profile/game fixtures, including an existing save fixture and default INI. Metadata preservation and real-user Known Folder acquisition are not asserted.
+- `src/infrastructure/environment/src/lib.rs`: new `logs_only_root_is_available_and_preserved_by_initialization` proves eligibility, publication and existing-log preservation. New `publication_failure_before_cache_keeps_manifest_staged_and_refuses_initialization` uses an ordinary owned cache-file obstruction to verify partial publication, absent canonical manifest, preserved staged manifest and later `ManualCleanupRequired`. This is one manifest-last failure checkpoint, not all checkpoints, process termination, power loss or recovery.
+- Focused crate tests passed (70 environment and 25 game-platform tests). Independent manual review found no blockers in the exact two-file test diff. The advisory TypeSafe style gate returned HTTP 402 (no available API credits); it supplied **no verdict**, and was neither disabled nor overridden.
+- Read-only standards review at `c195642` cross-checked all 149 tracked Rust files: all 56 production unsafe blocks are confined to nine infrastructure files and have local safety proofs; all nine application use cases have the required Dependencies/Output/Error/function order and instrumentation. No concrete violations were found in these two checks. This is not blanket style approval or certification of the native implementation. Reports: `/tmp/mods-33-standards-acceptance.md`, `/tmp/mods-33-assertion-work.md`, `/tmp/mods-33-assertion-review.md`.
+
+### Retained Windows CI, now checked at individual-test level
+
+[Run 36112545582](https://github.com/Reilley64/mods/actions/runs/36112545582) has successful `check` and skipped `preview`, PR head `23d5b9ae1a5ffad556de593eb619381228de4f39`. Raw logs identify checkout merge `5cf6d55` of that head into `86e9563`. They show **431 workspace tests passed, zero skipped**, and **31 i686 execution-adapter tests passed**. Individual PASS records include profile acquisition/cancellation/symlink rejection, environment/settings reparse rejection, and packaged single-session ownership on both architectures. This reuses hosted Windows Server 2022 evidence; it is not Windows 11 successful managed execution, a main-push preview result, or Windows validation of the new test-only changes. Captures: `/tmp/mods-33-retained-windows-ci.log` and `/tmp/mods-33-retained-windows-ci-metadata.json`.
+
+### Credited automated non-execution evidence
+
+The fresh local suite verifies the following existing colocated seams. These close the named automated scenarios, not every historical grouped matrix row or platform-specific branch.
+
+| Scenario | Colocated evidence (paths under `src/`) | Limit |
+|---|---|---|
+| Profile import/seed/empty-list/no-save policy | `infrastructure/environment/src/profile.rs`: `stages_import_seed_empty_absent_and_never_saves`, `stages_exact_save_routing_and_removes_conflicts_from_imports` | Configuration/staging policy, not actual save interception |
+| Initialization stage/cancel/refusal | `infrastructure/environment/src/lib.rs`: `staged_initialization_has_no_canonical_mutation`, `cancellation_before_publication_preserves_the_complete_stage`, `pending_operation_takes_precedence_and_refuses_initialization`, plus new assertions above | No crash/power-loss guarantee |
+| Install interruption and subsequent refusal | `infrastructure/environment/src/transactions.rs`: `a_mid_publication_failure_keeps_stage_and_backups_then_refuses_later_mutation`, `cancellation_preserves_staging_without_canonical_mutation`, `postcommit_cancellation_is_not_observed` | Ordinary synthetic failure and cancellation; no restoration/retry |
+| Settings publication/cancel/refusal | `infrastructure/settings/src/manifest_writer.rs`: `failed_staged_validation_preserves_operation_state`, `final_cancellation_preserves_the_validated_stage`, `cleanup_failure_after_commit_returns_success_and_leaves_refusal_state` | Mods-owned publication only |
+| Pending reads/dry-run never repair | `infrastructure/environment/src/snapshot.rs`: `preview_rejects_unfinished_work_as_invalid_without_mutation`, `unfinished_work_precedes_missing_canonical_layout_without_mutation`; `infrastructure/settings/src/lib.rs`: `unfinished_work_blocks_read_without_mutating` | No repair or cleanup claimed |
+| Disposable logs/cache and invalid/partial roots | `infrastructure/settings/src/lib.rs`: `disposable_cache_and_logs_never_change_settings_behavior`, `invalid_flat_manifests_fail_unchanged`, `missing_or_partial_root_is_reported_as_folder_uninitialized` | Settings behavior, not package removal |
+| Presentation diagnostic sessions | Both `presentation/{cli,mcp}/src/diagnostics.rs`: `off_creates_no_log_file_or_root`, `normal_session_creates_one_uuid_file_with_boundary_events`, `configured_log_level_filters_captured_project_events`; CLI `runner.rs`: `appender_setup_failure_warns_without_changing_the_command_result` | Packaged MCP setup-failure evidence is recorded separately below |
+| MCP admission/cancellation/progress | `presentation/mcp/src/server.rs`: `busy_admission_precedes_validation_and_releases_without_queueing`; `cancellation.rs`: `queued_progress_is_dropped_but_committed_response_finishes`, `cancellation_suppresses_response_while_transport_drains`; `application/src/installation/install_archive.rs`: `progress_reports_real_installation_checkpoints` | Protocol/application seams, not native-child lifecycle |
+| Archive, install and conflict policies | Existing real ZIP/7z/RAR/FOMOD adapter fixtures; transaction replacement tests; conflict projection/whole-query failure tests; `presentation/mcp/src/install_output.rs`: `nonempty_install_plans_match_preview_and_installed_contracts` | Supplement existing Windows CLI/MCP scenarios; no native interception claim |
+
+The supporting 21-row source audit is `/tmp/mods-33-remaining-scenario-audit.md`. Its description of `current-check.log` as historical 82467db evidence is superseded by the fresh-run identity above. Source presence alone is not a test pass; non-Windows local tests do not establish Windows-only behavior.
+
+### Fresh Windows packaged diagnostics — six passing scenarios
+
+On 2026-09-26 UTC, the approved Windows host ran three CLI and three MCP scenarios from verified candidate `82467db4679587d698a2a6f953bfdae1543bfe62`. Fresh hashes matched `mods.exe` `9dffa75bbad027f58012f7af17cb896a45547f758675517a7ce7c9ad3164fa1f`, `mods-mcp.exe` `62809fa88d26fe18f6615782ec4a72061d43158d62206c64c63ec8c8c7cd1fc0`, and ZIP `3a2fedb31e029b234b18f0c7e4508988422ce1679941d0878d049fbe9c32ac31`.
+
+Each mode used a separate fresh empty root. CLI `config list` and MCP `mods_config_list` intentionally returned `environment_not_initialized`; MCP also successfully served `tools/list` (eight tools). Results:
+
+- `info`: expected UUID JSON diagnostic files and boundary records. CLI had started/failed records; MCP had request started/failed and lifecycle started/completed records.
+- `off`: no log path or diagnostic identifier, unchanged operation results.
+- Owned regular file obstructing `environment/logs`: unchanged obstruction, nonfatal warning, unchanged operation results. CLI emitted exactly one sink warning; MCP emitted two (lifecycle/request). All MCP stdout remained exactly two valid JSON-RPC responses, with no trailing output.
+
+All CLI exits were the expected 1; all MCP servers exited 0. All six task-owned PIDs exited without timeout or cleanup. No game/Steam/save access, native mapping, managed execution, existing-environment mutation or system change occurred. Enabled coverage used info only; successful initialized CLI config and native-execution diagnostic boundaries are not claimed.
+
+Retained host evidence: `C:/Users/prime/mods-issue-33/diagnostics-safe-23e620af`, including `identity.json`, six scenario argv/status/stream captures, literal MCP requests/responses, `assertions.json`, `evidence-inventory.json`, diagnostic JSONL files and `process-completion.txt`. Local report: `/tmp/mods-33-diagnostics-acceptance.md`.
+
+### Bounded measurements and second owner-approved archive move
+
+The first corrected timing attempt produced three conflict-list and three conflict-inspect samples, then stopped at a normal replacement preview rejection (`environment_invalid`, phase `settings_load`). Read-only inspection found that the reserved `Data/Fallout - Invalidation.bsa` existed again (83 bytes). Install-state validation rejects that filename; conflict scanning uses a different policy. The old diagnostic did not identify the precise rejecting branch. No product regression or relationship to the native crash was established.
+
+The owner explicitly approved another move. Only that file was moved, without replacement, to `C:/Users/prime/mods-issue-33/owner-approved-backup-3ea490229474/Fallout - Invalidation.bsa`. Source and backup SHA-256 matched `ee54ebdd90c485bce3b3c0151e193d40b37b3278a14decabc133f9afa8487f57`; `record.json` retains original metadata. Full Data hash inventories bracketed this move: 312 files before, 311 after, with only the approved file removed and every other file unchanged. The earlier backup remains untouched. This is an intentional Data change, not historical no-change evidence or a save inventory.
+
+After the move, three normal and three FOMOD replacement dry-run previews passed with exit 0, `outcome = "preview"`, expected choices/winners and zero warnings. No install commit ran. All six sample inventories and final inventory matched the 25-entry owned canonical baseline (excluding expected logs); fixture hashes were unchanged, temp was empty and no mods/mods-mcp processes remained.
+
+| Read-only operation | Three wall-clock samples (ms) | Result |
+|---|---|---|
+| Conflict list with content comparison | 1311.9129 / 84.1802 / 93.4032 | Three successful samples before the second move |
+| Inspect SmokeA conflicts with content comparison | 84.5038 / 86.7629 / 82.4363 | Three successful samples before the second move |
+| Normal replacement preview | 346.3320 / 347.6372 / 332.4133 | Three successful samples after the approved move |
+| FOMOD red-choice replacement preview | 338.2776 / 327.2513 / 346.4949 | Three successful samples after the approved move |
+
+Measurements used the same verified `82467db` executable/ZIP identities recorded above on Windows `10.0.26200.0` x64, PowerShell 7.6.6, 12 logical processors. Each sample includes fresh process startup and info logging, but excludes SSH/preflight/inventory. There was no warmup, cold-cache guarantee, invented numeric threshold or inferred cause for the slower first query. The archive fixtures are only 288/287/661 bytes; these observations do not establish large-workload, install-commit, native execution or game performance.
+
+Evidence: `C:/Users/prime/mods-issue-33/safe-smoke-20260925-02/performance-20260925-02` (query samples and stopped preview), `C:/Users/prime/mods-issue-33/approved-preview-3ea490229474` (move inventories, successful preview argv/streams/status/timings and canonical comparisons), and the new backup metadata. Local reports: `/tmp/mods-33-performance-retry.md`, `/tmp/mods-33-preview-settings-diagnosis.md`, `/tmp/mods-33-approved-archive-move-and-preview.md`. Two pre-product orchestration errors (ZIP-member assumption and later runner quoting) are retained separately; neither is a product defect or successful sample. No further remote work remains active.
+
+### Distribution provenance and remaining gates
+
+Read-only inspection of original native [run 36086098511](https://github.com/Reilley64/usvfs-rs/actions/runs/36086098511), exact revision `eb4949fb2439fe5b98901e2fb1afceee752a6133`, confirms successful packaging required a genuine matching collector report. The workflow uploaded only three packaged files, not its `usvfs-stage` or `reports/source-collection-status.json`. Logs do not contain that report's bytes; earlier locally retained collector reports bind different source hashes. The sole nonexpired release-preparation artifact does not recover the missing stage. This is an evidence-retention gap, not proof that library source is missing. No substitute collector report was created. Details: `/tmp/mods-33-collector-provenance.md`, `/tmp/mods-33-remaining-distribution-audit.md`.
+
+Still required before full acceptance:
+
+1. Successful managed execution, x86/x64 child/descendant lifecycle, cancellation/output and actual save routing. The native crash remains unresolved; no Rust binding defect or justified Rust-only fix was found. No fault replay or native edit was performed in this continuation.
+2. Genuine disconnected Rust consumer and native source rebuilds. Existing connected/cache-assisted and origin-blocked results remain separately credited. The supported native validator needs genuine matching stage inputs; request the original operator's unaltered run-36086098511 attempt-1 stage backup. If unavailable, producing fresh collector evidence requires a separate approved plan. No approved disconnected environment or safe control/recovery method is established; do not disconnect the SSH host.
+3. Clean stable ZIP install/run/remove and broader representative-workload measurements. Small-fixture conflict and preview timings are now recorded above; installation-commit and native/game performance remain unmeasured. Do not infer clean removal or stable-artifact behavior from candidate extraction/help or these previews.
+4. Approved Release Please/version outcome, real stable ZIP URL/hash, real Winget manifest/validation/install/remove and human-controlled initial submission. Aggregate remains `0.0.0`; publication gates remain disabled. No release, dispatch, merge, submission, fabricated manifest or credentials claim was made.
+5. Final committed-revision Windows CI and artifact-specific sign-off. The local test additions are not yet a clean committed Windows result. Keep #33 open and PR #103 partial/draft. Final manual review found no factual blockers in the new ledger checkpoint; the later measurement update was checked against the retained result records. No tracker changes or publication occurred.
+
+## Previous status — 2026-09-25 reconciliation
 
 - Reviewed HEAD: `23d5b9ae1a5ffad556de593eb619381228de4f39`. The worktree was clean before this documentation reconciliation. Only this ledger changed between runtime candidate `82467db4679587d698a2a6f953bfdae1543bfe62` and that HEAD. This establishes unchanged-code traceability, not a new-head package: the repaired ZIP remains an **82467db artifact**, SHA-256 `3a2fedb31e029b234b18f0c7e4508988422ce1679941d0878d049fbe9c32ac31`.
 - Current-head checks reported successful by the completion audit: [Windows CI](https://github.com/Reilley64/mods/actions/runs/36112545582/job/107999068031), [repository tools](https://github.com/Reilley64/mods/actions/runs/36112545789/job/107999068663), and [title](https://github.com/Reilley64/mods/actions/runs/36112543814/job/107999064853). Preview was intentionally skipped. Follow-up inspection of the run’s step metadata confirmed successful native-release validation, pinned-native fetch, x86 adapter compile/tests and Rust checks; these steps were not skipped. Raw step logs were not re-audited, and CI does not establish Windows 11 runtime acceptance. The earlier repair check recorded 415 Rust tests and 79 tooling tests; it is not a newly run HEAD check.

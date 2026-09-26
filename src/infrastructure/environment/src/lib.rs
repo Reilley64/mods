@@ -540,6 +540,7 @@ mod tests {
 	use application::ErrorCode;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
+	use application::ports::InitializationTargetAssessment;
 	use application::ports::ProfileSource;
 	use domain::EnvironmentRoot;
 	use domain::GameBinding;
@@ -648,6 +649,69 @@ mod tests {
 			.expect("temp must read")
 			.next()
 			.is_none());
+	}
+
+	#[test]
+	fn logs_only_root_is_available_and_preserved_by_initialization() {
+		let parent = temp_dir();
+		let root = environment_root(&parent.path().join("environment"));
+		let game = parent.path().join("game");
+		fs::create_dir(&game).expect("game dir must be created");
+		fs::create_dir_all(root.as_path().join("logs")).expect("logs must be created");
+		let log = root.as_path().join("logs/session.jsonl");
+		fs::write(&log, b"existing diagnostic fixture\n").expect("log must write");
+
+		let assessment = EnvironmentAdapter
+			.assess(&root, &CancellationToken::new())
+			.expect("logs-only root must be eligible");
+		assert!(matches!(assessment, InitializationTargetAssessment::Available));
+		EnvironmentAdapter
+			.publish(&root, plan(&game), &CancellationToken::new())
+			.expect("logs-only initialization must publish");
+
+		assert!(root.as_path().join("mods.toml").is_file());
+		assert_eq!(
+			fs::read(&log).expect("log must remain readable"),
+			b"existing diagnostic fixture\n"
+		);
+	}
+
+	#[test]
+	fn publication_failure_before_cache_keeps_manifest_staged_and_refuses_initialization() {
+		let parent = temp_dir();
+		let (root, root_dir, temp, _) = staged_initialization(&parent);
+		fs::write(root.as_path().join("cache"), b"publication obstruction")
+			.expect("cache obstruction must write");
+		let stage = root.as_path().join("temp/operation/stage");
+		let manifest_before = fs::read(stage.join("mods.toml")).expect("staged manifest must read");
+
+		let error = publish_initialization(&root_dir, &temp, &CancellationToken::new())
+			.expect_err("cache obstruction must stop publication");
+
+		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentPublicationFailed);
+		for name in ["mods", "profile", "overwrite"] {
+			assert!(root.as_path().join(name).is_dir());
+			assert!(!stage.join(name).exists());
+		}
+		assert!(stage.join("cache/Fallout - Invalidation.bsa").is_file());
+		assert!(!root.as_path().join("mods.toml").exists());
+		assert_eq!(
+			fs::read(stage.join("mods.toml")).expect("manifest must remain staged"),
+			manifest_before
+		);
+		assert_eq!(
+			fs::read(root.as_path().join("cache")).expect("obstruction must remain"),
+			b"publication obstruction"
+		);
+
+		let error = EnvironmentAdapter
+			.assess(&root, &CancellationToken::new())
+			.expect_err("partial publication must require manual cleanup");
+		assert_eq!(error.current_context().code(), ErrorCode::ManualCleanupRequired);
+		assert_eq!(
+			fs::read(stage.join("mods.toml")).expect("refusal must preserve manifest"),
+			manifest_before
+		);
 	}
 
 	#[test]

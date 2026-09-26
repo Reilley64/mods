@@ -132,6 +132,7 @@ mod tests {
 	use crate::steam;
 	use application::ErrorCode;
 	use rootcause::Result;
+	use std::collections::BTreeMap;
 	use std::fs;
 	use std::io::Error as IoError;
 	use std::io::Result as IoResult;
@@ -168,12 +169,19 @@ mod tests {
 		fs::create_dir_all(local_app_data.join("FalloutNV"))?;
 		fs::write(documents.join("My Games/FalloutNV/Fallout.ini"), b"[Archive]\n")?;
 		fs::write(local_app_data.join("FalloutNV/plugins.txt"), b"Example.esp\r\n")?;
+		fs::create_dir_all(documents.join("My Games/FalloutNV/Saves"))?;
+		fs::write(documents.join("My Games/FalloutNV/Saves/existing.fos"), b"save fixture")?;
+		let profile_before = file_inventory(&profile_root)?;
+		let game_before = file_inventory(&game)?;
+
 		let binding = steam::validate(&game)?;
 		let sources = adapter_with_profiles(documents, local_app_data)
 			.load_profile_sources(&binding, &CancellationToken::new())?;
 		assert_eq!(sources.files[0].contents, Some(b"[Archive]\n".to_vec()));
 		assert_eq!(sources.files[5].contents, Some(b"Example.esp\r\n".to_vec()));
 		assert_eq!(sources.fallout_default_ini, b"[Archive]\n");
+		assert_eq!(file_inventory(&profile_root)?, profile_before);
+		assert_eq!(file_inventory(&game)?, game_before);
 		drop(game_fixture);
 		Ok(())
 	}
@@ -213,6 +221,21 @@ mod tests {
 			Some(ErrorCode::OperationCancelled),
 		);
 		Ok(())
+	}
+
+	fn file_inventory(directory: &Path) -> IoResult<BTreeMap<PathBuf, Option<Vec<u8>>>> {
+		let mut inventory = BTreeMap::new();
+		for entry in fs::read_dir(directory)? {
+			let entry = entry?;
+			let path = entry.path();
+			if entry.file_type()?.is_dir() {
+				inventory.insert(path.clone(), None);
+				inventory.extend(file_inventory(&path)?);
+			} else {
+				inventory.insert(path.clone(), Some(fs::read(&path)?));
+			}
+		}
+		Ok(inventory)
 	}
 
 	fn fixture() -> Result<(TempDir, PathBuf)> {
