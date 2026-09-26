@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "mode": "advisory",
-  "model": "jev-1.13.0",
+  "model": "typesafe/jev-1.13",
   "styleFile": "CODING_STYLE.md",
   "tools": [
     "ipython",
@@ -49,5 +49,6 @@
     "linux-review-principles-retained-rust-conventions-over-linux-c-idioms": 0.395
   },
   "worktreeScope": "registered",
-  "additionalRoots": []
+  "additionalRoots": [],
+  "provider": "openrouter"
 }

@@ -1,16 +1,18 @@
 # coding-style-gate
 
-`coding-style-gate` is a project-local Prime Agent extension. It reviews Rust files changed by agent tools against `CODING_STYLE.md` with TypeSafe Jev.
+`coding-style-gate` is a project-local Prime Agent extension. It reviews Rust files changed by agent tools against `CODING_STYLE.md` with TypeSafe Jev through OpenRouter.
 
 ## Behavior
 
 The extension takes a snapshot of tracked and untracked, non-ignored Rust files before `ipython`, `edit`, or `bash` runs. It takes another snapshot after the tool completes and reviews only the resulting task-local changes. Existing dirty files that the tool does not change are not included.
 
-By default, each snapshot covers every worktree returned by `git worktree list` for the session repository. This includes edits made through absolute paths after an agent changes its process directory without changing Prime's session root. Each watched worktree uses its own review settings and style file; the session root still controls which roots are watched and whether findings are advisory or enforced. Explicit `additionalRoots` can include unrelated Git repositories. Every additional root must be an absolute path to the repository root; nested directories and arbitrary filesystem paths are rejected.
+By default, each snapshot covers every worktree returned by `git worktree list` for the session repository. This includes edits made through absolute paths after an agent changes its process directory without changing Prime's session root. Each watched worktree keeps its own style file, thresholds, enabled flag, and tool allowlist. The session model governs every request; the session root still controls which roots are watched and whether findings are advisory or enforced. Explicit `additionalRoots` can include unrelated Git repositories. Every additional root must be an absolute path to the repository root; nested directories and arbitrary filesystem paths are rejected.
 
 Likely violations are appended to the tool result, so the agent sees them before its next action. In both modes, `agent_end` reviews the complete task-baseline-to-current diff. Advisory mode reports the final result without blocking. Enforce mode retains earlier violations after later clean edits and catches changes that are present when the final snapshot is taken.
 
 Enforcement queues a task-bounded number of correction turns. If the code still fails, the extension asks the user to intervene instead of starting an infinite loop. A user can accept the exact current policy-and-code fingerprint with `/coding-style-gate override <reason>`. Any relevant code, policy, model, or threshold change invalidates that override.
+
+Before handing back, the receiving agent must fix and recheck each finding, or explicitly accept it with the file, rule, and reason. Accepted findings are not a clean review. Acceptance in a handoff does not clear enforce-mode blocks or replace the existing override mechanism. Review failures must be resolved and rechecked, or reported as blocked; they are not findings that can be accepted. This guidance is included in the receiving session's tool results and final-review messages. Advisory mode does not force another agent turn.
 
 The extension does not revert files. `rustfmt`, rustc, Clippy, and repository tests remain deterministic checks outside Jev.
 
@@ -25,7 +27,7 @@ bun install
 Set the API key in the environment that starts Prime Agent:
 
 ```text
-export TYPESAFE_API_KEY=...
+export OPENROUTER_API_KEY=...
 ```
 
 Do not put the key in this repository or in a Prime conversation.
@@ -51,15 +53,17 @@ The gate submits every item to Jev. Independent rubric questions that share a pa
 
 - `enabled`: enables tool and final checks;
 - `mode`: `advisory` reports tool and final-task findings, while `enforce` also starts bounded correction turns and keeps the snapshot marked blocked until it passes or the user overrides it;
-- `model`: pinned Jev model ID;
+- `model`: session-wide OpenRouter model. Defaults to `typesafe/jev-1.13`; the pinned response ID `typesafe/jev-1.13-20260917` is also accepted. Legacy `jev-1.13.0` normalizes to the default. Other session IDs fail configuration validation. Watched-root model values are ignored before validation;
 - `ruleThresholds`: required explicit Noul violation threshold for every rubric rule ID; there is no global fallback. Missing or invalid entries fail the review before an API request. The old scalar `threshold` setting is rejected;
 - `styleFile`: project-relative policy file;
 - `tools`: tool names observed for filesystem changes;
-- `timeoutMs`: timeout for each TypeSafe attempt;
+- `timeoutMs`: timeout for each OpenRouter attempt;
 - `maxConcurrency`: maximum number of file reviews in flight;
 - `maxFollowUps`: maximum automatic correction turns before the gate asks the user to intervene.
 - `worktreeScope`: `registered` watches every registered worktree; `session` watches only the session root.
 - `additionalRoots`: up to 16 absolute Git repository roots to watch in addition to the selected worktree scope.
+
+The backend is OpenRouter only, at `https://openrouter.ai/api` (the SDK appends `/v1/systemone`). The SDK is only a transport. Legacy `provider` fields are ignored. Only `OPENROUTER_API_KEY` is read; there is no direct API, environment URL override, key fallback, or model fallback. Authentication errors fail the review. Existing valid OpenRouter cache entries remain reusable; old direct-backend entries have a different identity and cannot match.
 
 Start in `advisory` mode. Calibrate rules and thresholds with representative good, bad, and exception cases before switching to `enforce`.
 
@@ -74,7 +78,7 @@ Start in `advisory` mode. Calibrate rules and thresholds with representative goo
 
 `check` reviews the complete task-local Rust diff. `reset` accepts the current filesystem state as the new task baseline without calling Jev. `override` accepts only the current code and policy fingerprint and records the reason.
 
-## Data sent to TypeSafe
+## Data sent to OpenRouter
 
 Each request contains:
 
@@ -122,7 +126,7 @@ configuration against it with:
 bun ./.prime/agent/extensions/coding-style-gate/calibration/run.ts
 ```
 
-These are live API commands requiring `TYPESAFE_API_KEY` and incurring usage.
+These live API commands incur usage and require `OPENROUTER_API_KEY`.
 Normal tests use MSW and never call the live API. Recalibrate when the model,
 rubric, evidence fields, or question construction changes. Historical comment-only
 observations remain in `calibration/comment-results.md` and `comment-audit.json`.
@@ -165,5 +169,15 @@ report/error; use the session receipts for historical coverage. Receipts cannot
 reconstruct reviews that happened before this change was loaded.
 
 Reload the agent extensions (or start a new agent session) to activate changes to
-the extension. Tests use the real extension callbacks with a mocked TypeSafe
+the extension. Tests use the real extension callbacks with a mocked OpenRouter
 endpoint; passing tests are not evidence of a live Jev review.
+
+## Persistent per-file inference cache
+
+Validated raw rule probabilities are stored under the Git common directory in `coding-style-gate-cache/v1`. Linked worktrees, reloads, and sessions share this local cache. Delete that directory to clear it. It is outside tracked source; records contain only a request hash, schema version, response model, and probabilities, never patches or credentials.
+
+Each key covers the complete submitted file request (including its diff, path, change kind, entry-point flag, module references, ordered questions, instructions, criteria and examples), requested model, backend identity and schema versions. Different diffs that reach the same final source are not equivalent. Unchanged file requests are reusable within larger reviews. Full-task and per-tool review coverage is unchanged.
+
+Thresholds are applied to raw scores on every review. Changing thresholds needs no inference for an otherwise identical request, but still invalidates an enforcement override. Cache hits spend zero new tokens; receipts count cached files independently. Invalid responses, failed requests, corrupt records and model mismatches are never accepted as clean reviews. Cache storage failures do not block successful inference. Only active requests are held in memory, and failed in-flight work is removed.
+
+OpenRouter response identity accepts the requested ID or the explicit documented mapping from `typesafe/jev-1.13` to `typesafe/jev-1.13-20260917`. Other revisions fail closed. The mapping version is part of the cache identity. Updating the inference request format requires bumping `REQUEST_VERSION`; changing the storage schema requires bumping `CACHE_VERSION`.

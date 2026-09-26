@@ -8,7 +8,7 @@ import { setupServer } from "msw/node";
 import codingStyleGate from "../index";
 
 const temporaryDirectories: string[] = [];
-const originalApiKey = process.env.TYPESAFE_API_KEY;
+const originalApiKey = process.env.OPENROUTER_API_KEY;
 const style = `# Coding style
 
 ## Comments and documentation
@@ -57,7 +57,7 @@ async function writeStyleFixture(root: string): Promise<void> {
 const reviewedFiles: string[] = [];
 
 const server = setupServer(
-	http.post("https://api.typesafe.ai/v1/systemone", async ({ request }) => {
+	http.post("https://openrouter.ai/api/v1/systemone", async ({ request }) => {
 		const body = (await request.clone().json()) as {
 			model: string;
 			questions: Record<string, unknown>;
@@ -79,7 +79,7 @@ const server = setupServer(
 );
 
 beforeAll(() => {
-	process.env.TYPESAFE_API_KEY = "test-key";
+	process.env.OPENROUTER_API_KEY = "test-key";
 	server.listen({ onUnhandledRequest: "error" });
 });
 afterEach(async () => {
@@ -89,8 +89,8 @@ afterEach(async () => {
 });
 afterAll(() => {
 	server.close();
-	if (originalApiKey === undefined) delete process.env.TYPESAFE_API_KEY;
-	else process.env.TYPESAFE_API_KEY = originalApiKey;
+	if (originalApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+	else process.env.OPENROUTER_API_KEY = originalApiKey;
 });
 
 type Handler = (event: any, context: any) => Promise<any> | any;
@@ -126,6 +126,104 @@ function fakePrime() {
 }
 
 describe("Prime coding style gate", () => {
+
+	for (const failure of [false, true]) {
+		test(`handoff guidance stays in the working session (${failure ? "review failure" : "findings"})`, async () => {
+			const root = await mkdtemp(join(tmpdir(), "coding-style-handoff-"));
+			temporaryDirectories.push(root);
+			await Bun.$`git init -q ${root}`;
+			await writeStyleFixture(root);
+			const path = join(root, "example.rs");
+			await writeFile(path, "fn run() {}\n");
+			const context = { cwd: root, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
+			const parent = fakePrime(), worker = fakePrime();
+			codingStyleGate(parent.api as never);
+			codingStyleGate(worker.api as never);
+			await parent.handlers.get("session_start")?.({}, context);
+			await worker.handlers.get("session_start")?.({}, context);
+			if (failure) {
+				server.use(http.post("https://openrouter.ai/api/v1/systemone", () => HttpResponse.json({}, { status: 401 })));
+			}
+			const event = { toolCallId: "worker-edit", toolName: "ipython", input: {} };
+			await worker.handlers.get("tool_call")?.(event, context);
+			await writeFile(path, "// Run the function.\nfn run() {}\n");
+			const result = await worker.handlers.get("tool_result")?.({ ...event, content: [] }, context);
+			const guidance = result.content.map((part: { text: string }) => part.text).join("\n");
+			expect(guidance).toContain("Before handing back");
+			if (failure) {
+				expect(guidance).toContain("resolve the review failure and rerun");
+				expect(guidance).toContain("explicitly report that review is blocked");
+				expect(guidance).toContain("no findings to accept");
+			} else {
+				expect(guidance).toContain("fix the code and recheck");
+				expect(guidance).toContain("explicitly accept the finding");
+				expect(guidance).toContain("file, rule, and reason");
+				expect(guidance).toContain("does not clear the block");
+			}
+			await worker.handlers.get("agent_end")?.({ messages: [] }, context);
+			expect(JSON.stringify(worker.sentMessages)).toContain("Before handing back");
+			expect(parent.entries).toHaveLength(0);
+			expect(parent.sentMessages).toHaveLength(0);
+			expect(parent.userMessages).toHaveLength(0);
+			expect(worker.userMessages).toHaveLength(0);
+			// The parent still performs its own full-task review when its callback runs.
+			await parent.handlers.get("agent_end")?.({ messages: [] }, context);
+			expect(JSON.stringify(parent.sentMessages)).toContain("Before handing back");
+		});
+	}
+
+
+	test("fresh extensions reuse per-file scores and threshold changes invalidate overrides only", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-persistent-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		await writeStyleFixture(root);
+		const configPath = join(root, ".prime", "agent", "coding-style-gate.json");
+		const config = { mode: "enforce", ruleThresholds, maxFollowUps: 4 };
+		await writeFile(configPath, JSON.stringify(config));
+		const path = join(root, "example.rs");
+		await writeFile(path, "fn run() {}\n");
+		const context = { cwd: root, signal: undefined, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
+		const prime = fakePrime(); codingStyleGate(prime.api as never);
+		await prime.handlers.get("session_start")?.({}, context);
+		await writeFile(path, "// Run the function.\nfn run() {}\n");
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		await prime.commands.get("coding-style-gate").handler("override accepted", context);
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(1);
+		await writeFile(configPath, JSON.stringify({ ...config, ruleThresholds: { "comments-and-documentation-reason-comments": 0.9 } }));
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(2);
+		expect(reviewedFiles).toHaveLength(1);
+		await writeFile(path, "fn run() {}\n");
+		const fresh = fakePrime(); codingStyleGate(fresh.api as never);
+		await fresh.handlers.get("session_start")?.({}, context);
+		await writeFile(path, "// Run the function.\nfn run() {}\n");
+		await fresh.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(fresh.entries.at(-1)?.data.cachedFiles).toBe(1);
+		expect(reviewedFiles).toHaveLength(1);
+	});
+
+
+	test("session model changes invalidate cached requests and enforcement overrides", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-model-change-")); temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`; await writeStyleFixture(root);
+		const path = join(root, "example.rs"), configPath = join(root, ".prime/agent/coding-style-gate.json");
+		const config = { mode: "enforce", model: "typesafe/jev-1.13", ruleThresholds, maxFollowUps: 4 };
+		await writeFile(configPath, JSON.stringify(config)); await writeFile(path, "fn run() {}\n");
+		const prime = fakePrime(); codingStyleGate(prime.api as never);
+		const context = { cwd: root, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
+		await prime.handlers.get("session_start")?.({}, context);
+		await writeFile(path, "// Run the function.\nfn run() {}\n");
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		await prime.commands.get("coding-style-gate").handler("override accepted", context);
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(1); expect(reviewedFiles).toHaveLength(1);
+		await writeFile(configPath, JSON.stringify({ ...config, model: "typesafe/jev-1.13-20260917" }));
+		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+		expect(prime.userMessages).toHaveLength(2); expect(reviewedFiles).toHaveLength(2);
+		expect(prime.entries.at(-1)?.data.cachedFiles).toBe(0);
+	});
 
 	test("allows missing-threshold overrides and invalidates them on source or config changes", async () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-missing-override-"));
@@ -548,7 +646,7 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "typesafe/jev-1.13", maxFollowUps: 1 }));
 		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
 		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
@@ -573,7 +671,7 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test" }));
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "typesafe/jev-1.13" }));
 		await writeStyleFixture(root);
 		await writeFile(join(root, "a.rs"), "fn a() {}\n");
 		await writeFile(join(root, "b.rs"), "fn b() {}\n");
@@ -610,7 +708,7 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "typesafe/jev-1.13", maxFollowUps: 2 }));
 		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
 		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
@@ -636,7 +734,7 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "typesafe/jev-1.13", maxFollowUps: 1 }));
 		await writeStyleFixture(root);
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -654,12 +752,12 @@ describe("Prime coding style gate", () => {
 
 
 	test("allows an explicit override after a review-service failure", async () => {
-		server.use(http.post("https://api.typesafe.ai/v1/systemone", () => new HttpResponse(null, { status: 503 })));
+		server.use(http.post("https://openrouter.ai/api/v1/systemone", () => new HttpResponse(null, { status: 503 })));
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "typesafe/jev-1.13", maxFollowUps: 2 }));
 		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
 		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
@@ -678,7 +776,7 @@ describe("Prime coding style gate", () => {
 
 		await writeFile(
 			join(root, ".prime", "agent", "coding-style-gate.json"),
-			JSON.stringify({ mode: "enforce", model: "jev-test", maxFollowUps: 2, ruleThresholds: { "comments-and-documentation-reason-comments": 0.81 } }),
+			JSON.stringify({ mode: "enforce", model: "typesafe/jev-1.13", maxFollowUps: 2, ruleThresholds: { "comments-and-documentation-reason-comments": 0.81 } }),
 		);
 		await prime.handlers.get("agent_end")?.({ messages: [] }, context);
 		expect(prime.userMessages).toHaveLength(2);
@@ -710,7 +808,7 @@ describe("Prime coding style gate", () => {
 		temporaryDirectories.push(root);
 		await Bun.$`git init -q ${root}`;
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 2 }));
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "typesafe/jev-1.13", maxFollowUps: 2 }));
 		await writeStyleFixture(root);
 		await writeFile(join(root, "example.rs"), "fn run() {}\n");
 		await Bun.$`git -C ${root} add .prime/agent/coding-style-gate.json CODING_STYLE.md example.rs`;
@@ -733,7 +831,7 @@ describe("Prime coding style gate", () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
 		await Bun.$`mkdir -p ${join(root, ".prime", "agent")}`;
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "jev-test", maxFollowUps: 1 }));
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ ruleThresholds, mode: "enforce", model: "typesafe/jev-1.13", maxFollowUps: 1 }));
 		await writeStyleFixture(root);
 		const prime = fakePrime();
 		codingStyleGate(prime.api as never);
@@ -750,3 +848,35 @@ describe("Prime coding style gate", () => {
 	});
 
 });
+
+for (const local of [{ model: "jev-1.13.0" }, { provider: "typesafe", model: "jev-1.13.0" }, { model: "unsupported/local-model" }, { model: "typesafe/jev-1.13-20260917" }]) {
+ test(`session OpenRouter governs registered legacy root ${JSON.stringify(local)}`, async () => {
+  const container = await mkdtemp(join(tmpdir(), "routing-regression-")); temporaryDirectories.push(container);
+  const root = join(container, "root"), linked = join(container, "linked");
+  await mkdir(root); await Bun.$`git init -q ${root}`; await writeStyleFixture(root);
+  await writeFile(join(root, "example.rs"), "fn run() {}\n");
+  await Bun.$`git -C ${root} add .`; await Bun.$`git -C ${root} -c user.name=Test -c user.email=test@example.invalid commit -qm baseline`;
+  await Bun.$`git -C ${root} worktree add -qb linked ${linked}`;
+  await writeFile(join(root, ".prime/agent/coding-style-gate.json"), JSON.stringify({ provider: "openrouter", model: "typesafe/jev-1.13", ruleThresholds }));
+  await writeFile(join(linked, "LOCAL.md"), style.replaceAll("Reason comments", "Local comments"));
+  await writeFile(join(linked, ".prime/agent/coding-style-gate.json"), JSON.stringify({ ...local, styleFile: "LOCAL.md", ruleThresholds: { "comments-and-documentation-local-comments": 0.99 } }));
+  const requests: any[] = []; let forbidden = 0;
+  server.use(http.post("https://api.typesafe.ai/v1/systemone", () => { forbidden++; return HttpResponse.json({}, { status: 400 }); }), http.post("https://openrouter.ai/api/v1/systemone", async ({ request }) => {
+   const body = await request.json() as any; requests.push(body);
+   return HttpResponse.json({ model: "typesafe/jev-1.13-20260917", answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: "noul", noul: 0.94 }])), usage: { input_tokens: 1, output_tokens: 1 } });
+  }));
+  process.env.OPENROUTER_API_KEY = "test-key";
+  const prime = fakePrime(); codingStyleGate(prime.api as never);
+  const context = { cwd: root, hasUI: false, ui: { notify() {} } };
+  await prime.handlers.get("session_start")?.({}, context);
+  await prime.handlers.get("tool_call")?.({ toolName: "edit", toolCallId: "routing" }, context);
+  for (const dir of [root, linked]) await writeFile(join(dir, "example.rs"), "// Run the function.\nfn run() {}\n");
+  await prime.handlers.get("tool_result")?.({ toolName: "edit", toolCallId: "routing", content: [] }, context);
+  await prime.handlers.get("agent_end")?.({ messages: [] }, context);
+  expect(forbidden).toBe(0);
+  expect(requests).toHaveLength(2);
+  expect(requests.every(body => body.model === "typesafe/jev-1.13")).toBe(true);
+  expect(requests.map(body => Object.keys(body.questions))).toContainEqual(["comments-and-documentation-local-comments"]);
+  for (const entry of prime.entries) expect(entry.data).toMatchObject({ outcome: "reviewed", findingCount: 1, filesReviewed: 2 });
+ });
+}
