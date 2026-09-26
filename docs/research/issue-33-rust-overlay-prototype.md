@@ -64,7 +64,7 @@ Next: review the isolated implementation before deciding whether to carry the de
 
 The design-candidate review found one minor standards issue: phase spacing in configuration validation and recorder fixtures. Seven blank lines were added; all non-whitespace source content is identical to `51efc0f`. `cargo fmt --all -- --check`, the seven focused configuration tests and `git diff --check` passed. Independent bounded re-review confirmed the original blocker resolved. Reports: `/tmp/mods-33-overlay-spacing-tests.log`, `/tmp/mods-33-overlay-spacing-review.md`. Earlier full-suite and Windows compile evidence belongs to the pre-spacing patch; it was not rerun for this whitespace-only correction.
 
-### Diagnostic policy decision (not implemented)
+### Diagnostic policy decision (implemented; runtime acceptance pending)
 
 Keep the existing analytical plugin projection and qualify every diagnostic surface. It is advisory analysis, not an observed game/usvfs view. It may differ from runtime visibility in membership, activation sources and ordering after the runtime metadata/Tombstone waiver. Do not call it "effective plugin configuration" or imply that the runtime ignores an entry absent from that projection.
 
@@ -82,8 +82,18 @@ Per-entry messages should say:
 - Tracing: label the list "advisory plugin projection", qualify order/activation as projected, and identify `basis=analytical_data` and `runtime_observed=false` rather than implying observed visibility.
 - Post-run Profile State validation warnings remain separate; they are not analytical plugin-availability warnings.
 
-Preserve existing warning variants/codes and MCP response shape. If implemented, equivalent qualifications must appear in CLI text, MCP text and trace events; do not rename only a heading while leaving absolute claims elsewhere. No diagnostic code was changed in this step.
+Preserve existing warning variants/codes and MCP response shape. Equivalent qualifications appear in CLI text, MCP text and trace events, rather than only renaming a heading while leaving absolute claims elsewhere. The separately approved diagnostic-only update applies these qualifications to CLI and MCP warning text and native tracing. Existing warning codes, variants, MCP structured schema, empty structured warnings array, child output, and status are preserved.
 
-Proposed separate implementation scope: existing warning rendering in CLI `runner.rs`, MCP `execution_output.rs`, and tracing in dependencies `execution_adapter/native.rs`; clarify projection-only contracts in `profile.rs` and `execution_preparation.rs`; update focused presentation assertions and the existing MCP contract-delta note. No algorithm, canonical-state, mapping, native, binding, pin or public-schema change. `/tmp/mods-33-plugin-diagnostic-policy.md` records the reviewed call chain and rejected second-projection alternative.
+Implemented diagnostic-only scope: existing warning rendering in CLI `runner.rs`, MCP `execution_output.rs`, and tracing in dependencies `execution_adapter/native.rs`; clarify projection-only contracts in `profile.rs` and `execution_preparation.rs`; update focused presentation assertions and the existing MCP contract-delta note. No algorithm, canonical-state, mapping, native, binding, pin or public-schema change. `/tmp/mods-33-plugin-diagnostic-policy.md` records the reviewed call chain and rejected second-projection alternative.
 
-Next: approve the bounded diagnostic-only edit before implementation. The isolated overlay implementation remains a design candidate, not an adopted implementation or verified crash repair.
+### Diagnostic update validation
+
+- Focused CLI checks: three tests passed using the existing fake execution port. MCP renderer check: one test passed, covering all warning variants and the unchanged structured result.
+- Correct prototype checkout: `bun run check` passed with **419 Rust tests and 71 tooling tests**, plus formatting, Clippy and dependency checks. Evidence: `/tmp/mods-33-diagnostic-update-prototype-full-check.log`. An earlier command ran in the repository root; `/tmp/mods-33-diagnostic-update-full-check.log` is discarded as evidence for this prototype.
+- Independent bounded review passed with no blockers: `/tmp/mods-33-diagnostic-update-review.md`. The three live style-gate findings were inspected, not overridden. The `profile.rs` documentation states externally required analysis/runtime/canonical-state contracts; it does not excuse tangled logic. The CLI dispatcher and MCP renderer signatures are unchanged presentation functions, so the application use-case parameter-order rule does not apply.
+- Windows compile-only checks passed: `cargo check --offline --locked --workspace --all-targets --target x86_64-pc-windows-msvc` (50.15s) and `cargo check --offline --locked --package infrastructure-dependencies --all-targets --target i686-pc-windows-msvc` (17.97s). Both compiled test targets without running them. These results now cover the Windows-only tracing change as well as the overlay adapter.
+- Exact base `86e9563bc5422f9afce47046fdc9df17c51a08d1`, combined seven-Rust-file patch SHA-256 `41c52675510fad2f2f53e8d12a30f59101e14ed3d8b926e422f697235ac9db93`, and final unchanged diff were verified. Pinned native archives, source marker, cached dependency revision and seven headers matched. No generated binding, native source or dependency was manually changed.
+
+Windows evidence: `C:/Users/prime/mods-issue-33/diagnostic-check-4812a048`; local report `/tmp/mods-33-diagnostic-update-windows-check.md`, full output `/tmp/diagnostic-check-4812a048-output.txt`. No tests/product/native entry points, mapping calls, game launch, debugger or fault replay ran on Windows. All remote commands finished.
+
+The approved diagnostic-only edit is complete in the isolated prototype. Next: review the candidate for any further adoption decision, keeping successful managed execution as a separate unverified requirement. No merge, release publication or crash-repair claim follows from these checks.

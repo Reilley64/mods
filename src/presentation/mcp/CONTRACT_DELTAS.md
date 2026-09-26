@@ -5,7 +5,7 @@
 - Rate limiting is omitted. Busy admission still uses the nonqueueing environment semaphore.
 - `environment_invalid` omits `details` for every tool. Five read-tool branches no longer require the obsolete `recovery` phase. No recovery is implied.
 - Complete valid UTF-8 child text is returned unchanged. It can contain paths or secrets printed by the child. Binary streams retain complete byte counts and SHA-256, without text.
-- Existing execution warnings without the provenance required by the historical structured union remain visible as MCP text content. The structured `warnings` array is not exhaustive. No line numbers, positions, files, or problems are fabricated.
+- Existing execution warnings without the provenance required by the historical structured union remain visible as MCP text content. The structured `warnings` array remains empty. No line numbers, positions, files, or problems are fabricated. Plugin warning text describes the advisory analytical Data projection, not observed runtime availability, activation, or order. Mappings use canonical Profile State independently of that projection. Stale entries identify their source list and leave runtime availability unestablished; unlisted entries use backing-file modification time only for projected order; duplicates use the first occurrence only in analysis and leave canonical files unchanged. The common warning states that virtual timestamps do not enforce projected order. Post-run Profile State validation warnings remain separate. Child status and captured stream metadata/text are unchanged.
 
 All other input/output wire shapes remain unchanged. Generated rmcp input schemas are checked against the reference input fixtures.
 

@@ -126,7 +126,7 @@ impl ExecutionAdapter {
 		.context(ErrorMarker::environment_invalid(Some("execution")))?;
 
 		for (order, plugin) in profile.plugins.iter().enumerate() {
-			tracing::info!(plugin = %plugin.path, order, activation_sources = ?plugin.activation_sources, "effective plugin configuration");
+			tracing::info!(plugin = %plugin.path, basis = "analytical_data", runtime_observed = false, projected_order = order, projected_activation_sources = ?plugin.activation_sources, "advisory plugin projection");
 		}
 
 		let mut warnings: Vec<_> = profile
