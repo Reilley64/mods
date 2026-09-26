@@ -214,15 +214,18 @@ impl ConfigureView for VirtualGameView {
 			mods_usvfs_link_directory(native.as_ptr(), source.as_ptr(), destination.as_ptr(), flags)
 		})
 	}
-	fn link_directory(&mut self, mapping: &PathMapping) -> Result<(), ExecutionError> {
+	fn link_directory(&mut self, mapping: &PathMapping, recursive: bool) -> Result<(), ExecutionError> {
 		let source = wide(mapping.source.as_os_str())?;
 		let destination = wide(mapping.destination.as_os_str())?;
+		let flags = if recursive { LINKFLAG_RECURSIVE } else { 0 };
 		let Some(native) = self.native else {
 			return Err(report!(ExecutionError));
 		};
 		// SAFETY: exclusive live session; checked terminated buffers live through the
-		// nonrecursive link call. No creation target or read files are changed by flags.
-		check(unsafe { mods_usvfs_link_directory(native.as_ptr(), source.as_ptr(), destination.as_ptr(), 0) })
+		// call. Flags come from the pinned header and never mark a creation target.
+		check(unsafe {
+			mods_usvfs_link_directory(native.as_ptr(), source.as_ptr(), destination.as_ptr(), flags)
+		})
 	}
 	fn link_file(&mut self, mapping: &PathMapping) -> Result<(), ExecutionError> {
 		let source = wide(mapping.source.as_os_str())?;
