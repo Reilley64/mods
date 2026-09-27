@@ -17,12 +17,21 @@ pub(crate) fn discover(
 	steam_roots: &[PathBuf],
 	cancellation: &CancellationToken,
 ) -> Result<Option<GameBinding>, ErrorMarker> {
+	discover_with_before_libraries(|_| {}, steam_roots, cancellation)
+}
+
+fn discover_with_before_libraries(
+	mut before_libraries: impl FnMut(&Path),
+	steam_roots: &[PathBuf],
+	cancellation: &CancellationToken,
+) -> Result<Option<GameBinding>, ErrorMarker> {
 	let mut first_invalid = None;
 	for steam_root in steam_roots {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
+		before_libraries(steam_root);
 		let libraries = match libraries(steam_root, cancellation) {
 			Ok(libraries) => libraries,
 			Err(error) if error.current_context().code() == ErrorCode::OperationCancelled => {
@@ -95,46 +104,40 @@ pub(crate) fn discover(
 #[cfg(test)]
 mod tests {
 	use super::discover;
-	use super::libraries;
+	use super::discover_with_before_libraries;
 	use application::ErrorCode;
 	use rootcause::Result;
 	use std::fs;
-	use std::io::Error as IoError;
-	use std::thread;
-	use std::time::Instant;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
 	#[test]
 	fn invalid_root_does_not_mask_later_library_discovery_cancellation() -> Result<()> {
 		let temp = TempDir::new()?;
-		let temp_root = fs::canonicalize(temp.path())?;
-		let invalid_root = temp_root.join("invalid-root");
+		let invalid_root = temp.path().join("invalid-root");
 		fs::write(&invalid_root, b"not a directory")?;
+		let cancelling_root = temp.path().join("cancelling-root");
+		let steam_roots = [invalid_root, cancelling_root.clone()];
 
-		let cancelling_root = temp_root.join("cancelling-root");
-		fs::create_dir_all(cancelling_root.join("steamapps"))?;
-		let entry = "\"1\"\n{\n\"path\" \"/unused\"\n}\n";
-		fs::write(
-			cancelling_root.join("steamapps/libraryfolders.vdf"),
-			format!("\"libraryfolders\"\n{{\n{}\n}}\n", entry.repeat(100_000)),
-		)?;
+		let without_cancellation = discover(&steam_roots, &CancellationToken::new());
+		assert_eq!(
+			without_cancellation
+				.as_ref()
+				.err()
+				.map(|error| error.current_context().code()),
+			Some(ErrorCode::GameInstallInvalid),
+		);
 
-		let started = Instant::now();
-		libraries(&cancelling_root, &CancellationToken::new())?;
-		let cancellation_delay = started.elapsed() / 2;
 		let cancellation = CancellationToken::new();
-		let cancellation_for_thread = cancellation.clone();
-		let canceller = thread::spawn(move || {
-			thread::sleep(cancellation_delay);
-			cancellation_for_thread.cancel();
-		});
-
-		let result = discover(&[invalid_root, cancelling_root], &cancellation);
-		canceller
-			.join()
-			.map_err(|_| IoError::other("cancellation thread panicked"))?;
-
+		let result = discover_with_before_libraries(
+			|steam_root| {
+				if steam_root == cancelling_root.as_path() {
+					cancellation.cancel();
+				}
+			},
+			&steam_roots,
+			&cancellation,
+		);
 		assert_eq!(
 			result.as_ref().err().map(|error| error.current_context().code()),
 			Some(ErrorCode::OperationCancelled),
