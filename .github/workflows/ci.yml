@@ -90,8 +90,9 @@ jobs:
       - run: echo "Main revision passed Rust and repository tool checks."
 
   preview:
-    # Disabled until complete corresponding source (including required static
-    # dependency source) is distributable. Registry references are insufficient.
+    # Disabled pending issue #33 acceptance and an explicit publication decision.
+    # The pinned unpublished candidate has corresponding-source inventory, but
+    # synthetic checks alone do not authorize a preview release.
     if: ${{ false }}
     needs: preview-ready
     runs-on: windows-latest

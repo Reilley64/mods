@@ -19,8 +19,8 @@ concurrency:
 
 jobs:
   stable:
-    # Remove false only after the clean disconnected rebuild evidence in
-    # docs/distribution.md is accepted. This is not a per-release approval gate.
+    # Keep disabled until issue #33 acceptance and explicit stable approval.
+    # The disconnected rebuild was owner-waived, not passed or required.
     if: ${{ false && (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) }}
     runs-on: windows-2022
     permissions:
