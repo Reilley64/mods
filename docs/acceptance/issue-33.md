@@ -1,6 +1,47 @@
 # Issue 33 acceptance evidence ledger
 
-Status (2026-09-27): **CLI-only MVP candidate built and bounded non-game checks in progress; not accepted for stable release.** The owner superseded the old two-executable #25/#33 contract. Current source head `96f0c91800d2cb6f2a9a8bef8668eceb60a86665` and its new unpublished CLI-only Windows ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c` are distinct from the historical two-binary ZIP. No controlled real-game run, real Known Folder import or stable/Winget sign-off is recorded. The older chronological evidence below remains historical and revision-bound.
+Status (2026-09-27): **CLI-only MVP candidate built; three outstanding bounded synthetic non-game scenarios now passed; not accepted for stable release.** The owner superseded the old two-executable #25/#33 contract. Current source head `96f0c91800d2cb6f2a9a8bef8668eceb60a86665` and its new unpublished CLI-only Windows ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c` are distinct from the historical two-binary ZIP. No controlled real-game run, real Known Folder import or stable/Winget sign-off is recorded. The older chronological evidence below remains historical and revision-bound.
+
+## Authorized non-game continuation — merge checkpoint
+
+The owner authorized completing all non-game #33 work and repairing/rerunning its
+checks without per-attempt approval. Game execution remains excluded. Fresh-root,
+protected-state, artifact-identity and process-drain checks remain required; stopped
+roots and their evidence are retained. This does not convert absent evidence into
+passes or bypass the human-controlled publication boundary.
+
+- Merged `origin/main` at `a37d17f` into `feat/issue-33-distribution` with merge
+  commit `3a07e2e9751158ff9b1dbcd95badf4ecf72a2429`, without conflicts, and pushed.
+- Local `bun run check` passed: 389 Rust tests and 100 tooling tests, with formatting,
+  Clippy and dependency checks. [Exact-head Windows CI 36358585344](https://github.com/Reilley64/mods/actions/runs/36358585344)
+  passed Rust/native x86 and tool checks; preview jobs were skipped.
+- The merge changes repository tooling/guidance, not the Rust product or pinned
+  native runtime. Current synthetic runs still identify the **existing** `96f0c91`
+  CLI-only ZIP; they are not evidence of a newly packaged merge revision.
+- Save controller v4 fixed empty process-list counting and used fresh root
+  `C:/Users/prime/r3cli-save-96f0c91-03`. Initialization succeeded, then the controller
+  stopped because it incorrectly required optional `FalloutCustom.ini`. No save
+  child ran. Retained `failure.json` identifies phase `profile-sentinel`; protected
+  before/after inventories match and neither the init PID nor named product/game
+  processes remain. Save v5 in fresh `-04` seeded the optional owned fixture, then
+  stopped when Windows PowerShell rejected `-File` under its execution policy;
+  helper code did not run. Protected snapshots matched and no product/recorded PID
+  remained. Neither attempt is a routing pass. The subsequent reviewed v6 attempt
+  used an in-memory command without changing host execution policy and required
+  the exact documented CLI advisory rather than incorrectly requiring empty stderr.
+  Save v6 in fresh `-05` reached its x64 helper but stopped before a save write at
+  a required-path assertion for absent physical `Documents/My Games`. Its protected
+  inventories matched and no product/recorded PID remained. Reviewed v7 resolved
+  this controller overconstraint and passed in fresh `-06`, as recorded below; v6
+  remains a stopped attempt, not a routing pass. No real folders were created.
+
+- Commit/conflict v3 in `C:/Users/prime/r3cli-commit-96f0c91-02` stopped after
+  the first successful quiet normal install. Its controller metadata-key regex
+  rejected the digits in `archive_sha256`; the key and bytes agree with the pinned
+  writer. Protected before/failure inventories match; no product or recorded PID
+  remained. The partial root is retained. Reviewed v4 repaired the regex while
+  keeping the closed field allowlist and exact provenance checks, and passed in
+  fresh `-03`, as recorded below. The v3 stop is not a full install/conflict pass.
 
 ## Active tasklist — CLI-only non-game issue #33 work
 
@@ -13,20 +54,44 @@ Status (2026-09-27): **CLI-only MVP candidate built and bounded non-game checks 
 - [x] Recheck retained distribution ZIP and adjacent `SHA256SUMS`; independently compare all four native runtime files and seven `licenses/native-release/` notices byte-for-byte to the pinned rs.2 bundle. Root/project notice texts match the committed checkout after the documented CRLF-only transform; see `/tmp/mods33-cli-only-notice-provenance-audit.md`. This is not legal sign-off.
 - [x] Verify CLI-only package-native x64 then x86 synthetic Virtual Game View reads in retained `C:/Users/prime/r3cli-native-96f0c91-03/evidence/` (script SHA-256 `60f6d792a5a3efdca3dba6228289d3f182763aa8331a39e795fda6109484b64d`): both owned cache reads returned 36 bytes and SHA-256 `9670d8f38320f7729cd5e184b37e30c47e35f96460e2c9b9122aea95dce54d3b`, exit 0, only the exact documented `load_order_not_enforced` advisory, no physical game target or process; protected inventories unchanged. Earlier `-01`/`-02` controller stops are retained and **not** native passes. No real game launch.
 - [x] Verify new ZIP packaged CLI fail-closed statuses in retained `C:/Users/prime/r3cli-error-96f0c91-03/evidence/` (script SHA-256 `e220a2895260578f9b672d9974053dd1de1e0ced79b30db7be96f1a540a8a0df`): isolated owned cases returned exact 125 `output_target_not_found`, 126 `program_unsupported`, 127 `program_not_found`, empty stdout and exact stderr. Canonical environment and protected inventories matched, no process remained. Earlier `-02` controller stopped **before product execution** at the ZIP's harmless `./` prefix; its root/receipt are retained, not an error-status pass.
-- [ ] Complete a representative new-ZIP owned non-dry normal/FOMOD commit and active conflict-winner check. Unstaged v1 controller received safety and semantic **NO-GO**. Its one bounded v2 repair (SHA-256 `e8db08e92230d3adf9ec844d68a31b40a8a2faf3188fcd5612e81b1866b90cc6`) passed target PS7 parse/AST and static safety review, but final semantic review is **NO-GO**: FOMOD metadata version is not checked against the pinned fixture's exact `5.0`. Stop the repair cycle and request owner direction. Any later run also needs explicit approval of this host's elevated/Admin-owner/reill-writable ACL exception and one owned `profile/modlist.txt` activation, native no-follow path probes and fresh-root/protected preflight. **No commit/conflict product command ran.**
-- [ ] Complete candidate-specific user-level synthetic save routing only if another fresh-root, reviewed attempt is authorized. Save v3 (SHA-256 `39198612f8d0f4e5ec8cb7a256a21c4c02a27985f0e53ee583897a763f76db61`) stopped at a pre-creation PowerShell process-list `.Count` error; `C:/Users/prime/r3cli-save-96f0c91-02` remains **absent**. No product command ran or process remained; external protected inventory matched. This is **not** save-routing evidence. The bounded repair cycle needs owner direction.
-- [ ] Complete candidate-specific x64/x86 descendant lifetime only if another fresh-root, reviewed attempt is authorized. Descendant v3 (SHA-256 `d6be8cf09743d40617cdd070f285ba14957f4f4cf843e4576481ebedf8488882`) stopped **after x64, before x86** in retained `C:/Users/prime/r3cli-desc-96f0c91-02/evidence/`: root status 37, child start/end markers and elapsed timing appeared in raw x64 output, but Windows PowerShell CLIXML progress joined the stderr marker and failed its exact-line gate. Child OS status was not observed; x86 did not run. Named product and child PID 29636 are absent; canonical/protected/external snapshots match. This is **not** a descendant pass.
+- [x] Candidate-specific non-dry normal/FOMOD commits and active conflict-winner checks passed in fresh `C:/Users/prime/r3cli-commit-96f0c91-03/evidence/`. Reviewed controller v4 SHA-256 `bf85daeaebcdcf0ba5c7672bff97e4549d157e8305e486f9d28187d1dc49c38d` repaired digit-bearing metadata keys while preserving exact FOMOD `5.0`, closed field sets and source/member hashes. Seven CLI calls exited 0: init, three quiet commits and conflict list/inspect/explain. Red FOMOD payload and B priority 1 over A priority 0 matched pinned bytes and expected comparisons. All 20 protected snapshots (including baseline) matched; no named product or recorded PID remained. The approved elevated/Admin-owner/`reill` host exception and **one owned modlist fixture edit** remain explicit limitations; activation is not a CLI command. Native no-follow/ACL checks ran. Raw metadata/query streams were audited. The receipt phrase “Native Windows execution ... not covered” means game launch/managed VFS execution, not these native Windows CLI calls. Earlier v1/v2 static stops and v3 partial `-02` root remain retained, not passes. No real game or Known Folder write occurred.
+- [x] Candidate-specific x64 synthetic save routing passed in fresh `C:/Users/prime/r3cli-save-96f0c91-06/evidence/`. Reviewed controller v7 SHA-256 `cb6a7a13b4a0366fc398bc5b66d2edda8ebf9e05d845370cfc4593f075ca9af2` preserved physical-path checks and required exact virtual witness/save leaves, while allowing only the two mapped virtual identity ancestors to be absent. The exclusive `CreateNew` helper wrote one 57-byte sentinel to owned `profile/saves`; SHA-256 `3b02a0eb10f11dd0b1d4ccee8e6fe40cd1f91ff5065dfcf5087f90b0a4633076`, exact output and advisory, unchanged protected/synthetic inventories and drained product processes passed. Earlier v3–v6 stops remain retained separately. This is one x64 user-level witness, **not x86 save routing, real-game save compatibility or release acceptance**.
+- [x] Candidate-specific ordered x64/x86 descendant marker/drain scenario passed in fresh `C:/Users/prime/r3cli-desc-96f0c91-03/evidence/`. Reviewed controller v4 SHA-256 `1b8ab750d6abd36bec1bb4305cfa83d19f3c2b88af26a1ffb088f4bed16cc25a` suppressed PowerShell progress in its parent/child payloads without relaxing marker assertions. Both managed roots returned 37; child start/end, bounded stream completion and process absence passed; all 12 protected snapshots (including baseline) matched. Canonical before/after checks passed. Child OS status remains **not observed**; `endUtc` is post-stream-drain timing, not independent internal Job accounting proof. The v3 stopped `-02` root remains retained, not upgraded to a pass. No game ran.
 
 No stopped root is reused and no old two-binary or MCP runtime receipt transfers to the CLI-only ZIP.
 - [x] Pass a separate CLI-only clean-target lifecycle in fresh `C:/Users/prime/r3cli-lifecycle-96f0c91-01/evidence/` (reviewed script SHA-256 `bbbf7ec4f83780da9731986c03e1c654d345724ad87cd20628d7460648ae8c2f`): all 24 files verified before/after extraction, packaged `mods.exe --help` and `--version` exit 0 with bounded streams and empty stderr, unchanged protected inventories, no process, then remove **only** newly created `install/` on success. Evidence root and earlier stopped roots remain retained. `config list` is covered by the separate portable synthetic run, not this clean target.
-- [ ] Reconcile this live ledger and draft PR #103 with exact CLI-only CI, artifact and non-game results, retain `Refs #33`, and recheck protected state, clean worktree, open issue and disabled publication gates. Existing real Known Folder import sources are absent on the designated Windows account; do not create them.
+- [x] Reconciled this live ledger and draft PR #103 with exact merge CI, pinned artifact, passing fresh-root scenarios and retained stops; `Refs #33` remains. Final host inspection independently rehashed the ZIP and save sentinel, matched synthetic snapshots, confirmed absent real Known Folder source trees and no named product/game processes. Enabled merge-head CI and final local checks passed; source import and publication prerequisites remain explicitly blocked. The docs-only reconciliation commit must still receive its own CI result; do not relabel it as new full Windows/package evidence. Issue #33 remains open, PR #103 draft, publication gates unchanged.
+
+### Non-game continuation outcome
+
+All three previously stopped candidate-specific synthetic scenarios now have passing
+fresh-root evidence: ordered x64/x86 descendant observations, normal/FOMOD commit and
+active conflict checks, and x64 save routing. These are controller repairs, not Rust
+product changes. External controllers and raw records remain retained on the designated
+Windows host; the result/root/script identities are in the active tasklist above.
+Local `bun run check` passed again (389 Rust, 100 tools). Protected snapshots and recorded
+PID checks were independently inspected after each run. No game, real user-folder write,
+new release artifact, gate enablement, or publication occurred. Source import and public
+stable/Winget acceptance remain unavailable/gated, not silently waived.
+
+### Non-game release-readiness audit
+
+The bounded workflow/package audit found no new distribution-code blocker. Existing
+source/notices/checksum, connected consumer rebuild and owned portable lifecycle
+evidence remain scoped to `96f0c91`. No new package was built after the tooling merge.
+Release Please is enabled and has open PR #36 proposing aggregate `0.1.0`; this is
+not publication approval. Preview upload, stable asset publication and Winget jobs
+remain false-gated. Public stable install/remove and the human Winget bootstrap
+require the actual approved public artifact; no placeholder manifest or guessed
+URL/checksum was created. Real Known Folder import remains unverified because the
+designated account has no source trees; none were created for this test.
 
 ## Live CLI-only scenario crosswalk (2026-09-27 scope)
 
 | MVP area | Current bounded evidence | Remaining limit or action |
 |---|---|---|
-| CLI initialization, settings, normal/FOMOD preview and fail-closed errors | New `96f0c91` package passed five portable synthetic calls plus exact 125/126/127 owned fail-closed cases in fresh roots; raw streams and protected snapshots retained. | Candidate-specific non-dry normal/FOMOD commit and active conflict-winner smoke remains; no real install, profile source import or game launch. |
-| Managed Virtual Game View, native x86/x64 adapters, Profile State and save routing | Published rs.2 pins, current package/native-source audits, fresh connected CLI consumer build and new ZIP bounded x64/x86 synthetic Virtual Game View reads passed. Historical two-binary runtime stays separate. | Descendant x64 produced partial markers/status but its controller stopped on CLIXML stderr; x86 did not run. Save controller stopped before creating its root; neither is a pass. Further repairs need owner direction. Controlled real game/profile/save evidence remains separately authorized and blocked here. |
+| CLI initialization, settings, normal/FOMOD preview and fail-closed errors | New `96f0c91` package passed five portable synthetic calls plus exact 125/126/127 owned fail-closed cases in fresh roots; raw streams and protected snapshots retained. | Fresh owned non-dry normal/FOMOD commits and active conflict-winner smoke passed; activation was one explicit owned fixture edit, not a CLI verb. Real Known Folder source import and game launch remain unverified. |
+| Managed Virtual Game View, native x86/x64 adapters, Profile State and save routing | Published rs.2 pins, current package/native-source audits, fresh connected CLI consumer build and new ZIP bounded x64/x86 synthetic Virtual Game View reads passed. Historical two-binary runtime stays separate. | Fresh ordered x64/x86 descendant parent-status/marker/drain observations and one x64 synthetic save-routing witness passed after reviewed controller repairs. Child OS exit status and internal Job accounting were not independently measured. Controlled real game/profile/save evidence remains excluded and unverified. |
 | CLI diagnostics and cancellation | Exact-head CLI automated tests cover diagnostics off/setup-failure and cancellation/pending refusal after MCP removal. CLI Ctrl+C remains **owner-waived/unverified**; MCP diagnostics/cancellation are deferred to #105. | Do not transfer MCP protocol evidence into MVP acceptance; no additional ZIP fault-injection harness is authorized. |
 | Distribution and release | New ZIP, source audits, connected consumer build and portable synthetic preview passed within their stated scopes; enabled exact-head Windows CI passed. | Separate clean-target extraction, CLI help/version and owned install removal passed; disconnected rebuild is waived/skipped. Stable public version, release approval, public clean-target install and human Winget bootstrap remain gated. |
 
