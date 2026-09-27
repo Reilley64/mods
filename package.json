@@ -12,7 +12,7 @@
     "dependency:check": "bun scripts/check-dependency-graph.ts",
     "test": "bun run test:rust && bun run test:tools",
     "test:rust": "cargo nextest run --workspace --all-targets",
-    "test:tools": "bun test tests ./.prime/agent/extensions/coding-style-gate/tests",
+    "test:tools": "bun test tests ./.prime/agent/extensions/coding-style-gate/tests ./.prime/agent/extensions/codex-discovery-version/tests",
     "check:pr-title": "bun scripts/validate-pr-title.ts"
   },
   "dependencies": {

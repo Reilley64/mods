@@ -4,6 +4,8 @@
 target/
 dist/
 node_modules/
+__pycache__/
+*.py[cod]
 native/artifacts/
 *.log
 .env
