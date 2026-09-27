@@ -1,10 +1,27 @@
 # Issue 33 acceptance evidence ledger
 
-Status: **incomplete; no full controlled Windows 11 or stable-distribution sign-off is recorded.** The current summary below reconciles retained evidence. The following chronological checkpoints and grouped audit matrix preserve historical pending states; they are not the current status authority.
+Status: **partial acceptance; no game-launch compatibility or stable-distribution sign-off is recorded.** The final-ZIP summary immediately below is the current status authority. The later chronological checkpoints and grouped audit matrix preserve historical states, not current pending claims.
 
-## Current status — bounded managed-execution repair
+## Current status — exact `86ccd431841bb8ac85d453f35ba00ac1a1d6c8ab` ZIP
 
-**Partial acceptance only.** The repaired x64 candidate now passes the unchanged managed-child marker and a virtual Data-file read. x86 child execution, descendant lifecycle, cancellation, save routing, stable distribution and broader acceptance remain unverified. The owner waived the disconnected-rebuild check; it is skipped, not passed. Native usvfs, generated bindings and release pins remain unchanged; the bounded Rust repair normalizes filesystem path copies only at the existing native adapter boundary.
+The final Windows ZIP is `C:/Users/prime/r2dist-86ccd43/mods-86ccd431841bb8ac85d453f35ba00ac1a1d6c8ab-x86_64-pc-windows-msvc.zip`, SHA-256 `fdb191dcabd2983489368881e009f344ad81cc7f4a04a3c272cf8ba8129002e9`. This ZIP contains both executables and the pinned, published `usvfs-0.5.7.2-rs.2` native assets. The `rs.1` tag and assets remain unchanged. Exact-head CI, package/source inventory and the connected consumer rebuild passed. Clean ZIP extraction, read-only startup of both executables and removal passed; this was not a stable installer or game run. The disconnected rebuild was **waived, not passed**. Evidence: `C:/Users/prime/r2final-86ccd43`, `C:/Users/prime/r2dist-86ccd43`, and `C:/Users/prime/r2portable2-86ccd43/result.json`.
+
+| Final-ZIP scenario | Observed result | Retained evidence |
+|---|---|---|
+| Ordered x64 then x86 Virtual Game View reads | Passed against owned synthetic inputs; the real Game Installation inventory was unchanged. This is not a game-launch test. | `C:/Users/prime/r2final-86ccd43/product-validation-01/evidence/result.json` |
+| Ordered x64 then x86 descendant lifecycle | Passed: managed parent status 37, child start/end markers and complete process drain. | `C:/Users/prime/r2desc2-86ccd43/evidence/result.json` |
+| Synthetic save routing | Passed: one 41-byte sentinel appeared only in Mod Environment-owned Profile State, not real Documents. This does not establish game-save compatibility. | `C:/Users/prime/r2save2-86ccd43/evidence/result.json` |
+| Packaged MCP cancellation and recovery | Passed the bounded request: cancelled child exited before natural completion, no cancelled response, no progress after the barrier, later managed execution returned exact UTF-8 metadata, MCP exited 0. This does not establish every host's Stop behavior. | `C:/Users/prime/r2mcp-cancel4-86ccd43/evidence/result.json`; three earlier stopped roots remain retained |
+| Packaged CLI error statuses | Passed: setup refusal 125 (`output_target_not_found`), resolved unsupported owned file 126 (`program_unsupported`), missing owned file 127 (`program_not_found`); exact stderr and empty stdout. No game was launched. | `C:/Users/prime/r2negative-86ccd43/evidence/result.json` and per-case raw streams |
+| Packaged MCP concurrent stream metadata | Passed in one stdio session: valid UTF-8 stdout/stderr retained exact text, bytes and SHA-256; invalid UTF-8 stdout/stderr reported bytes/SHA-256 with `binary_output: true` and no `text` key. Each stream exceeded 128 KiB; child, capture spool and MCP drained. | `C:/Users/prime/r2binary-mcp-86ccd43/evidence/result.json` and `server.jsonl` |
+
+The final-ZIP cases above used fresh, owned synthetic Mod Environments. Full real Game Installation and relevant Known Folder baselines matched after the packaged error/output runs; the earlier scenario-specific protected snapshots also matched. No FalloutNV.exe was launched and no real Game Installation write was authorized. CLI Ctrl+C is **owner-waived and unverified, not passed**. A harmless no-signal private-console probe stopped at `AttachConsole` error 6 in `C:/Users/prime/r2cli-console-probe-86ccd43`; it sent no signal and launched no mods process. Do not substitute stdin ETX, Ctrl+Break or process killing for this waiver.
+
+Remaining: record representative workload measurements and the other scenario-level evidence still pending in the historical matrix before any full acceptance claim. Controlled game-launch compatibility and stable distribution/Winget sign-off are not established. Keep PR #103 draft, issue #33 open, and stable publication/submission disabled.
+
+## Historical checkpoint — bounded managed-execution repair
+
+**At this earlier checkpoint, partial acceptance only.** The repaired x64 candidate passed the unchanged managed-child marker and a virtual Data-file read. x86 child execution, descendant lifecycle, cancellation and save routing had not yet been checked. The owner waived the disconnected-rebuild check; it was skipped, not passed. Native usvfs, generated bindings and release pins were unchanged at that checkpoint; the bounded Rust repair normalized filesystem path copies only at the existing native adapter boundary.
 
 ### Adopted candidate ordinary runtime acceptance — failed
 
