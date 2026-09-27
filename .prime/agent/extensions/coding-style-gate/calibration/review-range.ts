@@ -1,4 +1,4 @@
-import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { createReviewClient } from "../provider";
 
 import { loadConfig, validateRuleThresholds } from "../config";
 import { loadStyleRules } from "../policy";
@@ -28,12 +28,7 @@ if (rules.length === 0) {
 }
 validateRuleThresholds(config.ruleThresholds, rules);
 const report = await reviewChanges(
-	new TypeSafeClient({
-		defaultModel: config.model,
-		logLevel: "warn",
-		retry: { maxRetries: 1 },
-		timeout: config.timeoutMs,
-	}),
+	createReviewClient(config),
 	changes,
 	rules,
 	{
@@ -49,7 +44,7 @@ console.log(
 			range: { requestedBase: base, effectiveBase, head },
 			ruleFilter: ruleFilter ?? null,
 			model: report.model,
-			ruleThresholds: config.ruleThresholds,
+		ruleThresholds: config.ruleThresholds,
 			filesReviewed: report.filesReviewed,
 			findings: report.findings.map((finding) => ({
 				file: finding.file,

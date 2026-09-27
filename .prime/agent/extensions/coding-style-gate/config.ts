@@ -21,7 +21,7 @@ export interface GateConfig {
 export const DEFAULT_CONFIG: GateConfig = {
 	enabled: true,
 	mode: "advisory",
-	model: "jev-1.13.0",
+	model: "typesafe/jev-1.13",
 	ruleThresholds: {},
 	styleFile: "CODING_STYLE.md",
 	tools: ["ipython", "edit", "bash"],
@@ -32,7 +32,7 @@ export const DEFAULT_CONFIG: GateConfig = {
 	additionalRoots: [],
 };
 
-export async function loadConfig(root: string): Promise<GateConfig> {
+export async function loadConfig(root: string, sessionModel?: string): Promise<GateConfig> {
 	const path = join(root, ".prime", "agent", "coding-style-gate.json");
 	let value: Partial<GateConfig> = {};
 	try {
@@ -47,7 +47,11 @@ export async function loadConfig(root: string): Promise<GateConfig> {
 		throw new Error("coding-style-gate: legacy threshold is unsupported; migrate to explicit ruleThresholds for every style rule");
 	}
 
-	const config = { ...DEFAULT_CONFIG, ...value };
+	// Legacy provider fields have no routing authority. Override local models before validation.
+	const { provider: _legacyProvider, ...local } = value as Partial<GateConfig> & { provider?: unknown };
+	const config = { ...DEFAULT_CONFIG, ...local };
+	config.model = sessionModel ?? config.model;
+	if (config.model === "jev-1.13.0") config.model = DEFAULT_CONFIG.model;
 	const normalizedStyleFile = typeof config.styleFile === "string" ? normalize(config.styleFile) : "";
 	if (config.mode !== "advisory" && config.mode !== "enforce") {
 		throw new Error(`coding-style-gate: invalid mode ${String(config.mode)}`);
@@ -56,8 +60,8 @@ export async function loadConfig(root: string): Promise<GateConfig> {
 	if (typeof config.enabled !== "boolean") {
 		throw new Error("coding-style-gate: enabled must be a boolean");
 	}
-	if (typeof config.model !== "string" || !/^[a-zA-Z0-9._:-]{1,100}$/.test(config.model)) {
-		throw new Error("coding-style-gate: model must be a safe model identifier");
+	if (!["typesafe/jev-1.13", "typesafe/jev-1.13-20260917"].includes(config.model)) {
+		throw new Error("coding-style-gate: unsupported OpenRouter model; use typesafe/jev-1.13 or typesafe/jev-1.13-20260917");
 	}
 	if (
 		typeof config.styleFile !== "string" ||

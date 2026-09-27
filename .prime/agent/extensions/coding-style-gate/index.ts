@@ -1,10 +1,11 @@
-import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { createReviewClient } from "./provider";
+import { cacheDirectory } from "./cache";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 
 import { type GateConfig, loadConfig, validateRuleThresholds } from "./config";
 import { reviewFingerprint, snapshotFingerprint } from "./fingerprint";
-import { formatReview } from "./format";
+import { formatReview, formatReviewFailure } from "./format";
 import { reviewChanges, type StyleReviewReport } from "./reviewer";
 import { loadStyleRules } from "./policy";
 import type { StyleRule } from "./rules";
@@ -20,11 +21,11 @@ import {
 
 const MESSAGE_TYPE = "coding-style-gate";
 const RECEIPT_TYPE = "coding-style-gate-receipt";
-const BEFORE_SNAPSHOT_FAILED = "coding-style-gate could not capture the before-tool snapshot; this tool's Rust changes were not reviewed. Use /coding-style-gate status for details.";
-const AFTER_SNAPSHOT_FAILED = "coding-style-gate could not capture the after-tool snapshot; this tool's Rust changes were not reviewed. Use /coding-style-gate status for details.";
-const FINAL_SNAPSHOT_FAILED = "coding-style-gate could not capture the final snapshot; full-task Rust changes were not reviewed. Use /coding-style-gate status for details.";
-const BASELINE_SNAPSHOT_FAILED = "coding-style-gate could not capture the session baseline snapshot; full-task review is unavailable. Use /coding-style-gate status for details.";
-const REVIEW_FAILED = "coding-style-gate could not review the Rust changes. Use /coding-style-gate status for details.";
+const BEFORE_SNAPSHOT_FAILED = formatReviewFailure("coding-style-gate could not capture the before-tool snapshot; this tool's Rust changes were not reviewed. Use /coding-style-gate status for details.");
+const AFTER_SNAPSHOT_FAILED = formatReviewFailure("coding-style-gate could not capture the after-tool snapshot; this tool's Rust changes were not reviewed. Use /coding-style-gate status for details.");
+const FINAL_SNAPSHOT_FAILED = formatReviewFailure("coding-style-gate could not capture the final snapshot; full-task Rust changes were not reviewed. Use /coding-style-gate status for details.");
+const BASELINE_SNAPSHOT_FAILED = formatReviewFailure("coding-style-gate could not capture the session baseline snapshot; full-task review is unavailable. Use /coding-style-gate status for details.");
+const REVIEW_FAILED = formatReviewFailure("coding-style-gate could not review the Rust changes. Use /coding-style-gate status for details.");
 
 interface PendingSnapshot {
 	config: GateConfig;
@@ -104,7 +105,6 @@ function runWasAborted(messages: readonly unknown[]): boolean {
 export default function codingStyleGate(pi: ExtensionAPI): void {
 	const pendingSnapshots = new Map<string, PendingSnapshot>();
 	const failedSnapshots = new Set<string>();
-	const reviewCache = new Map<string, Promise<StyleReviewReport>>();
 	const state: GateState = {};
 	let reviewTail = Promise.resolve();
 
@@ -153,34 +153,22 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 			return undefined;
 		}
 
-		let request = reviewCache.get(prepared.fingerprint);
-		const cached = request !== undefined;
-		if (request === undefined) {
-			const client = new TypeSafeClient({
-				defaultModel: config.model,
-				logLevel: "warn",
-				retry: { maxRetries: 1 },
-				timeout: config.timeoutMs,
-			});
-			request = reviewChanges(client, prepared.changes, prepared.rules, {
+		try {
+			const report = await reviewChanges(createReviewClient(config), prepared.changes, prepared.rules, {
 				maxConcurrency: config.maxConcurrency,
 				moduleReferences: prepared.moduleReferences,
 				model: config.model,
+				cacheDirectory: await cacheDirectory(root),
 				ruleThresholds: config.ruleThresholds,
 				signal,
 			});
-			reviewCache.set(prepared.fingerprint, request);
-		}
-
-		try {
 			return {
 				fingerprint: prepared.fingerprint,
-				report: await request,
+				report,
 				files: prepared.changes.map((change) => change.path),
-				cachedFiles: cached ? prepared.changes.length : 0,
+				cachedFiles: report.cachedFiles ?? 0,
 			};
 		} catch (error) {
-			reviewCache.delete(prepared.fingerprint);
 			throw new ReviewFailure(errorText(error), prepared.fingerprint);
 		}
 	}
@@ -209,7 +197,7 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 			if (diffRustSnapshots(beforeSnapshot, afterSnapshot).length === 0) {
 				continue;
 			}
-			const rootConfig = root === after.primaryRoot ? config : await loadConfig(root);
+			const rootConfig = root === after.primaryRoot ? config : await loadConfig(root, config.model);
 			if (!rootConfig.enabled || (toolName !== undefined && !rootConfig.tools.includes(toolName))) {
 				continue;
 			}
@@ -625,7 +613,7 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 			const override = state.override ? ` Override: ${state.override.reason}` : "";
 			reportToUser(
 				ctx,
-				`coding-style-gate is ${config.enabled ? "enabled" : "disabled"} in ${config.mode} mode; TypeSafe credentials ${process.env.TYPESAFE_API_KEY ? "available" : "missing"}; model ${config.model}; ${Object.keys(config.ruleThresholds).length} explicit rule threshold(s). ${summary}${state.lastError ? ` Last error: ${state.lastError}` : ""}${override}`,
+				`coding-style-gate is ${config.enabled ? "enabled" : "disabled"} in ${config.mode} mode; OpenRouter credentials ${process.env.OPENROUTER_API_KEY ? "available" : "missing"}; model ${config.model}; ${Object.keys(config.ruleThresholds).length} explicit rule threshold(s). ${summary}${state.lastError ? ` Last error: ${state.lastError}` : ""}${override}`,
 				state.lastError || state.blocked ? "warning" : "info",
 			);
 		},

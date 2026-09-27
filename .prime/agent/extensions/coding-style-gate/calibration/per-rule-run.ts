@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
-import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { createReviewClient } from "../provider";
 import { calibrationInput } from "./input";
 import { reviewChanges } from "../reviewer";
 import { extractStyleRules } from "../rules";
@@ -34,7 +34,7 @@ for (const ruleId of ruleIds) {
 for (const sample of fixtures) {
 	if (!ruleIds.includes(sample.ruleId)) throw new Error(`Unknown fixture rule ${sample.ruleId}`);
 }
-const client = new TypeSafeClient({ defaultModel: config.model, logLevel: "warn", retry: { maxRetries: 1 }, timeout: 20_000 });
+const client = createReviewClient({ ...config, timeoutMs: 20_000 });
 const rows: Array<ScoredCase & { name: string; cohort: string; inputTokens: number; outputTokens: number }> = [];
 async function scoreSplit(split: "train" | "validation") {
 	const pending = fixtures.filter(sample => sample.split === split);
@@ -71,7 +71,7 @@ const results = Object.fromEntries(ruleIds.map(ruleId => [ruleId, {
 }]));
 const result = {
 	model: config.model,
-	timestamp: new Date().toISOString(),
+		timestamp: new Date().toISOString(),
 	rubricSha256: createHash("sha256").update(style).digest("hex"),
 	reviewerSha256: createHash("sha256").update(await readFile(new URL("../reviewer.ts", import.meta.url))).digest("hex"),
 	calibrationInputSha256: createHash("sha256").update(await readFile(new URL("./input.ts", import.meta.url))).digest("hex"),

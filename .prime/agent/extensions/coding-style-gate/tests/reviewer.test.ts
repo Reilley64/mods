@@ -8,9 +8,9 @@ import type { StyleRule } from "../rules";
 import { reviewChanges } from "../reviewer";
 
 const requests: unknown[] = [];
-const originalApiKey = process.env.TYPESAFE_API_KEY;
+const originalApiKey = process.env.OPENROUTER_API_KEY;
 const server = setupServer(
-	http.post("https://api.typesafe.ai/v1/systemone", async ({ request }) => {
+	http.post("https://openrouter.ai/api/v1/systemone", async ({ request }) => {
 		const body = (await request.clone().json()) as {
 			questions: Record<string, unknown>;
 			state: unknown;
@@ -28,7 +28,7 @@ const server = setupServer(
 );
 
 beforeAll(() => {
-	process.env.TYPESAFE_API_KEY = "test-key";
+	process.env.OPENROUTER_API_KEY = "test-key";
 	server.listen({ onUnhandledRequest: "error" });
 });
 afterEach(() => {
@@ -37,8 +37,8 @@ afterEach(() => {
 });
 afterAll(() => {
 	server.close();
-	if (originalApiKey === undefined) delete process.env.TYPESAFE_API_KEY;
-	else process.env.TYPESAFE_API_KEY = originalApiKey;
+	if (originalApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+	else process.env.OPENROUTER_API_KEY = originalApiKey;
 });
 
 const changes: RustChange[] = [
@@ -75,7 +75,7 @@ const rules: StyleRule[] = [
 
 describe("Jev coding style review", () => {
 	test("validates all thresholds before any API request", async () => {
-		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 		for (const invalid of [undefined, NaN, Infinity, -0.1, 1.1, "0.8"]) {
 			const ruleThresholds = { [rules[0]!.id]: 0.8, [rules[1]!.id]: invalid };
 			await expect(reviewChanges(client, changes, rules, {
@@ -89,7 +89,7 @@ describe("Jev coding style review", () => {
 	});
 
 	test("accepts a full threshold map when reviewing a rule subset", async () => {
-		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 		const report = await reviewChanges(client, changes, [rules[0]!], {
 			model: "jev-test",
 			ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])),
@@ -98,7 +98,7 @@ describe("Jev coding style review", () => {
 	});
 
 	test("sends changed hunks through the official SDK and reports threshold violations", async () => {
-		const client = new TypeSafeClient({
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api",
 			apiKey: "test-key",
 			defaultModel: "jev-test",
 			retry: { maxRetries: 0 },
@@ -152,7 +152,7 @@ describe("Jev coding style review", () => {
 	});
 
 	test("sends more than 32 rubric questions in one request", async () => {
-		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 		const manyRules: StyleRule[] = Array.from({ length: 33 }, (_, index) => ({
 			id: `rule-${index}`,
 			section: "Test",
@@ -175,7 +175,7 @@ describe("Jev coding style review", () => {
 	test("rejects malformed TypeSafe answers instead of treating them as compliance", async () => {
 		let answer: unknown = undefined;
 		server.use(
-			http.post("https://api.typesafe.ai/v1/systemone", async ({ request }) => {
+			http.post("https://openrouter.ai/api/v1/systemone", async ({ request }) => {
 				const body = (await request.clone().json()) as { questions: Record<string, unknown> };
 				return HttpResponse.json({
 					model: "jev-test",
@@ -184,7 +184,7 @@ describe("Jev coding style review", () => {
 				});
 			}),
 		);
-		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 		for (const malformed of [undefined, { type: "choice", choice: "yes", confidence: 1 }, { type: "noul", noul: null }, { type: "noul", noul: -0.1 }, { type: "noul", noul: 1.1 }]) {
 			answer = malformed;
 			await expect(reviewChanges(client, changes, rules, { model: "jev-test", ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])) })).rejects.toThrow(
@@ -194,7 +194,7 @@ describe("Jev coding style review", () => {
 	});
 
 	test("rejects an oversized patch before sending it", async () => {
-		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 		const oversized = [{ ...changes[0]!, patch: "x".repeat(100_001) }];
 
 		await expect(reviewChanges(client, oversized, rules, { model: "jev-test", ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])) })).rejects.toThrow(
@@ -204,7 +204,7 @@ describe("Jev coding style review", () => {
 
 
 	test("applies a calibrated threshold for an individual rubric rule", async () => {
-		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 
 		const report = await reviewChanges(client, changes, rules, {
 			model: "jev-test",
@@ -219,7 +219,7 @@ describe("Jev coding style review", () => {
 
 	test("rejects a response from a model other than the pinned model", async () => {
 		server.use(
-			http.post("https://api.typesafe.ai/v1/systemone", async ({ request }) => {
+			http.post("https://openrouter.ai/api/v1/systemone", async ({ request }) => {
 				const body = (await request.clone().json()) as { questions: Record<string, unknown> };
 				return HttpResponse.json({
 					model: "jev-substituted",
@@ -230,7 +230,7 @@ describe("Jev coding style review", () => {
 				});
 			}),
 		);
-		const client = new TypeSafeClient({ apiKey: "test-key", retry: { maxRetries: 0 } });
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 
 		expect(
 			reviewChanges(client, changes, rules, { model: "jev-test", ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.8])) }),
