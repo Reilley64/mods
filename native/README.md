@@ -16,7 +16,7 @@ Use PowerShell 7 and an authorized script host:
 ./native/fetch.ps1
 $env:MODS_USVFS_ARTIFACTS = "$pwd/native/artifacts/bin"
 $env:LIBCLANG_PATH = "C:/path/to/LLVM/bin"
-cargo build --locked --target x86_64-pc-windows-msvc --package mods --package mods-mcp
+cargo build --locked --target x86_64-pc-windows-msvc --package mods
 ```
 
 `native/usvfs-release.json` must pin an actually published release before this
@@ -66,8 +66,7 @@ injection tests.
 
 mods' build script retains source-marker validation and embeds hashes of all
 four exact native inputs from `MODS_USVFS_ARTIFACTS`. Cargo tracks those inputs
-for revalidation. Install the four files under `usvfs/` beside `mods.exe` and
-`mods-mcp.exe`. The loader never accepts an Environment Root, cwd, PATH or
+for revalidation. Install the four files under `usvfs/` beside `mods.exe`. The loader never accepts an Environment Root, cwd, PATH or
 caller-selected DLL path. It checks every embedded artifact hash before loading
 the architecture's controller with DLL-directory/System32-only search. Proxies
 remain beside both DLLs. Windows 11 and both x86 and x64 Microsoft Visual C++
@@ -87,9 +86,10 @@ false gate in the workflow. A native release does not itself satisfy mods' full
 corresponding-source requirements. The disabled packaging recipe now uses
 `scripts/package-windows.ps1`, which vendors locked Rust dependencies and includes
 the pinned native source and notices. See [distribution instructions](../docs/distribution.md).
-This is candidate packaging only. Clean disconnected Windows consumer and native
-source rebuild evidence is still required before the gate can change; neither
-static policy tests nor a warm-cache build establish source completeness.
+This is candidate packaging only. The owner waived the disconnected consumer rebuild check for #33; it is skipped,
+not passed. Complete corresponding source, notices, an actual connected consumer
+rebuild, and remaining acceptance are still required before the gate can change.
+Neither static policy tests nor a warm-cache build establish source completeness.
 
 ## Owned lifecycle and tests
 

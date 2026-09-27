@@ -78,11 +78,9 @@ try {
   $revision | Set-Content -Encoding utf8NoBOM SOURCE-REVISION.txt
   $env:MODS_USVFS_ARTIFACTS = Join-Path $source "native/artifacts/bin"
   $env:CARGO_TARGET_DIR = Join-Path $temporary "target"
-  cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins
+  cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --bins
   if ($LASTEXITCODE -ne 0) { throw "Vendored offline Cargo build failed" }
-  foreach ($binary in @("mods.exe", "mods-mcp.exe")) {
-    Copy-Item -LiteralPath "$env:CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/$binary" $package
-  }
+  Copy-Item -LiteralPath "$env:CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/mods.exe" $package
   New-Item -ItemType Directory "$package/usvfs", "$package/licenses" | Out-Null
   foreach ($artifact in @("usvfs_x86.dll", "usvfs_x64.dll", "usvfs_proxy_x86.exe", "usvfs_proxy_x64.exe")) {
     Copy-Item -LiteralPath "native/artifacts/bin/$artifact" "$package/usvfs"

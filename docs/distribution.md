@@ -1,11 +1,13 @@
 # Windows distribution candidates
 
 Publication remains disabled. This recipe prepares candidates, not release approval.
-The aggregate version belongs to `version.txt` and `vX.Y.Z`, not either presentation
-package. Both `mods.exe` and `mods-mcp.exe` ship in one ZIP. No product interfaces
-change. Latest #32 decisions require structured MCP mutation success; ordinary CLI
-mutation success remains quiet. The pinned upstream usvfs baseline and the
-approved non-modal proxy logging fallback retain the other native behavior and limits.
+The aggregate version belongs to `version.txt` and `vX.Y.Z`, not the CLI package.
+The CLI-only MVP source and workspace contain `mods.exe` but no MCP Presentation;
+its ZIP ships only `mods.exe`. The earlier two-executable ZIP is historical evidence,
+not an MVP package candidate. Issue #105 owns the MCP Presentation after MVP.
+Ordinary CLI mutation success remains quiet. The pinned upstream usvfs baseline
+and approved non-modal proxy logging fallback retain the other native behavior
+and limits.
 
 ## Prepare a candidate
 
@@ -22,10 +24,10 @@ Set `LIBCLANG_PATH` to the LLVM `bin` directory. Use a clean committed checkout:
 The output directory must not exist. `-OutputDirectory` selects another location.
 `-BundleArchive` and `-SourceArchive` accept local copies of the pinned native
 release assets; the same hash checks apply. The script archives HEAD, vendors all
-locked Cargo dependencies (including Git dependencies), and builds both packages
-from that snapshot with `--frozen`. It does not publish or change tags.
+locked Cargo dependencies (including Git dependencies), and builds the CLI
+package from that snapshot with `--frozen`. It does not publish or change tags.
 
-The ZIP contains both executables, exactly four native runtime files under
+The ZIP contains only `mods.exe`, exactly four native runtime files under
 `usvfs/`, root `LICENSE` and `COPYRIGHT.md`, upstream and native release notices,
 and `mods-source.tar.gz`. The source archive contains the tracked project,
 Cargo.lock, vendored dependency source and its notices, generated Cargo source
@@ -34,7 +36,7 @@ The latter two are pinned by `native/usvfs-release.json`. The source revision is
 recorded in `SOURCE-REVISION.txt`. Do not replace native assets with same-version
 upstream binaries. `SHA256SUMS` accompanies the final ZIP; it is not inside it.
 Windows 11 and both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables
-are runtime prerequisites. Keep `usvfs/` beside both executables.
+are runtime prerequisites. Keep `usvfs/` beside `mods.exe`.
 
 ## Consumer source rebuild
 
@@ -57,7 +59,7 @@ $release = Get-Content -Raw native/usvfs-release.json | ConvertFrom-Json
 $sourceHash = (Get-FileHash -Algorithm SHA256 "native/archives/$($release.sourceAsset)").Hash
 if ($sourceHash -ne $release.sourceSha256) { throw "Native source hash mismatch" }
 $env:MODS_USVFS_ARTIFACTS = "$pwd/native/artifacts/bin"
-cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins
+cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --bins
 if ($LASTEXITCODE -ne 0) { throw "Consumer rebuild failed" }
 ```
 
@@ -132,18 +134,17 @@ Use package identifier `Reilley64.Mods`, package name `mods`, and aggregate vers
 
 - `Architecture: x64`, `InstallerType: zip`, `NestedInstallerType: portable`;
 - `NestedInstallerFiles` entries with `RelativeFilePath: mods.exe` and
-  `PortableCommandAlias: mods`, plus `RelativeFilePath: mods-mcp.exe` and
-  `PortableCommandAlias: mods-mcp`;
+  `PortableCommandAlias: mods`;
 - Windows 11 minimum (`MinimumOSVersion: 10.0.22000.0`) and dependencies on both
   `Microsoft.VCRedist.2015+.x86` and `Microsoft.VCRedist.2015+.x64`;
 - exact verified `InstallerUrl` and `InstallerSha256`, and no self-updater.
 
 Validate the real generated manifest with `winget validate --manifest <directory>`.
 On a clean Windows 11 host, enable local manifests for testing, install the local
-manifest silently, run **both aliases**, and uninstall silently. Confirm the whole
-ZIP remains installed, especially shared `usvfs/` beside both executables, and
-that uninstall removes both aliases and package files. Merely listing the two
-executables in a manifest does not prove runtime layout or VFS behavior. Preserve
+manifest silently, run the `mods` alias, and uninstall silently. Confirm the whole
+ZIP remains installed, especially `usvfs/` beside `mods.exe`, and that uninstall
+removes the alias and package files. Merely listing `mods.exe` in a manifest does
+not prove runtime layout or VFS behavior. Preserve
 logs, tool versions, hashes, and managed Steam Data unchanged evidence. Record
 accepted manifest validation, ZIP layout, and clean install/run/remove evidence
 before submitting the human-controlled initial package.

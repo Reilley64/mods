@@ -86,14 +86,6 @@
       "include-component-in-tag": true,
       "skip-github-release": true,
       "skip-changelog": true
-    },
-    "src/presentation/mcp": {
-      "release-type": "rust",
-      "component": "mods-mcp",
-      "package-name": "mods-mcp",
-      "include-component-in-tag": true,
-      "skip-github-release": true,
-      "skip-changelog": true
     }
   }
 }

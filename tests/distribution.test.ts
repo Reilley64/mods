@@ -5,14 +5,15 @@ const workflow = Bun.YAML.parse(await Bun.file(".github/workflows/ci.yml").text(
 
 // Static project policy checks, not PowerShell execution or offline rebuild evidence.
 describe("Windows distribution recipe policy", () => {
-	test("builds both presentation packages from the vendored committed snapshot", () => {
+	test("builds only the CLI presentation package from the vendored committed snapshot", () => {
 		expect(script).toContain("git archive --format=tar");
 		expect(script).toContain("Package only a clean committed checkout");
 		expect(script).toContain("cargo vendor --locked --versioned-dirs vendor");
 		expect(script).toContain("Set-Content -Encoding utf8NoBOM .cargo/config.toml");
-		expect(script).toContain("cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --package mods-mcp --bins");
+		expect(script).toContain("cargo build --release --frozen --target x86_64-pc-windows-msvc --package mods --bins");
 		expect(script.indexOf("cargo vendor")).toBeLessThan(script.indexOf("cargo build"));
-		expect(script).toContain('@("mods.exe", "mods-mcp.exe")');
+		expect(script).toContain('Copy-Item -LiteralPath "$env:CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/mods.exe" $package');
+		expect(script).not.toContain("mods-mcp");
 	});
 
 	test("reuses native validation and verifies corresponding source before packaging", () => {

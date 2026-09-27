@@ -1,6 +1,5 @@
 const packageNames = [
   "mods",
-  "mods-mcp",
   "domain",
   "application",
   "infrastructure-environment",
@@ -23,7 +22,6 @@ type CargoMetadata = {
 
 const expectedProjectDependencies: Record<PackageName, readonly PackageName[]> = {
   mods: ["application", "domain", "infrastructure-dependencies"],
-  "mods-mcp": ["application", "domain", "infrastructure-dependencies"],
   domain: [],
   application: ["domain"],
   "infrastructure-environment": ["application", "domain"],
@@ -62,7 +60,6 @@ export function validateProjectGraph(metadata: CargoMetadata): string[] {
 
   for (const [name, expectedPath] of [
     ["mods", "src/presentation/cli/Cargo.toml"],
-    ["mods-mcp", "src/presentation/mcp/Cargo.toml"],
   ] as const) {
     const packageMetadata = packages.get(name);
     if (!packageMetadata) continue;

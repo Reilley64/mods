@@ -9,7 +9,6 @@ members = [
   "src/infrastructure/execution",
   "src/infrastructure/dependencies",
   "src/presentation/cli",
-  "src/presentation/mcp",
 ]
 resolver = "3"
 

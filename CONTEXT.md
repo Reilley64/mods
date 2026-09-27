@@ -65,7 +65,7 @@ Overwrite or one installed, enabled Data Mod selected to receive new Data files 
 _Avoid_: Profile State, staging directory
 
 **Diagnostic Session**:
-The bounded diagnostic scope for one environment-bound CLI command, one MCP request, or the MCP server lifecycle. It includes all nested work and cleanup caused by that operation.
+The bounded diagnostic scope for one environment-bound CLI command, including its nested work and cleanup. After the MVP, an MCP request or MCP server lifecycle may also have its own Diagnostic Session.
 _Avoid_: FOMOD choice session, stored workflow, Mod Environment lifetime
 
 **Virtual Game View**:
@@ -73,5 +73,5 @@ The merged game namespace observed by a game or tool, formed from a Game Install
 _Avoid_: Mod Environment, VFS folder
 
 **MCP Presentation**:
-The local stdio tool adapter started directly as `mods-mcp.exe` and bound to one Environment Root at process startup. It exposes every approved CLI application use case except Environment initialization and owns no interaction or task session.
+The after-MVP local stdio tool adapter started directly as `mods-mcp.exe` and bound to one Environment Root at process startup. It exposes every approved CLI application use case except Environment initialization and owns no interaction or task session. The CLI-only MVP source and workspace do not include this presentation.
 _Avoid_: `mods mcp start`, remote service, authorization boundary, second application core
