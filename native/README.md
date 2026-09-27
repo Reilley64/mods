@@ -1,11 +1,12 @@
 # Pinned usvfs release
 
 mods consumes the public <https://github.com/Reilley64/usvfs-rs> fork. The fork
-owns the unmodified upstream source, native build, raw `usvfs-sys` crate and
-exception shim. mods retains its safe wrapper, configuration and process policy.
-The upstream source revision remains
-`57f1ea5e6ad13f7435a7af184748e6c1312c5637`. Do not substitute the upstream
-v0.5.7.2 binaries: their source revision differs despite the same version string.
+owns the pinned upstream native baseline, the approved issue #33 proxy logging
+fallback, the native build, the raw `usvfs-sys` crate, and the exception shim.
+mods retains its safe wrapper, configuration, and process policy. The upstream
+baseline revision is `57f1ea5e6ad13f7435a7af184748e6c1312c5637`; the fork
+revision in the release manifest identifies the baseline plus the proxy change.
+Do not substitute upstream v0.5.7.2 binaries for the exact fork release.
 
 ## Fetch the native bundle
 
@@ -28,7 +29,7 @@ The manifest contract is:
 | --- | --- |
 | `schema` | `1` |
 | `repository` | `Reilley64/usvfs-rs` |
-| `tag` | `usvfs-0.5.7.2-rs.1` |
+| `tag` | `usvfs-0.5.7.2-rs.2` |
 | `bundleAsset` | ZIP asset basename |
 | `bundleSha256` | Verified lowercase SHA-256 of the published ZIP |
 | `sourceRevision` | The upstream revision above |
@@ -38,8 +39,9 @@ The manifest contract is:
 
 The downloader uses the explicit HTTPS GitHub release URL. It verifies the ZIP
 hash before extraction, then validates `bin/source-revision.txt` and
-`bin/artifacts.json`. The latter contains `source`, `configuration` (`Release`),
-and `artifacts`, with exactly four filename-to-SHA-256 entries:
+`bin/artifacts.json`. The latter records the upstream `source` marker,
+`forkRevision`, the approved `nativeDelta`, `configuration` (`Release`), and
+`artifacts`, with exactly four filename-to-SHA-256 entries:
 `usvfs_x86.dll`, `usvfs_x64.dll`, `usvfs_proxy_x86.exe`, and
 `usvfs_proxy_x64.exe`. The release bundle also contains license notices.
 
@@ -129,8 +131,8 @@ upstream filesystem tests. The extracted shim's unit tests belong in the fork.
 
 ## Evidence boundary
 
-The prior clean build and archive-only evidence is recorded in repository
-history and `docs/research/issue-30-upstream-usvfs.md`. It is not evidence that the
-new release download or consumer Windows build has passed. Validate both Windows
-architectures against the final published manifest and final Git revision before
-merging the local CI change. No remote CI or publication is changed by local edits.
+The fork's release-preparation run `36247682460` rebuilt library sources with
+origin fallback blocked and packaged the reviewed `rs.2` archives. A temporary
+exact-pin consumer passed ordered x64 then x86 virtual Data reads before native
+publication. Neither result replaces final-head Windows CI or the complete #33
+acceptance matrix. The mods preview publication gate remains disabled.

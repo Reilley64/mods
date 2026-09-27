@@ -4,7 +4,8 @@ Publication remains disabled. This recipe prepares candidates, not release appro
 The aggregate version belongs to `version.txt` and `vX.Y.Z`, not either presentation
 package. Both `mods.exe` and `mods-mcp.exe` ship in one ZIP. No product interfaces
 change. Latest #32 decisions require structured MCP mutation success; ordinary CLI
-mutation success remains quiet. Upstream usvfs behavior and limits remain accepted.
+mutation success remains quiet. The pinned upstream usvfs baseline and the
+approved non-modal proxy logging fallback retain the other native behavior and limits.
 
 ## Prepare a candidate
 
@@ -66,10 +67,9 @@ shim. Cargo does not vendor this external tree. Packaging extracts the complete
 `include/` tree from `source-candidate/checkouts/fork.tar.gz` inside the
 SHA-256-verified native source asset, without changing the dependency or its build
 script. The nested Git archive identifies fork revision
-`eb4949fb2439fe5b98901e2fb1afceee752a6133` (the manifest's `forkRevision`);
-all seven header files were compared byte-for-byte with that pinned checkout.
-The outer source SHA-256 is
-`961478a1e69cf6b0156e78970181ef6375974aaadd437af5fdfe8e905db85199`.
+`c23705ce1a4baba19c72156900bb913c9e090307` (the manifest's `forkRevision`);
+that checkout preserves the approved upstream headers. The outer source SHA-256 is
+`fff05ea6e168694646806295def137ee06d37433eaff415baf88069ede32f92a`.
 These headers ship at the source root in `mods-source.tar.gz`, not just inside
 the nested native archive. Run from the source root so Cargo
 uses that configuration. No registry or Git download is required by Cargo.

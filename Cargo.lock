@@ -2319,7 +2319,7 @@ dependencies = [
 [[package]]
 name = "usvfs-sys"
 version = "0.0.0"
-source = "git+https://github.com/Reilley64/usvfs-rs?rev=eb4949fb2439fe5b98901e2fb1afceee752a6133#eb4949fb2439fe5b98901e2fb1afceee752a6133"
+source = "git+https://github.com/Reilley64/usvfs-rs?rev=c23705ce1a4baba19c72156900bb913c9e090307#c23705ce1a4baba19c72156900bb913c9e090307"
 dependencies = [
  "bindgen",
  "cc",
