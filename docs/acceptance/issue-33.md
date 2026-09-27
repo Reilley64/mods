@@ -17,7 +17,20 @@ The final Windows ZIP is `C:/Users/prime/r2dist-86ccd43/mods-86ccd431841bb8ac85d
 
 The final-ZIP cases above used fresh, owned synthetic Mod Environments. Full real Game Installation and relevant Known Folder baselines matched after the packaged error/output runs; the earlier scenario-specific protected snapshots also matched. No FalloutNV.exe was launched and no real Game Installation write was authorized. CLI Ctrl+C is **owner-waived and unverified, not passed**. A harmless no-signal private-console probe stopped at `AttachConsole` error 6 in `C:/Users/prime/r2cli-console-probe-86ccd43`; it sent no signal and launched no mods process. Do not substitute stdin ETX, Ctrl+Break or process killing for this waiver.
 
-Remaining: record representative workload measurements and the other scenario-level evidence still pending in the historical matrix before any full acceptance claim. Controlled game-launch compatibility and stable distribution/Winget sign-off are not established. Keep PR #103 draft, issue #33 open, and stable publication/submission disabled.
+### Bounded synthetic workload measurements (final ZIP)
+
+On Windows 11 Home build 26200 (AMD Ryzen 5 5600X, 12 logical processors, 32 GiB class RAM, NTFS, Balanced power scheme), one fresh Mod Environment had two installed 128-file synthetic loose-file mods with shared paths and 16 Overwrite winners. A managed x64 or x86 PowerShell child read 192 Virtual Game View paths (786,432 bytes) and returned the expected aggregate SHA-256 `6a1532971467736d9c359a495ca525cfddd0ad5b5ab95f109ef50a118a94a0c5`. Each group had one excluded warm-up and three sequential timed samples; values below are **milliseconds, minimum / median / maximum**.
+
+| Synthetic scenario | Measured milliseconds | Timer boundary |
+|---|---:|---|
+| CLI `config list` | 46.726 / 49.228 / 56.963 | Process start through exit and both stream drains |
+| CLI x64 managed Virtual Game View read | 1099.201 / 1676.746 / 2695.364 | Process start through exit and both stream drains |
+| CLI x86 managed Virtual Game View read | 1608.194 / 1678.327 / 1695.640 | Process start through exit and both stream drains |
+| MCP `mods_exec` managed read | 1010.632 / 1031.501 / 1061.458 | Client request send through matching response, excluding server startup |
+
+MCP server initialization and `tools/list` took 339.965 ms separately. The x64 spread is recorded without tuning or a pass/fail claim. These warm-cache synthetic measurements include child/tool startup and are **not** game-scale, cold-cache, frame-rate or real-mod performance. No numeric product threshold was supplied. All 42 protected inventories matched; owned Mod Environment and synthetic Game Installation snapshots stayed unchanged; MCP exited 0 and no product process remained. Evidence: `C:/Users/prime/r2perf2-86ccd43/evidence/result.json` (SHA-256 `6458024f80dbf93af5d5bd3f9b33f68a1ab40b3a31ad45ef0b1a8ed6911bfabd`), `host-and-fixture.json`, per-run raw streams/results and protected inventories. An earlier retained attempt at `C:/Users/prime/r2perf-86ccd43` stopped at an overstrict harness stderr expectation: the x64 warm-up exited 0, read the expected bytes and emitted the documented `load_order_not_enforced` advisory. It is not an accepted timed series or a product failure claim.
+
+Remaining: other scenario-level evidence still pending in the historical matrix, controlled game-launch compatibility, game-scale workload evidence, and stable distribution/Winget sign-off. Do not claim full acceptance from this bounded synthetic measurement. Keep PR #103 draft, issue #33 open, and stable publication/submission disabled.
 
 ## Historical checkpoint — bounded managed-execution repair
 
