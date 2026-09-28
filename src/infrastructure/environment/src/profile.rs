@@ -734,6 +734,745 @@ fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, ErrorMarker> {
 	}
 }
 
+/// Disposable #98 proof, not a native process or production export implementation.
+#[cfg(test)]
+mod export_prototype {
+	use super::MANAGED_ARCHIVE_KEYS;
+	use super::MANAGED_GENERAL_KEYS;
+	use super::decode;
+	use super::encode;
+	use super::insert_section_values;
+	use super::last_archive_list;
+	use super::normalized_archive_list;
+	use super::remove_keys_any_section;
+	use super::section_name;
+	use domain::DataRelativePath;
+	use domain::EffectiveResult;
+	use domain::ModName;
+	use domain::ModPriority;
+	use domain::ParticipationReason;
+	use domain::ProviderClass;
+	use domain::ProviderReference;
+	use domain::Tombstone;
+	use domain::TombstoneIndex;
+	use domain::TombstoneScope;
+	use domain::case_fold_key;
+	use domain::resolve_effective_file;
+	use rootcause::prelude::ResultExt;
+	use rootcause::report;
+	use std::collections::BTreeMap;
+	use std::collections::HashMap;
+	use std::collections::HashSet;
+	use std::error::Error;
+	use std::fmt;
+	use std::fs::File;
+	use std::fs::FileTimes;
+	use std::fs::{self};
+	use std::path::Path;
+	use std::path::PathBuf;
+	use std::time::SystemTime;
+	use tempfile::TempDir;
+
+	#[derive(Debug)]
+	enum PrototypeError {
+		Invalid(&'static str),
+		Fixture,
+	}
+
+	impl fmt::Display for PrototypeError {
+		fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+			match self {
+				Self::Invalid(message) => formatter.write_str(message),
+				Self::Fixture => formatter.write_str("prototype fixture operation failed"),
+			}
+		}
+	}
+	impl Error for PrototypeError {}
+
+	type Trial<T> = rootcause::Result<T, PrototypeError>;
+
+	fn invalid(message: &'static str) -> rootcause::Report<PrototypeError> {
+		report!(PrototypeError::Invalid(message))
+	}
+
+	// The existing optional reader turns a decode error into absence. Decode first, including
+	// the fallback only when selected, so malformed relevant input never silently falls through.
+	fn archive_input(custom: Option<&[u8]>, fallout: &[u8], fallback: Option<&[u8]>) -> Trial<String> {
+		for bytes in [custom, Some(fallout), fallback] {
+			let Some(bytes) = bytes else { continue };
+			decode(bytes).context(PrototypeError::Invalid("invalid archive INI encoding"))?;
+			if let Some(value) = last_archive_list(bytes) {
+				return Ok(normalized_archive_list(&value));
+			}
+		}
+		if fallback.is_none() {
+			return Err(invalid("required bound-game fallback missing"));
+		}
+		Ok(normalized_archive_list(""))
+	}
+
+	fn derived_ini(bytes: &[u8], archives: &str, execution: bool, fallout: bool) -> Trial<Vec<u8>> {
+		let (text, encoding) = decode(bytes).context(PrototypeError::Invalid("invalid canonical INI"))?;
+		let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+		let trailing = text.ends_with('\n');
+		let mut lines: Vec<String> = text.lines().map(ToOwned::to_owned).collect();
+		if fallout {
+			remove_keys_any_section(&mut lines, &MANAGED_ARCHIVE_KEYS);
+			remove_keys_any_section(&mut lines, &MANAGED_GENERAL_KEYS);
+			insert_section_values(
+				&mut lines,
+				"Archive",
+				&[
+					"bInvalidateOlderFiles=1".to_owned(),
+					"SInvalidationFile=".to_owned(),
+					format!("sArchiveList={archives}"),
+				],
+			);
+			insert_section_values(
+				&mut lines,
+				"General",
+				&[
+					"bUseMyGamesDirectory=1".to_owned(),
+					format!(
+						"SLocalSavePath={}",
+						if execution { "__mods_saves\\" } else { "Saves\\" }
+					),
+				],
+			);
+		} else {
+			remove_keys_any_section(&mut lines, &MANAGED_GENERAL_KEYS);
+			remove_keys_any_section(&mut lines, &MANAGED_ARCHIVE_KEYS);
+		}
+		let mut output = lines.join(newline);
+		if trailing || fallout {
+			output.push_str(newline);
+		}
+		encode(&output, encoding).context(PrototypeError::Invalid("derived INI cannot be encoded"))
+	}
+
+	fn project_profile(
+		canonical: &BTreeMap<&str, Vec<u8>>,
+		fallback: Option<&[u8]>,
+		execution: bool,
+	) -> Trial<BTreeMap<String, Vec<u8>>> {
+		let fallout = canonical
+			.get("Fallout.ini")
+			.ok_or_else(|| invalid("Fallout.ini missing"))?;
+		let archives = archive_input(canonical.get("FalloutCustom.ini").map(Vec::as_slice), fallout, fallback)?;
+		let mut projected = BTreeMap::new();
+		for (name, bytes) in canonical {
+			let contents = match *name {
+				"Fallout.ini" => derived_ini(bytes, &archives, execution, true)?,
+				"FalloutCustom.ini" | "FalloutPrefs.ini" => {
+					derived_ini(bytes, &archives, execution, false)?
+				}
+				_ => bytes.clone(),
+			};
+			projected.insert((*name).to_owned(), contents);
+		}
+		Ok(projected)
+	}
+
+	fn managed(section: &str, line: &str) -> bool {
+		let Some((key, _)) = line.split_once('=') else {
+			return false;
+		};
+		(section.eq_ignore_ascii_case("Archive")
+			&& MANAGED_ARCHIVE_KEYS
+				.iter()
+				.any(|item| item.eq_ignore_ascii_case(key.trim())))
+			|| (section.eq_ignore_ascii_case("General")
+				&& MANAGED_GENERAL_KEYS
+					.iter()
+					.any(|item| item.eq_ignore_ascii_case(key.trim())))
+	}
+
+	fn controlled_lines(text: &str) -> Trial<HashMap<String, (String, String)>> {
+		let mut found = HashMap::new();
+		let mut section = "";
+		for line in text.lines() {
+			if let Some(name) = section_name(line) {
+				section = name;
+			}
+			let Some((name, _)) = line.split_once('=') else {
+				continue;
+			};
+			let key = name.trim().to_ascii_lowercase();
+			let expected_section = if MANAGED_ARCHIVE_KEYS
+				.iter()
+				.any(|candidate| candidate.eq_ignore_ascii_case(&key))
+			{
+				"Archive"
+			} else if MANAGED_GENERAL_KEYS
+				.iter()
+				.any(|candidate| candidate.eq_ignore_ascii_case(&key))
+			{
+				"General"
+			} else {
+				continue;
+			};
+			if !section.eq_ignore_ascii_case(expected_section)
+				|| found.insert(key, (section.to_ascii_lowercase(), line.to_owned()))
+					.is_some()
+			{
+				return Err(invalid("ambiguous or relocated controlled key"));
+			}
+		}
+		Ok(found)
+	}
+
+	fn reconcile(original: &[u8], baseline: &[u8], child: &[u8], current: &[u8]) -> Trial<Vec<u8>> {
+		if original != current {
+			return Err(invalid("canonical changed concurrently"));
+		}
+
+		let (source, encoding) = decode(original).context(PrototypeError::Invalid("canonical invalid"))?;
+		let (baseline, _) = decode(baseline).context(PrototypeError::Invalid("baseline invalid"))?;
+		let (child, _) = decode(child).context(PrototypeError::Invalid("child invalid"))?;
+		let originals = controlled_lines(&source)?;
+		let baseline_keys = controlled_lines(&baseline)?;
+		let child_keys = controlled_lines(&child)?;
+		if baseline_keys.keys().any(|key| {
+			child_keys.get(key).map(|(section, _)| section)
+				!= baseline_keys.get(key).map(|(section, _)| section)
+		}) || baseline_keys.len() != child_keys.len()
+		{
+			return Err(invalid("child controlled-key identity changed"));
+		}
+
+		let newline = if source.contains("\r\n") { "\r\n" } else { "\n" };
+		let mut section = "";
+		let mut output = Vec::new();
+		let mut inserted = HashSet::new();
+		for line in child.lines() {
+			if let Some(name) = section_name(line) {
+				section = name;
+				output.push(line.to_owned());
+				for (key, (original_section, value)) in &originals {
+					if original_section.eq_ignore_ascii_case(section)
+						&& !baseline_keys.contains_key(key)
+					{
+						output.push(value.clone());
+						inserted.insert(key.clone());
+					}
+				}
+				continue;
+			}
+			if managed(section, line) {
+				let (key, _) = line.split_once('=').ok_or_else(|| invalid("controlled key invalid"))?;
+				let key = key.trim().to_ascii_lowercase();
+				if let Some((_, original)) = originals.get(&key) {
+					output.push(original.clone());
+				}
+			} else {
+				output.push(line.to_owned());
+			}
+		}
+		if originals
+			.keys()
+			.any(|key| !baseline_keys.contains_key(key) && !inserted.contains(key))
+		{
+			return Err(invalid("original controlled section missing"));
+		}
+		let mut text = output.join(newline);
+		if child.ends_with('\n') {
+			text.push_str(newline);
+		}
+		encode(&text, encoding).context(PrototypeError::Invalid("reconciled INI cannot be encoded"))
+	}
+
+	struct Contribution {
+		provider: ProviderReference,
+		bytes: &'static [u8],
+	}
+
+	fn plan(entries: &[Contribution], tombstones: &TombstoneIndex) -> Trial<BTreeMap<String, Vec<u8>>> {
+		let mut winners: HashMap<String, &Contribution> = HashMap::new();
+		let mut directories: HashMap<String, (domain::ProviderRank, String)> = HashMap::new();
+		for entry in entries {
+			let provider = &entry.provider;
+			if provider.original_path().comparison_key() == case_fold_key("meta.toml")
+				&& provider.class() != ProviderClass::SteamData
+			{
+				continue;
+			}
+			if provider.participation_reason() == ParticipationReason::DisabledMod {
+				continue;
+			}
+			let path = provider.original_path();
+			let mut parent = String::new();
+			for component in path
+				.as_str()
+				.split('/')
+				.take(path.components().count().saturating_sub(1))
+			{
+				if !parent.is_empty() {
+					parent.push('/');
+				}
+				parent.push_str(component);
+				let key = case_fold_key(&parent);
+				if directories.get(&key).is_none_or(|(rank, _)| *rank < provider.rank()) {
+					directories.insert(key, (provider.rank(), component.to_owned()));
+				}
+			}
+			let key = path.comparison_key().to_owned();
+			if winners
+				.get(&key)
+				.is_none_or(|winner| winner.provider.rank() < provider.rank())
+			{
+				winners.insert(key, entry);
+			}
+		}
+		let mut output = BTreeMap::new();
+		for (key, winner) in winners {
+			let provider = &winner.provider;
+			if provider.class() == ProviderClass::SteamData {
+				continue;
+			}
+			if !matches!(
+				resolve_effective_file(Some(provider), tombstones.controlling(&key)),
+				EffectiveResult::File(_)
+			) {
+				continue;
+			}
+			let components: Vec<_> = provider.original_path().as_str().split('/').collect();
+			let mut parent = String::new();
+			let mut spelled = Vec::new();
+			for component in components.iter().take(components.len().saturating_sub(1)) {
+				if !parent.is_empty() {
+					parent.push('/');
+				}
+				parent.push_str(component);
+				let (_, display) = directories
+					.get(&case_fold_key(&parent))
+					.ok_or_else(|| invalid("directory missing"))?;
+				spelled.push(display.as_str());
+			}
+			spelled.push(components.last().ok_or_else(|| invalid("file missing"))?);
+			output.insert(spelled.join("/"), winner.bytes.to_vec());
+		}
+		Ok(output)
+	}
+
+	fn write_with_mtime(source: &Path, destination: &Path, bytes: &[u8]) -> Trial<()> {
+		if let Some(parent) = destination.parent() {
+			fs::create_dir_all(parent).context(PrototypeError::Fixture)?;
+		}
+		fs::write(destination, bytes).context(PrototypeError::Fixture)?;
+		let modified = fs::metadata(source)
+			.context(PrototypeError::Fixture)?
+			.modified()
+			.context(PrototypeError::Fixture)?;
+		File::options()
+			.write(true)
+			.open(destination)
+			.context(PrototypeError::Fixture)?
+			.set_times(FileTimes::new().set_modified(modified))
+			.context(PrototypeError::Fixture)?;
+		if fs::metadata(destination)
+			.context(PrototypeError::Fixture)?
+			.modified()
+			.context(PrototypeError::Fixture)?
+			!= modified
+		{
+			return Err(invalid("mtime not preserved"));
+		}
+		Ok(())
+	}
+
+	fn stage_once(
+		root: &Path,
+		final_path: &Path,
+		files: &[(PathBuf, String, Vec<u8>)],
+		stop_after: Option<usize>,
+	) -> Trial<PathBuf> {
+		if final_path.exists() {
+			return Err(invalid("output exists"));
+		}
+
+		let staged = root.join("disposable-partial");
+		fs::create_dir(&staged).context(PrototypeError::Fixture)?;
+		for (index, (source, relative, bytes)) in files.iter().enumerate() {
+			if stop_after == Some(index) {
+				return Err(invalid("cancelled; partial retained"));
+			}
+			write_with_mtime(source, &staged.join(relative), bytes)?;
+		}
+
+		if final_path.exists() {
+			return Err(invalid("output appeared before publication"));
+		}
+		fs::rename(&staged, final_path).context(PrototypeError::Fixture)?;
+
+		Ok(final_path.to_owned())
+	}
+
+	fn profile_payload(source: &Path, include_saves: bool) -> Trial<BTreeMap<String, Vec<u8>>> {
+		let mut files = BTreeMap::new();
+		for name in super::PROFILE_FILES.into_iter().chain(["modlist.txt"]) {
+			let path = source.join(name);
+			if path.is_file() {
+				files.insert(
+					format!("profile/{name}"),
+					fs::read(path).context(PrototypeError::Fixture)?,
+				);
+			}
+		}
+		if include_saves {
+			let saves = source.join("saves");
+			if saves.exists() {
+				let mut pending = vec![(saves, "profile/saves".to_owned())];
+				while let Some((directory, relative)) = pending.pop() {
+					for entry in fs::read_dir(directory).context(PrototypeError::Fixture)? {
+						let entry = entry.context(PrototypeError::Fixture)?;
+						let name = entry
+							.file_name()
+							.into_string()
+							.map_err(|_| invalid("non-Unicode save name"))?;
+						let path = format!("{relative}/{name}");
+						let kind = entry.file_type().context(PrototypeError::Fixture)?;
+						if kind.is_dir() {
+							pending.push((entry.path(), path));
+						} else if kind.is_file() {
+							files.insert(
+								path,
+								fs::read(entry.path())
+									.context(PrototypeError::Fixture)?,
+							);
+						} else {
+							return Err(invalid("unsupported save entry in prototype"));
+						}
+					}
+				}
+			}
+		}
+		Ok(files)
+	}
+
+	#[test]
+	fn profile_payload_is_separate_from_data_and_saves_are_opt_in() -> Trial<()> {
+		let scratch = TempDir::new().context(PrototypeError::Fixture)?;
+		fs::create_dir(scratch.path().join("saves")).context(PrototypeError::Fixture)?;
+		fs::write(scratch.path().join("Fallout.ini"), b"canonical").context(PrototypeError::Fixture)?;
+		fs::write(scratch.path().join("modlist.txt"), b"+Example").context(PrototypeError::Fixture)?;
+		fs::create_dir(scratch.path().join("saves/Chapter")).context(PrototypeError::Fixture)?;
+		fs::write(scratch.path().join("saves/Chapter/Slot.fos"), b"saved").context(PrototypeError::Fixture)?;
+		fs::write(scratch.path().join("private.db"), b"private").context(PrototypeError::Fixture)?;
+		assert_eq!(
+			profile_payload(scratch.path(), false)?,
+			BTreeMap::from([
+				("profile/Fallout.ini".to_owned(), b"canonical".to_vec()),
+				("profile/modlist.txt".to_owned(), b"+Example".to_vec()),
+			])
+		);
+		assert_eq!(
+			profile_payload(scratch.path(), true)?,
+			BTreeMap::from([
+				("profile/Fallout.ini".to_owned(), b"canonical".to_vec()),
+				("profile/modlist.txt".to_owned(), b"+Example".to_vec()),
+				("profile/saves/Chapter/Slot.fos".to_owned(), b"saved".to_vec()),
+			])
+		);
+		Ok(())
+	}
+
+	#[test]
+	fn positive_plan_uses_rank_tombstones_and_one_directory_spelling() -> Trial<()> {
+		let path = |name: &str| DataRelativePath::new(name.to_owned()).context(PrototypeError::Fixture);
+		let modded = |name: &str, rank, enabled| -> Trial<ProviderReference> {
+			Ok(ProviderReference::DataMod {
+				mod_name: ModName::new(format!("Mod {rank}")).context(PrototypeError::Fixture)?,
+				priority: ModPriority::new(rank),
+				original_path: path(name)?,
+				participation_reason: if enabled {
+					ParticipationReason::EnabledMod
+				} else {
+					ParticipationReason::DisabledMod
+				},
+			})
+		};
+		let entries = vec![
+			Contribution {
+				provider: ProviderReference::SteamData {
+					original_path: path("base.esm")?,
+				},
+				bytes: b"base",
+			},
+			Contribution {
+				provider: modded("Textures/Shared.dds", 1, true)?,
+				bytes: b"loser",
+			},
+			Contribution {
+				provider: modded("textures/shared.dds", 3, true)?,
+				bytes: b"winner",
+			},
+			Contribution {
+				provider: modded("Textures/Only.dds", 1, true)?,
+				bytes: b"unique",
+			},
+			Contribution {
+				provider: modded("textures/Disabled.dds", 9, false)?,
+				bytes: b"disabled",
+			},
+			Contribution {
+				provider: modded("meshes/Chair.nif", 1, true)?,
+				bytes: b"suppressed",
+			},
+			Contribution {
+				provider: modded("meshes/Restored.nif", 5, true)?,
+				bytes: b"restored",
+			},
+			Contribution {
+				provider: modded("meta.toml", 2, true)?,
+				bytes: b"private root metadata",
+			},
+			Contribution {
+				provider: modded("nested/meta.toml", 2, true)?,
+				bytes: b"ordinary metadata-like",
+			},
+			Contribution {
+				provider: modded("Pack.bsa", 2, true)?,
+				bytes: b"opaque BSA",
+			},
+			Contribution {
+				provider: ProviderReference::Overwrite {
+					original_path: path("textures/Overwrite.dds")?,
+				},
+				bytes: b"overwrite",
+			},
+		];
+		let mut tombstones = TombstoneIndex::default();
+		tombstones.insert(Tombstone {
+			owner: modded("meshes", 4, true)?,
+			scope: TombstoneScope::DirectorySubtree,
+		});
+		let selected = plan(&entries, &tombstones)?;
+		assert_eq!(
+			selected,
+			BTreeMap::from([
+				("Pack.bsa".to_owned(), b"opaque BSA".to_vec()),
+				("meshes/Restored.nif".to_owned(), b"restored".to_vec()),
+				("nested/meta.toml".to_owned(), b"ordinary metadata-like".to_vec()),
+				("textures/Only.dds".to_owned(), b"unique".to_vec()),
+				("textures/Overwrite.dds".to_owned(), b"overwrite".to_vec()),
+				("textures/shared.dds".to_owned(), b"winner".to_vec()),
+			])
+		);
+		Ok(())
+	}
+
+	#[test]
+	fn canonical_archive_precedence_and_separate_derived_inis() -> Trial<()> {
+		let original = b"[General]\r\nSLocalSavePath=Saves\\\r\nbUseMyGamesDirectory=1\r\n[Archive]\r\nsArchiveList=Original.bsa\r\n; untouched\r\n";
+		let custom = b"[Archive]\r\nsArchiveList=First.bsa\r\nsARCHIVELIST=Custom.bsa, Fallout - Invalidation.bsa\r\n[Display]\r\nbOther=keep\r\n";
+		let canonical = BTreeMap::from([
+			("Fallout.ini", original.to_vec()),
+			("FalloutCustom.ini", custom.to_vec()),
+			("plugins.txt", b"*Example.esm\r\n".to_vec()),
+		]);
+		let export = project_profile(&canonical, Some(b"[Archive]\nsArchiveList=Default.bsa\n"), false)?;
+		let exec = project_profile(&canonical, Some(b"[Archive]\nsArchiveList=Default.bsa\n"), true)?;
+		let exported = String::from_utf8(export["Fallout.ini"].clone()).context(PrototypeError::Fixture)?;
+		assert!(exported.contains("sArchiveList=Fallout - Invalidation.bsa, Custom.bsa\r\n"));
+		assert!(exported.contains("SLocalSavePath=Saves\\\r\n"));
+		assert!(exported.contains("; untouched\r\n"));
+		assert!(String::from_utf8(exec["Fallout.ini"].clone())
+			.context(PrototypeError::Fixture)?
+			.contains("SLocalSavePath=__mods_saves\\\r\n"));
+		assert_eq!(
+			export["FalloutCustom.ini"],
+			b"[Archive]\r\n[Display]\r\nbOther=keep\r\n"
+		);
+		assert_eq!(export["plugins.txt"], b"*Example.esm\r\n");
+		assert_eq!(canonical["Fallout.ini"], original);
+		assert_eq!(canonical["FalloutCustom.ini"], custom);
+		assert_eq!(
+			archive_input(Some(b"[Archive]\nsArchiveList=\n"), original, None)?,
+			"Fallout - Invalidation.bsa"
+		);
+		assert_eq!(
+			archive_input(None, b"[Archive]\nsArchiveList=Fallout.bsa\n", None)?,
+			"Fallout - Invalidation.bsa, Fallout.bsa"
+		);
+		assert_eq!(
+			archive_input(
+				None,
+				b"[General]\na=1\n",
+				Some(b"[Archive]\nsArchiveList=Default.bsa\n")
+			)?,
+			"Fallout - Invalidation.bsa, Default.bsa"
+		);
+		assert!(archive_input(None, b"[General]\na=1\n", None).is_err());
+		assert!(archive_input(Some(&[0xff, 0xfe, 0x00]), original, None).is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn reconcile_keeps_original_managed_values_and_child_settings_or_refuses_conflict() -> Trial<()> {
+		let canonical = b"[General]\r\nSLocalSavePath=Saves\\\r\nbUseMyGamesDirectory=0\r\n[Archive]\r\nsArchiveList=User.bsa\r\nbInvalidateOlderFiles=0\r\nSInvalidationFile=user.txt\r\n[Display]\r\nbOther=old\r\n";
+		let baseline = derived_ini(canonical, "Fallout - Invalidation.bsa, User.bsa", true, true)?;
+		let child = String::from_utf8(baseline.clone())
+			.context(PrototypeError::Fixture)?
+			.replace("bOther=old", "bOther=child")
+			.replace("SLocalSavePath=__mods_saves\\", "SLocalSavePath=private-edited\\");
+		let merged = reconcile(canonical, &baseline, child.as_bytes(), canonical)?;
+		assert_eq!(merged, b"[General]\r\nbUseMyGamesDirectory=0\r\nSLocalSavePath=Saves\\\r\n[Archive]\r\nbInvalidateOlderFiles=0\r\nSInvalidationFile=user.txt\r\nsArchiveList=User.bsa\r\n[Display]\r\nbOther=child\r\n");
+		assert!(reconcile(canonical, &baseline, child.as_bytes(), b"concurrent edit").is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn custom_archive_canonical_keys_survive_projection_and_child_edits() -> Trial<()> {
+		let original = b"[Archive]\r\nsArchiveList=User.bsa\r\n[Display]\r\nquality=old\r\n";
+		let baseline = derived_ini(original, "Fallout - Invalidation.bsa, User.bsa", true, false)?;
+		assert_eq!(baseline, b"[Archive]\r\n[Display]\r\nquality=old\r\n");
+		let child = b"[Archive]\r\n[Display]\r\nquality=new\r\n";
+		assert_eq!(
+			reconcile(original, &baseline, child, original)?,
+			b"[Archive]\r\nsArchiveList=User.bsa\r\n[Display]\r\nquality=new\r\n"
+		);
+		assert_eq!(
+			reconcile(
+				b"[Archive]\nsArchiveList=\n",
+				b"[Archive]\n",
+				b"[Archive]\n",
+				b"[Archive]\nsArchiveList=\n"
+			)?,
+			b"[Archive]\nsArchiveList=\n"
+		);
+		Ok(())
+	}
+
+	#[test]
+	fn relocated_or_duplicate_controlled_keys_are_refused_even_with_same_count() -> Trial<()> {
+		let original = b"[General]\nSLocalSavePath=Saves\\\n[Archive]\nsArchiveList=User.bsa\n";
+		let baseline = derived_ini(original, "Fallout - Invalidation.bsa, User.bsa", true, true)?;
+		let baseline = String::from_utf8(baseline).context(PrototypeError::Fixture)?;
+		let relocated = baseline
+			.replace("SLocalSavePath=__mods_saves\\\n", "")
+			.replace("[Archive]\n", "[Archive]\nSLocalSavePath=private\\\n");
+		assert!(reconcile(original, baseline.as_bytes(), relocated.as_bytes(), original).is_err());
+		let duplicate = baseline.replace(
+			"sArchiveList=Fallout - Invalidation.bsa, User.bsa",
+			"SLocalSavePath=private\\",
+		);
+		assert!(reconcile(original, baseline.as_bytes(), duplicate.as_bytes(), original).is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn staged_publication_preserves_bytes_mtime_and_partial_on_stop() -> Trial<()> {
+		let scratch = TempDir::new().context(PrototypeError::Fixture)?;
+		let source = scratch.path().join("source.ini");
+		fs::write(&source, b"canonical").context(PrototypeError::Fixture)?;
+		let when = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+		File::options()
+			.write(true)
+			.open(&source)
+			.context(PrototypeError::Fixture)?
+			.set_times(FileTimes::new().set_modified(when))
+			.context(PrototypeError::Fixture)?;
+		let generated = crate::empty_bsa_bytes();
+		let bsa_source = scratch.path().join("generated.bsa");
+		fs::write(&bsa_source, &generated).context(PrototypeError::Fixture)?;
+		let files = [
+			(source.clone(), "profile/Fallout.ini".to_owned(), b"derived".to_vec()),
+			(bsa_source, "Data/Fallout - Invalidation.bsa".to_owned(), generated),
+		];
+		let final_path = scratch.path().join("export");
+		assert!(stage_once(scratch.path(), &final_path, &files, Some(1)).is_err());
+		assert!(!final_path.exists());
+		assert_eq!(
+			fs::read(scratch.path().join("disposable-partial/profile/Fallout.ini"))
+				.context(PrototypeError::Fixture)?,
+			b"derived"
+		);
+		assert_eq!(
+			fs::metadata(scratch.path().join("disposable-partial/profile/Fallout.ini"))
+				.context(PrototypeError::Fixture)?
+				.modified()
+				.context(PrototypeError::Fixture)?,
+			when
+		);
+		fs::remove_dir_all(scratch.path().join("disposable-partial")).context(PrototypeError::Fixture)?;
+		stage_once(scratch.path(), &final_path, &files, None)?;
+		assert_eq!(
+			fs::read(final_path.join("Data/Fallout - Invalidation.bsa"))
+				.context(PrototypeError::Fixture)?,
+			[
+				b"BSA\0".as_slice(),
+				&0x68_u32.to_le_bytes(),
+				&36_u32.to_le_bytes(),
+				&3_u32.to_le_bytes(),
+				&[0; 20]
+			]
+			.concat()
+		);
+		assert_eq!(
+			fs::metadata(final_path.join("profile/Fallout.ini"))
+				.context(PrototypeError::Fixture)?
+				.modified()
+				.context(PrototypeError::Fixture)?,
+			when
+		);
+		assert!(stage_once(scratch.path(), &final_path, &files, None).is_err());
+		assert_eq!(
+			fs::read(final_path.join("profile/Fallout.ini")).context(PrototypeError::Fixture)?,
+			b"derived"
+		);
+		Ok(())
+	}
+
+	#[test]
+	fn missing_timestamp_source_retains_io_cause() -> Trial<()> {
+		let scratch = TempDir::new().context(PrototypeError::Fixture)?;
+		let result = write_with_mtime(
+			&scratch.path().join("missing"),
+			&scratch.path().join("copied"),
+			b"copied",
+		);
+		let Err(error) = result else {
+			return Err(invalid("missing source must fail"));
+		};
+		assert!(error.iter_reports().any(|report| report
+			.downcast_current_context::<std::io::Error>()
+			.is_some_and(|cause| cause.kind() == std::io::ErrorKind::NotFound)));
+		Ok(())
+	}
+
+	#[test]
+	fn model_keeps_temporary_ini_until_known_full_drain() -> Trial<()> {
+		let scratch = TempDir::new().context(PrototypeError::Fixture)?;
+		let temporary = scratch.path().join("execution.ini");
+		fs::write(&temporary, b"temporary derived INI").context(PrototypeError::Fixture)?;
+		let mut root_exited = true;
+		let mut descendants_drained = false;
+		if root_exited && descendants_drained {
+			fs::remove_file(&temporary).context(PrototypeError::Fixture)?;
+		}
+		assert_eq!(
+			fs::read(&temporary).context(PrototypeError::Fixture)?,
+			b"temporary derived INI"
+		);
+		root_exited = true;
+		descendants_drained = true;
+		let mut preservation_succeeded = false;
+		if root_exited && descendants_drained && preservation_succeeded {
+			fs::remove_file(&temporary).context(PrototypeError::Fixture)?;
+		}
+		assert_eq!(
+			fs::read(&temporary).context(PrototypeError::Fixture)?,
+			b"temporary derived INI"
+		);
+		preservation_succeeded = true;
+		if root_exited && descendants_drained && preservation_succeeded {
+			fs::remove_file(&temporary).context(PrototypeError::Fixture)?;
+		}
+		assert!(!temporary.exists());
+		Ok(())
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::MAX_PROFILE_BYTES;
