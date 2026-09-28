@@ -19,6 +19,9 @@
       "package-name": "mods",
       "initial-version": "0.1.0",
       "version-file": "version.txt",
+      "extra-files": [
+        { "type": "generic", "path": "skills/mods-cli/SKILL.md" }
+      ],
       "changelog-path": "CHANGELOG.md",
       "include-component-in-tag": false,
       "skip-github-release": false
