@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/Reilley64/mods/compare/v0.1.0...v0.1.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* scope coding style gate to session worktree ([#112](https://github.com/Reilley64/mods/issues/112)) ([a3b725f](https://github.com/Reilley64/mods/commit/a3b725f6d8336367941c2210bff705e0eefd5517))
+
 ## 0.1.0 (2026-09-28)
 
 
