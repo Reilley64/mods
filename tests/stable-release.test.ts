@@ -85,12 +85,12 @@ test("Winget duplicate matching uses the exact version directory", async () => {
 
 const workflow = Bun.YAML.parse(await Bun.file(".github/workflows/publish-stable.yml").text()) as any;
 
-test("stable publication is active only for dispatch or non-prerelease events while Winget is opt-in", () => {
+test("stable publication is active only for dispatch or non-prerelease events and Winget follows successful publication", () => {
   expect(workflow.on.release.types).toEqual(["published"]);
   expect(workflow.on.workflow_dispatch.inputs.tag).toMatchObject({ required: true, type: "string" });
   expect(workflow.jobs.stable.if).toBe("${{ (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) }}");
   expect(workflow.jobs.winget.needs).toBe("stable");
-  expect(workflow.jobs.winget.if).toBe("${{ vars.WINGET_UPDATES_ENABLED == 'true' }}");
+  expect(workflow.jobs.winget.if).toBeUndefined();
 });
 
 test("stable activation retains exact-tag validation, checks, packaging and public-byte verification", () => {

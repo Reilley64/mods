@@ -20,11 +20,10 @@ function manifests() {
   ] as any[];
 }
 
-test("submission is explicitly opt-in, preparation needs no activation", () => {
-  expect(updateMode("prepare", undefined)).toBe("prepare");
-  expect(updateMode("submit", "true")).toBe("submit");
-  for (const disabled of [undefined, "", "false", "TRUE"]) expect(() => updateMode("submit", disabled)).toThrow();
-  for (const invalid of [undefined, "", "update"]) expect(() => updateMode(invalid, "true")).toThrow();
+test("preparation and submission are explicit modes without an opt-in variable", () => {
+  expect(updateMode("prepare")).toBe("prepare");
+  expect(updateMode("submit")).toBe("submit");
+  for (const invalid of [undefined, "", "update"]) expect(() => updateMode(invalid)).toThrow();
 });
 
 test("accepts the verified public runtime and inherited portable contract", () => {
@@ -90,7 +89,7 @@ const install = await Bun.file("scripts/test-winget-install.ps1").text();
 
 test("release submission waits for native install and retained evidence on a compatible runner", () => {
   const job = workflow.jobs.winget;
-  expect(job.if).toBe("${{ vars.WINGET_UPDATES_ENABLED == 'true' }}");
+  expect(job.if).toBeUndefined();
   expect(job["runs-on"]).toBe("windows-2025");
   expect(job["timeout-minutes"]).toBe(30);
   expect(job.needs).toBe("stable");
@@ -133,6 +132,8 @@ test("native gate refuses personal hosts, old OS, preexisting installations and 
     "Mods is already installed", "Preexisting alias", "archiveExtractionMethod"]) expect(install).toContain(guard);
   expect(install).toContain("$exitCode -notin $AllowedExitCodes");
   expect(install).toContain("$versionReceipt.Stdout.Trim()");
+  expect(install).toContain("src/presentation/cli/Cargo.toml");
+  expect(install).toContain('"mods $cliVersion"');
   expect(install).toContain("finally {");
   expect(install).toContain("'uninstall', '--id', $packageId, '--exact'");
   expect(install).toContain("'settings', '--disable', 'LocalManifestFiles'");
@@ -147,4 +148,33 @@ test.skipIf(process.platform !== "win32")("Windows parses the native gate withou
     "$tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd 'scripts/test-winget-install.ps1'), [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | Out-String | Write-Error; exit 1 }"],
     { stdout: "inherit", stderr: "inherit" });
   expect(await child.exited).toBe(0);
+});
+
+
+test("independent PR/main install CI builds the checkout without release credentials", async () => {
+  const ci = Bun.YAML.parse(await Bun.file(".github/workflows/ci.yml").text()) as any;
+  const candidate = Bun.YAML.parse(await Bun.file(".github/workflows/winget-install.yml").text()) as any;
+  const call = ci.jobs["winget-install"];
+  expect(call.uses).toBe("./.github/workflows/winget-install.yml");
+  expect(call.if).toBe("${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}");
+  expect(call.secrets).toBeUndefined();
+  expect(candidate.on).toHaveProperty("workflow_call");
+  expect(candidate.permissions).toEqual({ contents: "read" });
+  expect(candidate.jobs.install["runs-on"]).toBe("windows-2025");
+  const steps = candidate.jobs.install.steps as any[];
+  const build = steps.findIndex(step => step.run === "./scripts/package-windows.ps1 -ReleaseId $env:GITHUB_SHA");
+  const install = steps.findIndex(step => step.run === "bun scripts/test-winget-candidate.ts $env:GITHUB_SHA");
+  expect(build).toBeGreaterThan(0);
+  expect(install).toBeGreaterThan(build);
+  const artifact = steps.find(step => step.uses?.startsWith("actions/upload-artifact@"));
+  expect(artifact.if).toBe("always()");
+  expect(artifact.with.path).toBe("dist/");
+  expect(artifact.with["retention-days"]).toBe(90);
+  const text = JSON.stringify(candidate);
+  for (const forbidden of ["secrets.", "WINGET_CREATE_GITHUB_TOKEN", "WINGET_UPDATES_ENABLED", "update-winget.ts", "pull_request_target"]) {
+    expect(text).not.toContain(forbidden);
+  }
+  expect(ci.jobs.preview.if).toBe("${{ false }}");
+  expect(updater).not.toContain("WINGET_UPDATES_ENABLED");
+  expect(JSON.stringify(workflow)).not.toContain("WINGET_UPDATES_ENABLED");
 });

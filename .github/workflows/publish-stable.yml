@@ -86,8 +86,7 @@ jobs:
 
   winget:
     needs: stable
-    # Opt-in only: bootstrap, native lifecycle proof and credentials remain activation requirements.
-    if: ${{ vars.WINGET_UPDATES_ENABLED == 'true' }}
+    # Runs after stable publication; bootstrap, validation and install gates still fail closed.
     runs-on: windows-2025
     timeout-minutes: 30
     environment: winget
@@ -156,6 +155,5 @@ jobs:
         if: ${{ success() && steps.prepare.outputs.ready == 'true' }}
         shell: pwsh
         env:
-          WINGET_UPDATES_ENABLED: ${{ vars.WINGET_UPDATES_ENABLED }}
           WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
         run: bun scripts/update-winget.ts submit $env:RELEASE_TAG

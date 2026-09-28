@@ -87,6 +87,11 @@ try {
         Invoke-Recorded $winget @('settings', '--enable', 'LocalManifestFiles', '--disable-interactivity', '--verbose-logs') | Out-Null
     }
 
+    # Clap reports the CLI crate version, which can differ from the aggregate package version.
+    $bun = (Get-Command bun -CommandType Application -ErrorAction Stop).Source
+    $cliVersion = (Invoke-Recorded $bun @('-e', "console.log(Bun.TOML.parse(await Bun.file('src/presentation/cli/Cargo.toml').text()).package.version)")).Stdout.Trim()
+    if ($cliVersion -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Cannot determine the expected CLI version.' }
+
     $installAttempted = $true
     Invoke-Recorded $winget @('install', '--manifest', $manifest, '--scope', 'user', '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--verbose-logs') | Out-Null
     Invoke-Recorded $winget $listArguments | Out-Null
@@ -96,7 +101,7 @@ try {
     $installedCommand = (Get-Command mods -CommandType Application -ErrorAction Stop).Source
     if ($installedCommand -ne $aliasPath) { throw "Unexpected mods command: $installedCommand" }
     $versionReceipt = Invoke-Recorded $installedCommand @('--version')
-    if ($versionReceipt.Stdout.Trim() -ne "mods $Version") {
+    if ($versionReceipt.Stdout.Trim() -ne "mods $cliVersion") {
         throw "Unexpected installed version: $($versionReceipt.Stdout)"
     }
     Invoke-Recorded $installedCommand @('--help') | Out-Null

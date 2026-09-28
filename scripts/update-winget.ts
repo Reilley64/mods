@@ -46,9 +46,8 @@ export function checkManifests(documents: unknown[], release: { version: string;
   }
 }
 
-export function updateMode(mode: string | undefined, enabled: string | undefined) {
+export function updateMode(mode: string | undefined) {
   if (mode !== "prepare" && mode !== "submit") throw new Error("Expected prepare or submit");
-  if (mode === "submit" && enabled !== "true") throw new Error("Submission requires WINGET_UPDATES_ENABLED=true");
   return mode;
 }
 
@@ -73,7 +72,7 @@ async function existingUpdate(version: string) {
 
 if (import.meta.main) {
   const [modeArg, tag, ...extra] = Bun.argv.slice(2);
-  const mode = updateMode(modeArg, process.env.WINGET_UPDATES_ENABLED);
+  const mode = updateMode(modeArg);
   if (extra.length) throw new Error("Expected mode and stable tag only");
   const identity = stableRelease(tag ?? "");
   if (identity.version === "0.1.0") throw new Error("Human-controlled v0.1.0 bootstrap cannot be automated");
