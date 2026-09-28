@@ -73,10 +73,25 @@ not in Bun-only tooling CI.
 Final local `bun run check` passed formatting, Clippy, dependency checks, both
 new release cases (46 assertions), 389 Rust tests and 100 existing tooling tests.
 Independent Standards and Spec reviews found no blockers; no repair cycle was
-needed for this patch. This is not a live Release Please regeneration or a new
-Windows package/runtime pass. Exact-patch Windows CI remains to be recorded.
-The old release PR must be regenerated against the approved CLI-only tree and
-pass its own checks before an owner-approved release merge/publication.
+needed for this patch. The repair was pushed as
+`e16463655df2bcc7c5453d28720955e55f5d40da`.
+[Exact-head Windows CI 36389103534](https://github.com/Reilley64/mods/actions/runs/36389103534)
+passed Rust checks, native validation, the x86 adapter check and tools. Its log
+records both new Cargo-resolution cases passing with 46 assertions; previews
+were skipped. This is not live Release Please regeneration or a new packaged
+runtime/game pass. The old release PR must be regenerated against the approved
+CLI-only tree and pass its own checks before an owner-approved release
+merge/publication.
+
+The owner reports that only the existing PC is available. A read-only baseline
+on that Windows 11 Home build 26200 host found installed x86/x64 VC++ runtimes
+`v14.51.36247.00`, Desktop App Installer `1.29.380.0`, no matching Mods entries in
+the checked uninstall registries, and no alias detected at the three standard
+Mods/WinGet locations checked. This is an existing-host baseline, not proof of
+a pristine OS, exhaustive alias absence or absence of undeclared dependencies.
+It does not establish stable/Winget installation/removal or authorize publication.
+No OS reinstall or game add-on removal is planned. The remaining target baseline
+and installation authority must be explicit in the release/lifecycle handoff.
 
 ## Authorized real weather-archive installation — 2026-09-28
 
