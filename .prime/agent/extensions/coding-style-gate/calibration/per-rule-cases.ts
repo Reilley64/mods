@@ -17,6 +17,60 @@ export interface PerRuleCase {
 
 export const perRuleCases: PerRuleCase[] = [
   {
+    "name": "required-archive-option",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct InspectArgs {\n    #[arg(long)]\n    archive: PathBuf,\n}"
+  },
+  {
+    "name": "required-archive-positional",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct InspectArgs {\n    archive: PathBuf,\n}"
+  },
+  {
+    "name": "optional-report-positional",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct VerifyArgs {\n    archive: PathBuf,\n    report: Option<PathBuf>,\n}"
+  },
+  {
+    "name": "optional-report-and-flag-named",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct VerifyArgs {\n    archive: PathBuf,\n    #[arg(long)]\n    report: Option<PathBuf>,\n    #[arg(long)]\n    verbose: bool,\n}"
+  },
+  {
+    "name": "defaulted-limit-positional",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "validation",
+    "expectedViolation": true,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct ListArgs {\n    #[arg(default_value_t = 20)]\n    limit: usize,\n}"
+  },
+  {
+    "name": "defaulted-limit-named",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "validation",
+    "expectedViolation": false,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct ListArgs {\n    #[arg(long, default_value_t = 20)]\n    limit: usize,\n}"
+  },
+  {
     "name": "fold-validation-into-publication-violation",
     "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
     "split": "train",
