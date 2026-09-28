@@ -14,24 +14,6 @@ mods --help
 
 If the terminal cannot find `mods` after installation, open a new terminal. For ZIP installation, runtime files, and setup errors, see the [setup guide](skills/mods-cli/references/setup.md). Release binaries and corresponding source are available on [GitHub Releases](https://github.com/Reilley64/mods/releases).
 
-## Install the agent skill
-
-The `mods-cli` skill gives your coding agent a CLI reference, including FOMOD Choices, Install Plan previews, and approval rules for changes and program execution.
-
-With Node.js and npm available, run:
-
-```sh
-npx skills add Reilley64/mods --skill mods-cli
-```
-
-Choose your agent and installation scope when prompted. This installs instructions for the agent, not the CLI. To update installed skills:
-
-```sh
-npx skills update
-```
-
-The skill uses `v0.1.0` as its tested reference. It allows minor and patch version differences when installed help confirms the requested commands and options. Read the [skill](skills/mods-cli/SKILL.md) or learn about [skills.sh](https://skills.sh/docs).
-
 ## Start a Mod Environment
 
 Replace these paths with a new Environment Root and your Steam Game Installation:
@@ -64,6 +46,24 @@ New Data Mods start disabled. The released CLI has no enable command. Installati
 Run `mods <command> --help` for the installed command's options. See the [command reference](skills/mods-cli/references/commands.md) for examples.
 
 Conflict analysis does not inspect BSA members or prove runtime compatibility. Managed execution does not guarantee analytical Tombstone suppression or enforce projected plugin order through virtual timestamps. Read the [conflict and execution guide](skills/mods-cli/references/execution.md) before relying on those results.
+
+## Install the agent skill
+
+The `mods-cli` skill gives your coding agent a CLI reference, including FOMOD Choices, Install Plan previews, and approval rules for changes and program execution.
+
+With Node.js and npm available, run:
+
+```sh
+npx skills add Reilley64/mods --skill mods-cli
+```
+
+Choose your agent and installation scope when prompted. This installs instructions for the agent, not the CLI. To update installed skills:
+
+```sh
+npx skills update
+```
+
+The skill uses `v0.1.0` as its tested reference. It allows minor and patch version differences when installed help confirms the requested commands and options. Read the [skill](skills/mods-cli/SKILL.md) or learn about [skills.sh](https://skills.sh/docs).
 
 ## Documentation
 
