@@ -19,9 +19,9 @@ concurrency:
 
 jobs:
   stable:
-    # Keep disabled until issue #33 acceptance and explicit stable approval.
+    # The owner approved CLI-only v0.1.0 publication and release PR merge.
     # The disconnected rebuild was owner-waived, not passed or required.
-    if: ${{ false && (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) }}
     runs-on: windows-2022
     permissions:
       contents: write

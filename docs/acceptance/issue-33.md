@@ -1,6 +1,6 @@
 # Issue 33 acceptance evidence ledger
 
-Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. Stable release is not yet accepted.** Runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. The owner also confirmed selected-Mod-Environment save-view isolation and return from prior runs. No additional game run is required for this aspect; stable-package lifecycle, release approval and Winget sign-off remain separate. Older chronological checkpoints below are historical and revision-bound.
+Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. CLI-only `v0.1.0` publication and release PR merge are owner-approved; actual stable delivery/lifecycle and Winget remain pending.** Runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. The owner also confirmed selected-Mod-Environment save-view isolation and return from prior runs. No additional game run is required for this aspect; stable-package lifecycle and Winget sign-off remain pending. Older chronological checkpoints below are historical and revision-bound.
 
 ## Current closeout checklist — 2026-09-28
 
@@ -25,19 +25,22 @@ historical; their pending statements do not reopen completed checks.
   argv, snapshot, hash or clean-exit receipt is claimed. The prepared cross-view
   wizard is not required; preserve its unused fixture and all earlier evidence.
   Do not repeat completed game checks or infer arbitrary-path hiding.
-- [ ] Resolve the observed **release-version consistency failure** before release
-  approval. [Release PR #36 CI 36358212966](https://github.com/Reilley64/mods/actions/runs/36358212966)
-  fails because `application 0.1.0` requires path `domain ^0.0.0`, while the path
-  package is `0.1.0`. PR #36 also predates the CLI-only tree and still describes
-  MCP. It must not be merged as an approved CLI-only release in this state.
+- [x] Resolve the observed **release-version consistency failure**. The earlier
+  [PR #36 CI 36358212966](https://github.com/Reilley64/mods/actions/runs/36358212966)
+  failure is historical. Regenerated CLI-only release PR #36 at `34f6a7f3` passed
+  [CI 36393034673](https://github.com/Reilley64/mods/actions/runs/36393034673).
+  This resolves the generated-release verification blocker, not runtime or
+  public-artifact acceptance.
 - [ ] Obtain an owner-designated clean Windows 11 target/baseline and complete
   the remaining **actual stable artifact** install/run/remove evidence, recording
   prerequisites and managed Steam Data preservation. The unpublished candidate's
   owned lifecycle is already passed. A new directory alone does not establish
   clean-host dependency state, but no OS reinstall or game add-on removal is
   mandated by these requirements.
-- [ ] Obtain explicit owner approval for the CLI-only stable snapshot/version
-  and publication. Verify real public ZIP/checksum bytes before using their URL
+- [x] Record explicit owner approval for CLI-only `v0.1.0` stable publication,
+  stable workflow enablement and release PR #36 merge. Preview and Winget remain
+  false-gated; this approval does not authorize Winget submission.
+- [ ] Publish and verify real stable ZIP/checksum bytes before using their URL
   and hash for Winget; do not invent a manifest or reuse the candidate hash for
   different release bytes.
 - [ ] Validate the initial `Reilley64.Mods` Winget manifest and clean-target
@@ -47,8 +50,11 @@ Publication/public-delivery/Winget proof necessarily follows the owner's
 publication decision; it is not silently claimed as prepublication evidence.
 The owner subsequently approved merging implementation PR #103 with `Refs #33`
 while #33 remains open for release delivery. This supersedes the earlier
-draft-until-all-acceptance restriction for #103 only. It does not authorize
-merging release PR #36, enabling publication, or Winget submission.
+draft-until-all-acceptance restriction for #103 only. The subsequent explicit
+CLI-only `v0.1.0` approval now authorizes release PR #36 merge and stable workflow
+enablement, but not Winget submission. This current status supersedes historical
+pending-approval and disabled-stable notes below. Issue #33 remains open for
+actual stable delivery/lifecycle and Winget acceptance; no publication is claimed.
 CLI Ctrl+C and disconnected rebuilding remain owner-waived/unverified, MCP is
 post-MVP #105, and AV diagnosis remains optional for the approved functional
 credit. No numeric performance threshold or new upstream filesystem harness is
@@ -57,7 +63,7 @@ required. Current-main green CI did not execute Rust/native/x86 steps in
 retain the separate passing exact-head issue-branch runs rather than transferring
 coverage. No credentials blocker has been established.
 
-## Approved release-version repair — pending generated-release verification
+## Approved release-version repair — generated-release verification resolved
 
 The owner approved a bounded fix for PR #36's inherited local dependency version
 mismatch. Only the root workspace's three internal path dependency version
@@ -87,9 +93,10 @@ needed for this patch. The repair was pushed as
 passed Rust checks, native validation, the x86 adapter check and tools. Its log
 records both new Cargo-resolution cases passing with 46 assertions; previews
 were skipped. This is not live Release Please regeneration or a new packaged
-runtime/game pass. The old release PR must be regenerated against the approved
-CLI-only tree and pass its own checks before an owner-approved release
-merge/publication.
+runtime/game pass. That checkpoint required release PR regeneration. The regenerated
+CLI-only PR #36 at `34f6a7f3` has since passed CI 36393034673, and the owner approved its
+merge/publication as recorded above. These results do not establish public bytes
+or a new packaged runtime/game pass.
 
 The owner reports that only the existing PC is available. A read-only baseline
 on that Windows 11 Home build 26200 host found installed x86/x64 VC++ runtimes
@@ -456,7 +463,7 @@ for its recorded fixture.
 | Real game/profile/save | Human same-environment and weather save/reload passed with stable owned seed/new save, source snapshots and explicit normal-Quit confirmation. | Selected-Mod-Environment save-view isolation/return is also passed by explicit owner confirmation of prior runs; no new instrumented A/B/A receipt is claimed. AV statuses remain unattributed, not clean exits. |
 | Performance | Owner confirmed visible change and performance fine after the baseline/modded comparison. | Qualitative credit only; no measured startup time, general-scale benchmark or numeric threshold claim. |
 | Diagnostics/cancellation | CLI automated checks remain recorded; Ctrl+C owner-waived/unverified. | MCP checks are deferred to #105; no new native fault-injection harness. |
-| Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency, approved stable snapshot/public bytes, clean-target stable lifecycle and human Winget bootstrap remain open. |
+| Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency is resolved and CLI-only `v0.1.0` publication is owner-approved. Actual public bytes, stable lifecycle and human Winget bootstrap remain open. |
 
 The detailed requirements, current CI caveats and authorization boundaries are in
 the current closeout checklist above. Historical non-game checkpoints are not

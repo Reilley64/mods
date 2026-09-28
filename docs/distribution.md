@@ -1,6 +1,8 @@
 # Windows distribution candidates
 
-Publication remains disabled. This recipe prepares candidates, not release approval.
+The owner approved CLI-only `v0.1.0` stable publication and release PR merge.
+Stable publication is enabled; preview publication and Winget remain disabled.
+Approval is not evidence that stable assets have been published or verified.
 The aggregate version belongs to `version.txt` and `vX.Y.Z`, not the CLI package.
 The CLI-only MVP source and workspace contain `mods.exe` but no MCP Presentation;
 its ZIP ships only `mods.exe`. The earlier two-executable ZIP is historical evidence,
@@ -26,7 +28,7 @@ normal Rust checks. It uses the pinned project toolchain and temporary workspace
 copies to check first-release and independent-version resolution, locked metadata,
 and unchanged external dependency pins. It also runs in `bun run check:rust`.
 This is release-wiring evidence, not a new Windows package acceptance run or
-permission to publish. The aggregate version and publication gates are unchanged.
+permission to publish. The aggregate version and dependency pins are unchanged.
 
 ## Prepare a candidate
 
@@ -107,28 +109,31 @@ Do not claim that `--frozen`, a connected build, or origin blocking proves a
 disconnected build. Preserve the recorded source inventory and actual build
 evidence, including source identities, tool versions, commands, inputs, hashes
 and results. Complete corresponding source and required notices remain mandatory.
-The waiver does not enable publication or waive the remaining acceptance checks.
+The waiver alone does not authorize publication or waive the remaining acceptance checks.
+The owner separately approved CLI-only `v0.1.0` publication; actual stable-artifact
+lifecycle and Winget evidence remain pending in [issue #33](acceptance/issue-33.md).
 
 The disabled preview recipe delegates to the shared script and uploads the ZIP
 and checksum with full-SHA naming and 90-day retention. Enabling it additionally
 requires accepted-main-push gating and successful Rust and repository-tool
-checks. Stable publication and Winget recipes are described below, but remain disabled.
-Packaged-binary smoke tests and clean Windows installation/removal evidence
-remain acceptance prerequisites.
+checks. Stable publication is enabled as described below; Winget remains disabled.
+Actual stable-artifact smoke tests and Windows installation/removal evidence
+remain issue #33 acceptance requirements, not claimed prepublication passes.
 There is no byte-for-byte reproducibility claim.
 
 
-## Stable publication and recovery (disabled)
+## Stable publication and recovery
 
 `publish-stable.yml` accepts a published non-prerelease release or recovery dispatch
 with its existing exact `vX.Y.Z` tag. It checks out `refs/tags/<tag>`, runs
 `bun run check`, and calls the same clean committed packaging script as previews.
 The nonzero aggregate `version.txt` must match the tag. No component tag qualifies.
-The workflow has an explicit false job gate. Remove only the `false &&` portion
-of the stable condition after accepting the source/build evidence above
-and required Windows acceptance evidence. Keep its event
-condition. Do not replace this with a new manual approval environment: merging
-the release PR is publication approval.
+The owner approved enabling stable publication for CLI-only `v0.1.0` and merging
+the regenerated release PR #36. Only the stable job's `false &&` gate was removed;
+the dispatch/non-prerelease event condition and release validation remain.
+There is no new manual approval environment: merging the release PR is publication
+approval. Public ZIP/checksum verification and actual stable-artifact lifecycle
+evidence still have to be recorded; approval does not claim those checks passed.
 
 Publication adds missing assets only. It never replaces public ZIP bytes, deletes
 a release, or recreates a version. Anonymous HTTPS downloads verify the exact
