@@ -50,3 +50,15 @@ pub use types::ResolvedFlag;
 pub use types::UnresolvedGroup;
 pub use types::VisibleOption;
 pub use types::WinnerReason;
+
+mod install_mod;
+pub use install_mod::InstallModDependencies;
+pub use install_mod::InstallModError;
+pub use install_mod::InstallModOutput;
+pub use install_mod::install_mod;
+pub use types::DownloadModFile;
+pub use types::DownloadModOutput;
+pub use types::DownloadedMod;
+pub use types::ModSource;
+pub use types::NexusProvenance;
+pub use types::RemoteModSource;
