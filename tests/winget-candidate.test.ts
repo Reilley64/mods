@@ -42,6 +42,10 @@ test("generates local portable WinGet manifest and serves only candidate ZIP", a
     expect((await fetch(url.replace(name, "unrelated.zip"))).status).toBe(404);
     const docs = manifests("0.1.0", url, "b".repeat(64));
     expect(Object.keys(docs)).toHaveLength(3);
+    for (const text of Object.values(docs)) {
+      const parsed = Bun.YAML.parse(text) as { ManifestType: string };
+      expect(text.split("\n")[0]).toBe(`# yaml-language-server: $schema=https://aka.ms/winget-manifest.${parsed.ManifestType}.1.12.0.schema.json`);
+    }
     const installer = Bun.YAML.parse(docs["Reilley64.Mods.installer.yaml"]!);
     expect(installer).toMatchObject({ PackageIdentifier: "Reilley64.Mods", PackageVersion: "0.1.0",
       MinimumOSVersion: "10.0.22000.0", InstallerType: "zip", NestedInstallerType: "portable",

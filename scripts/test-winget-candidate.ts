@@ -32,9 +32,9 @@ export function manifests(version: string, url: string, hash: string) {
   }
   const header = `PackageIdentifier: Reilley64.Mods\nPackageVersion: ${version}\n`;
   return {
-    "Reilley64.Mods.yaml": `${header}DefaultLocale: en-US\nManifestType: version\nManifestVersion: 1.12.0\n`,
-    "Reilley64.Mods.locale.en-US.yaml": `${header}PackageLocale: en-US\nPublisher: Reilley64\nPackageName: mods\nLicense: GPL-3.0-or-later\nShortDescription: Mod manager\nManifestType: defaultLocale\nManifestVersion: 1.12.0\n`,
-    "Reilley64.Mods.installer.yaml": `${header}InstallerType: zip\nNestedInstallerType: portable\nNestedInstallerFiles:\n  - RelativeFilePath: mods.exe\n    PortableCommandAlias: mods\nMinimumOSVersion: 10.0.22000.0\nDependencies:\n  PackageDependencies:\n    - PackageIdentifier: Microsoft.VCRedist.2015+.x64\n    - PackageIdentifier: Microsoft.VCRedist.2015+.x86\nInstallers:\n  - Architecture: x64\n    InstallerUrl: ${url}\n    InstallerSha256: ${hash}\nManifestType: installer\nManifestVersion: 1.12.0\n`,
+    "Reilley64.Mods.yaml": `# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json\n${header}DefaultLocale: en-US\nManifestType: version\nManifestVersion: 1.12.0\n`,
+    "Reilley64.Mods.locale.en-US.yaml": `# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json\n${header}PackageLocale: en-US\nPublisher: Reilley64\nPackageName: mods\nLicense: GPL-3.0-or-later\nShortDescription: Mod manager\nManifestType: defaultLocale\nManifestVersion: 1.12.0\n`,
+    "Reilley64.Mods.installer.yaml": `# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json\n${header}InstallerType: zip\nNestedInstallerType: portable\nNestedInstallerFiles:\n  - RelativeFilePath: mods.exe\n    PortableCommandAlias: mods\nMinimumOSVersion: 10.0.22000.0\nDependencies:\n  PackageDependencies:\n    - PackageIdentifier: Microsoft.VCRedist.2015+.x64\n    - PackageIdentifier: Microsoft.VCRedist.2015+.x86\nInstallers:\n  - Architecture: x64\n    InstallerUrl: ${url}\n    InstallerSha256: ${hash}\nManifestType: installer\nManifestVersion: 1.12.0\n`,
   };
 }
 
