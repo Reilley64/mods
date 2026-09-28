@@ -33,6 +33,8 @@ use application::settings::SetGameDirectoryDependencies;
 use application::settings::get_setting;
 use application::settings::list_settings;
 use application::settings::set_game_directory;
+use application::shortcut::CreateShortcutDependencies;
+use application::shortcut::create_shortcut;
 use clap::Error as ClapError;
 use clap::error::ErrorKind;
 use domain::ArchivePath;
@@ -57,6 +59,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub(crate) struct Dependencies {
+	pub(crate) create_shortcut: CreateShortcutDependencies,
 	pub(crate) execution_force_cancellation: CancellationToken,
 	pub(crate) execute_program: ExecuteProgramDependencies,
 	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
@@ -133,6 +136,7 @@ pub(crate) async fn execute(
 			command: ConflictsCommand::Explain { .. },
 		} => "conflicts.explain",
 		Command::Exec(_) => "exec",
+		Command::Shortcut(_) => "shortcut",
 	};
 	let (mut session, diagnostic_warning) =
 		match DiagnosticSession::start(root.as_path(), cli.log_level, operation_name) {
@@ -164,14 +168,23 @@ pub(crate) async fn execute(
 		}
 	};
 
-	let work = dispatch(cli.command, dependencies, root, startup_directory);
+	let quiet_success = matches!(&cli.command, Command::Shortcut(_));
+	let work = dispatch(
+		cli.command,
+		dependencies,
+		root,
+		startup_directory,
+		cli.log_level.to_string(),
+	);
 	let mut result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
 	};
 
 	result.diagnostic_log = diagnostic_log;
-	result.stderr.push_str(&diagnostic_warning);
+	if !quiet_success || result.status != 0 {
+		result.stderr.push_str(&diagnostic_warning);
+	}
 	let terminal = if result.status == 0 {
 		"success"
 	} else if result.status == 0xC000_013A {
@@ -192,7 +205,13 @@ pub(crate) async fn execute(
 	result
 }
 
-async fn dispatch(command: Command, dependencies: Dependencies, root: EnvironmentRoot, startup: PathBuf) -> RunOutcome {
+async fn dispatch(
+	command: Command,
+	dependencies: Dependencies,
+	root: EnvironmentRoot,
+	startup: PathBuf,
+	log_level: String,
+) -> RunOutcome {
 	match command {
 		Command::Init { game_install } => {
 			let Ok(game_install) = game_install
@@ -408,6 +427,55 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				}
 			}
 		},
+		Command::Shortcut(arguments) => {
+			let output_target = if let Some(name) = arguments.output_target {
+				let Ok(name) = ModName::new(name) else {
+					return marker_outcome(ErrorMarker::invalid_output_target());
+				};
+				OutputTarget::DataMod(name)
+			} else {
+				OutputTarget::Overwrite
+			};
+			let Ok(working_directory) = WorkingDirectory::new(resolve_path(
+				arguments.cwd.as_deref().unwrap_or(&startup),
+				&startup,
+			)) else {
+				return marker_outcome(ErrorMarker::invalid_working_directory());
+			};
+			let mut command = arguments.command.into_iter();
+			let Some(program) = command.next() else {
+				return marker_outcome(ErrorMarker::program_not_found());
+			};
+			let Ok(program) = Program::new(program) else {
+				return marker_outcome(ErrorMarker::program_not_found());
+			};
+			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
+			else {
+				return marker_outcome(ErrorMarker::program_launch_failed());
+			};
+
+			match create_shortcut(
+				dependencies.create_shortcut,
+				output_target,
+				Some(working_directory),
+				program,
+				program_arguments,
+				arguments.name,
+				arguments.destination.map(|path| resolve_path(&path, &startup)),
+				log_level,
+			)
+			.await
+			{
+				Ok(_) => RunOutcome {
+					execution_failed: false,
+					diagnostic_log: None,
+					status: 0,
+					stdout: String::new(),
+					stderr: String::new(),
+				},
+				Err(report) => report_outcome(&report),
+			}
+		}
 		Command::Exec(arguments) => {
 			if arguments.hidden && !cfg!(windows) {
 				return RunOutcome {
@@ -625,6 +693,9 @@ mod tests {
 	use application::settings::ResolvedSettings;
 	use application::settings::SetGameDirectoryDependencies;
 	use application::settings::SettingSource;
+	use application::shortcut::CreateShortcutDependencies;
+	use application::shortcut::ShortcutFailure;
+	use application::shortcut::ValidatedShortcutLaunch;
 	use clap::Parser;
 	use domain::DataRelativePath;
 	use domain::GameBinding;
@@ -639,6 +710,9 @@ mod tests {
 	use domain::SteamBuildId;
 	#[cfg(windows)]
 	use domain::WorkingDirectory;
+	#[cfg(not(windows))]
+	use infrastructure_dependencies::Resources;
+	use rootcause::compat::boxed_error::IntoBoxedError;
 	use rootcause::report;
 	use std::error::Error;
 	use std::ffi::OsString;
@@ -799,6 +873,12 @@ mod tests {
 		};
 		let install_archive = unavailable_install_archive_dependencies();
 		Dependencies {
+			create_shortcut: CreateShortcutDependencies {
+				validate_launch: Arc::new(|_, _, _, _| {
+					Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })
+				}),
+				persist: Arc::new(|_| Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })),
+			},
 			execution_force_cancellation: CancellationToken::new(),
 			execute_program: ExecuteProgramDependencies {
 				report_progress: None,
@@ -1462,6 +1542,184 @@ mod tests {
 		assert_ne!(result.status, 0);
 		assert!(result.stderr.contains(&format!("diagnostic session: {id}\n")));
 		assert!(records.contains("session.failed"));
+		Ok(())
+	}
+	#[tokio::test]
+	async fn shortcut_forwards_startup_relative_paths_and_stays_quiet_without_execution()
+	-> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for custom in [false, true] {
+			let mut dependencies = successful_dependencies(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let expected_root = temp.path().join("environment");
+			let expected_cwd = if custom {
+				temp.path().join("work")
+			} else {
+				temp.path().to_owned()
+			};
+			let expected_destination = custom.then(|| temp.path().join("links"));
+			let launcher = temp.path().join("mods.exe");
+			let program = temp.path().join("tool.exe");
+			let published = Arc::new(AtomicBool::new(false));
+			let observed = published.clone();
+			let executed = Arc::new(AtomicBool::new(false));
+			let observed_execution = executed.clone();
+			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _, _| {
+				observed_execution.store(true, Ordering::SeqCst);
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) })
+			});
+			dependencies.create_shortcut = CreateShortcutDependencies {
+				validate_launch: Arc::new(move |target, cwd, input, arguments| {
+					assert_eq!(input.as_os_str(), "tool.exe");
+					assert_eq!(
+						cwd.as_ref().map(|value| value.as_path()),
+						Some(expected_cwd.as_path())
+					);
+					assert_eq!(
+						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
+						["", "a\"b", "雪", "--"]
+					);
+					if custom {
+						assert!(
+							matches!(target, OutputTarget::DataMod(name) if name.as_str() == "--Generated")
+						);
+					} else {
+						assert_eq!(target, OutputTarget::Overwrite);
+					}
+					let launch = ValidatedShortcutLaunch {
+						launcher: launcher.clone(),
+						environment: expected_root.clone(),
+						program: program.clone(),
+						working_directory: expected_cwd.clone(),
+						environment_name: Some("Vanilla Plus".into()),
+					};
+					Box::pin(async move { Ok(launch) })
+				}),
+				persist: Arc::new(move |definition| {
+					observed.store(true, Ordering::SeqCst);
+					assert_eq!(definition.destination, expected_destination);
+					assert_eq!(
+						definition.name,
+						if custom { "My tool" } else { "Vanilla Plus — tool" }
+					);
+					assert_eq!(
+						&definition.arguments[2..6],
+						["--log-level", "off", "exec", "--hidden"].map(OsString::from)
+					);
+					let saved = Cli::try_parse_from(
+						[OsString::from("mods")].into_iter().chain(definition.arguments),
+					);
+					assert!(saved.is_ok());
+					Box::pin(async { Ok(()) })
+				}),
+			};
+			let mut values =
+				arguments!["mods", "--environment", "environment", "--log-level", "off", "shortcut"];
+			if custom {
+				values.extend(arguments![
+					"--cwd",
+					"work",
+					"--output-target=--Generated",
+					"--name",
+					"My tool",
+					"--destination",
+					"links"
+				]);
+			}
+			values.extend(arguments!["--", "tool.exe", "", "a\"b", "雪", "--"]);
+			let outcome = run(values, temp.path().to_owned(), None, |_| Ok(dependencies)).await?;
+
+			assert_eq!(outcome.status, 0);
+			assert!(outcome.stdout.is_empty());
+			assert!(outcome.stderr.is_empty());
+			assert!(published.load(Ordering::SeqCst));
+			assert!(!executed.load(Ordering::SeqCst));
+		}
+		Ok(())
+	}
+	#[tokio::test]
+	async fn shortcut_logging_setup_failure_is_quiet_only_after_success() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		write(temp.path().join("logs"), b"block diagnostic directory creation")?;
+		for succeeds in [true, false] {
+			let mut dependencies = successful_dependencies(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let root = temp.path().to_owned();
+			dependencies.create_shortcut = CreateShortcutDependencies {
+				validate_launch: Arc::new(move |_, _, _, _| {
+					let launch = ValidatedShortcutLaunch {
+						launcher: root.join("mods.exe"),
+						environment: root.clone(),
+						program: root.join("tool.exe"),
+						working_directory: root.clone(),
+						environment_name: None,
+					};
+					Box::pin(async move { Ok(launch) })
+				}),
+				persist: Arc::new(move |_| {
+					Box::pin(async move {
+						if !succeeds {
+							return Err(report!(ShortcutFailure::Publication));
+						}
+						Ok(())
+					})
+				}),
+			};
+			let outcome = run(
+				arguments![
+					"mods",
+					"--environment",
+					temp.path().as_os_str(),
+					"--log-level",
+					"debug",
+					"shortcut",
+					"--",
+					"tool.exe"
+				],
+				temp.path().to_owned(),
+				None,
+				|_| Ok(dependencies),
+			)
+			.await?;
+
+			assert!(outcome.stdout.is_empty());
+			assert!(outcome.diagnostic_log.is_none());
+			if succeeds {
+				assert_eq!(outcome.status, 0);
+				assert!(outcome.stderr.is_empty(), "{}", outcome.stderr);
+			} else {
+				assert_eq!(outcome.status, 1);
+				assert!(outcome.stderr.contains("error [shortcut_failed]"));
+				assert!(outcome.stderr.contains(SINK_WARNING));
+			}
+		}
+		Ok(())
+	}
+
+	#[cfg(not(windows))]
+	#[tokio::test]
+	async fn shortcut_reports_unsupported_platform_through_normal_diagnostics() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path())
+			.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+		let outcome = run(
+			arguments!["mods", "--log-level", "off", "shortcut", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|root| {
+				dependencies.create_shortcut = Resources::system(root.clone())
+					.create_shortcut_dependencies(temp.path().to_owned());
+				Ok(dependencies)
+			},
+		)
+		.await?;
+
+		assert_eq!(outcome.status, 1);
+		assert!(outcome.stdout.is_empty());
+		assert_eq!(
+			outcome.stderr,
+			"error [shortcut_unsupported]: Launch Shortcuts are supported only on Windows\n"
+		);
 		Ok(())
 	}
 }

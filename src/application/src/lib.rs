@@ -8,6 +8,7 @@ pub mod execution;
 pub mod installation;
 pub mod ports;
 pub mod settings;
+pub mod shortcut;
 
 pub use errors::ErrorCode;
 pub use errors::ErrorMarker;
