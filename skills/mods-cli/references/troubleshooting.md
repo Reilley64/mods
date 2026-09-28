@@ -51,3 +51,15 @@ mods --environment 'D:\Mod Environments\Mojave' --log-level off conflicts list
 Use the first example to gather diagnostics through a query; repeating a mutation or program still requires its authorization. `--log-level off` disables session logging. A logging setup failure warns `warning: diagnostic session logging is unavailable`; the command continues, so it is not by itself the operation's failure. JSONL diagnostic files are distinct from CLI output; they do not imply a `--json` flag.
 
 Report version, exact command with sensitive values redacted, selected Environment Root, status, stderr, and session ID. Inspect logs locally and redact personal paths or other sensitive content before sharing. Do not upload entire archives, saves, or logs automatically.
+
+
+## Report a defect
+
+Use the [defect report form](https://github.com/Reilley64/mods/issues/new?template=defect.yml). It asks for the CLI version, system details, reproduction steps, expected and actual behavior, exit status, and diagnostic evidence. Reports and attachments are public. Agents must obtain user approval before submitting a report or uploading evidence unless the user has already authorized that action.
+
+1. Record the failing command, stdout, stderr, and exit status. In PowerShell, capture `$LASTEXITCODE` immediately after `mods`. Keep any `diagnostic session: UUID` line.
+2. Find that command's `<Environment Root>\logs\<UUID>.jsonl`. Without `--environment`, look under `%LOCALAPPDATA%\mods\environments\default\logs`. If stderr has no session ID, correlate the filename and session records with the command and its time. Do not assume the newest file belongs to the failure.
+3. Copy the relevant records to a separate file for review. Include session boundary events and records around the failure when available. Redact personal paths, usernames, credentials, and private command arguments consistently. Preserve timestamps, event names, error codes, and the session UUID where present. Keep the original log locally.
+4. Paste the reviewed excerpt into the form's diagnostic field as a fenced code block, or attach the reviewed copy. If GitHub rejects `.jsonl`, use a `.txt` copy. State whether the evidence is an excerpt. Share only the affected session, not the entire logs directory, saves, or mod archives.
+
+A defect report does not require logs. If `--log-level off`, a logging setup failure, or an early startup failure prevented them, explain that in the diagnostic field. If more detail is needed, an authorized reproduction can use `--log-level debug`. A separate `config list` run creates a different Diagnostic Session and does not recover the failed command's logs. Do not repeat a mutation or program execution just to gather evidence without authorization.

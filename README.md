@@ -68,6 +68,7 @@ Conflict analysis does not inspect BSA members or prove runtime compatibility. M
 ## Documentation
 
 - [Troubleshooting and diagnostics](skills/mods-cli/references/troubleshooting.md)
+- [Report a defect](https://github.com/Reilley64/mods/issues/new?template=defect.yml)
 - [Domain glossary](CONTEXT.md)
 - [Reference evidence and validation limits](skills/mods-cli/references/validation.md)
 - [Contributing](CONTRIBUTING.md)
