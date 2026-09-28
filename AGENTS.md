@@ -1,3 +1,13 @@
+## Session naming
+
+At the start of a new session inside Herdr (`HERDR_ENV=1`), name the current worktree workspace from the first substantive user message, before starting task work:
+
+1. Read the Herdr skill. Use `HERDR_WORKSPACE_ID` to inspect the calling workspace and confirm its linked worktree matches the current Git worktree. If the caller ID or matching linked worktree is unavailable, skip naming.
+2. Choose a short task label, such as `style-gate-worktree-scope`. Use the user's task, rather than injected context or harness messages, as the source.
+3. Run `herdr workspace rename "$HERDR_WORKSPACE_ID" "<task-label>"`, then verify the label with `herdr workspace get "$HERDR_WORKSPACE_ID"`.
+
+Set the label once per session; later messages retain it unless the user requests a rename. Change only the Herdr label, preserving the Git branch and checkout path. If naming fails, report it briefly and continue the task.
+
 ## Agent skills
 
 ### Issue tracker
