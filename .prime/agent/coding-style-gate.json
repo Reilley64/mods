@@ -27,6 +27,7 @@
     "application-use-cases-and-ports-callable-port-invocation": 0.435,
     "application-use-cases-and-ports-focused-use-case-orchestration": 0.315,
     "application-use-cases-and-ports-use-case-local-implementation-modules": 0.5750000000000001,
+    "cli-arguments-required-positional-arguments-and-optional-named-arguments": 0.5,
     "errors-rootcause-lower-layer-results": 0.45,
     "errors-preserve-causes-at-owned-boundaries": 0.445,
     "errors-context-propagation": 0.55,
