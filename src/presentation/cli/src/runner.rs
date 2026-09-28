@@ -74,6 +74,8 @@ pub(crate) struct RunOutcome {
 	pub(crate) status: u32,
 	pub(crate) stdout: String,
 	pub(crate) stderr: String,
+	pub(crate) execution_failed: bool,
+	pub(crate) diagnostic_log: Option<PathBuf>,
 }
 
 fn select_environment_root(
@@ -100,6 +102,8 @@ pub(crate) async fn execute(
 		Ok(root) => root,
 		Err(message) => {
 			return RunOutcome {
+				execution_failed: true,
+				diagnostic_log: None,
 				status: 2,
 				stdout: String::new(),
 				stderr: format!("error: {message}\n"),
@@ -138,6 +142,7 @@ pub(crate) async fn execute(
 		};
 
 	let session_id = session.as_ref().map(DiagnosticSession::id);
+	let diagnostic_log = session.as_ref().map(DiagnosticSession::path);
 	let dependencies = match dependency_factory(&root) {
 		Ok(dependencies) => dependencies,
 		Err(marker) => {
@@ -150,6 +155,8 @@ pub(crate) async fn execute(
 				session.finish("failure");
 			}
 			return RunOutcome {
+				execution_failed: true,
+				diagnostic_log,
 				status: 1,
 				stdout: String::new(),
 				stderr,
@@ -163,6 +170,7 @@ pub(crate) async fn execute(
 		None => work.await,
 	};
 
+	result.diagnostic_log = diagnostic_log;
 	result.stderr.push_str(&diagnostic_warning);
 	let terminal = if result.status == 0 {
 		"success"
@@ -205,6 +213,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				Ok(output) => {
 					let (stdout, stderr) = output::initialization(&output);
 					RunOutcome {
+						execution_failed: false,
+						diagnostic_log: None,
 						status: 0,
 						stdout,
 						stderr,
@@ -216,6 +226,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 		Command::Config { command } => match command {
 			ConfigCommand::List => match list_settings(dependencies.list_settings).await {
 				Ok(output) => RunOutcome {
+					execution_failed: false,
+					diagnostic_log: None,
 					status: 0,
 					stdout: output::settings(&output.settings),
 					stderr: String::new(),
@@ -224,6 +236,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			},
 			ConfigCommand::Get { key } => match get_setting(dependencies.get_setting, key.into()).await {
 				Ok(output) => RunOutcome {
+					execution_failed: false,
+					diagnostic_log: None,
 					status: 0,
 					stdout: output::setting(&output.setting),
 					stderr: String::new(),
@@ -246,6 +260,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 					Ok(output) => {
 						let (stdout, stderr) = output::set_game_directory(&output);
 						RunOutcome {
+							execution_failed: false,
+							diagnostic_log: None,
 							status: 0,
 							stdout,
 							stderr,
@@ -288,6 +304,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				Ok(InstallArchiveOutput::AdditionalSelectionsRequired(output_value)) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
 					RunOutcome {
+						execution_failed: false,
+						diagnostic_log: None,
 						status: 0,
 						stdout,
 						stderr,
@@ -296,12 +314,16 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				Ok(InstallArchiveOutput::Preview(output_value)) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
 					RunOutcome {
+						execution_failed: false,
+						diagnostic_log: None,
 						status: 0,
 						stdout,
 						stderr,
 					}
 				}
 				Ok(InstallArchiveOutput::Installed(output_value)) => RunOutcome {
+					execution_failed: false,
+					diagnostic_log: None,
 					status: 0,
 					stdout: String::new(),
 					stderr: output::install_warnings(&output_value.warnings),
@@ -318,6 +340,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			.await
 			{
 				Ok(output) => RunOutcome {
+					execution_failed: false,
+					diagnostic_log: None,
 					status: 0,
 					stdout: conflict_output::list(&output),
 					stderr: String::new(),
@@ -346,6 +370,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				.await
 				{
 					Ok(output) => RunOutcome {
+						execution_failed: false,
+						diagnostic_log: None,
 						status: 0,
 						stdout: conflict_output::inspection(&output),
 						stderr: String::new(),
@@ -372,6 +398,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				.await
 				{
 					Ok(output) => RunOutcome {
+						execution_failed: false,
+						diagnostic_log: None,
 						status: 0,
 						stdout: conflict_output::explanation(&output),
 						stderr: String::new(),
@@ -381,6 +409,16 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			}
 		},
 		Command::Exec(arguments) => {
+			if arguments.hidden && !cfg!(windows) {
+				return RunOutcome {
+					status: 126,
+					stdout: String::new(),
+					stderr: "error [program_unsupported]: hidden managed execution is unsupported on this platform\n".to_owned(),
+					execution_failed: true,
+					diagnostic_log: None,
+				};
+			}
+
 			let output_target = if let Some(name) = arguments.output_target {
 				let Ok(name) = ModName::new(name) else {
 					return execution_report_outcome(
@@ -409,18 +447,29 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			let Ok(program) = Program::new(program) else {
 				return execution_report_outcome(&report!(ErrorMarker::program_not_found()));
 			};
-			let Ok(arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() else {
+			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
+			else {
 				return execution_report_outcome(&report!(ErrorMarker::program_launch_failed()));
 			};
 
-			let signals = operation::ExecutionSignals::new(dependencies.execution_force_cancellation);
+			let signals = if arguments.hidden {
+				None
+			} else {
+				Some(operation::ExecutionSignals::new(
+					dependencies.execution_force_cancellation,
+				))
+			};
+			let cancellation = signals
+				.as_ref()
+				.map_or_else(CancellationToken::new, |signals| signals.cancellation.clone());
+
 			match execute_program(
 				dependencies.execute_program,
 				output_target,
 				working_directory,
 				program,
-				arguments,
-				signals.cancellation.clone(),
+				program_arguments,
+				cancellation,
 			)
 			.await
 			{
@@ -438,6 +487,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 						stderr.push_str(&message);
 					}
 					RunOutcome {
+						execution_failed: false,
+						diagnostic_log: None,
 						status: output.status.value(),
 						stdout: String::new(),
 						stderr,
@@ -449,8 +500,23 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 	}
 }
 
+#[cfg(any(windows, test))]
+pub(crate) fn hidden_failure_dialog(outcome: &RunOutcome) -> Option<String> {
+	if !outcome.execution_failed {
+		return None;
+	}
+
+	let mut message = outcome.stderr.trim_end().to_owned();
+	if let Some(path) = &outcome.diagnostic_log {
+		message.push_str(&format!("\nDiagnostic log: {}", path.display()));
+	}
+	Some(message)
+}
+
 fn execution_report_outcome<E>(report: &Report<E>) -> RunOutcome {
 	RunOutcome {
+		execution_failed: true,
+		diagnostic_log: None,
 		status: error::application_marker(report)
 			.map_or(125, |marker| error::execution_exit_status(marker.code())),
 		stdout: String::new(),
@@ -481,6 +547,8 @@ fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarke
 fn marker_outcome(marker: ErrorMarker) -> RunOutcome {
 	let status = error::exit_status(marker.code());
 	RunOutcome {
+		execution_failed: false,
+		diagnostic_log: None,
 		status,
 		stdout: String::new(),
 		stderr: error::marker(&marker),
@@ -490,6 +558,8 @@ fn marker_outcome(marker: ErrorMarker) -> RunOutcome {
 fn report_outcome<E>(report: &Report<E>) -> RunOutcome {
 	let status = error::application_marker(report).map_or(1, |marker| error::exit_status(marker.code()));
 	RunOutcome {
+		execution_failed: false,
+		diagnostic_log: None,
 		status,
 		stdout: String::new(),
 		stderr: error::application_error(report),
@@ -523,6 +593,8 @@ pub(crate) async fn run_current_process(
 mod tests {
 	use super::Cli;
 	use super::Dependencies;
+	use super::RunOutcome;
+	use super::hidden_failure_dialog;
 	use super::parse_choices;
 	use super::run;
 	use super::select_environment_root;
@@ -565,6 +637,8 @@ mod tests {
 	use domain::ProviderIdentity;
 	use domain::ProviderReference;
 	use domain::SteamBuildId;
+	#[cfg(windows)]
+	use domain::WorkingDirectory;
 	use rootcause::report;
 	use std::error::Error;
 	use std::ffi::OsString;
@@ -577,6 +651,27 @@ mod tests {
 	use std::sync::atomic::Ordering;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
+
+	#[test]
+	fn hidden_dialog_reports_failures_but_not_child_exit_codes() {
+		let failure = RunOutcome {
+			status: 126,
+			stdout: String::new(),
+			stderr: "error [program_launch_failed]: launch failed\n".into(),
+			execution_failed: true,
+			diagnostic_log: Some("logs/session.jsonl".into()),
+		};
+		assert_eq!(
+			hidden_failure_dialog(&failure).as_deref(),
+			Some("error [program_launch_failed]: launch failed\nDiagnostic log: logs/session.jsonl")
+		);
+		let child_exit = RunOutcome {
+			status: 126,
+			execution_failed: false,
+			..failure
+		};
+		assert!(hidden_failure_dialog(&child_exit).is_none());
+	}
 
 	macro_rules! arguments {
 		($($value:expr),* $(,)?) => {
@@ -850,7 +945,118 @@ mod tests {
 			assert_eq!(outcome.status, status);
 			assert!(outcome.stdout.is_empty());
 			assert!(outcome.stderr.is_empty());
+			assert!(!outcome.execution_failed);
 		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn execution_failure_dialog_uses_the_created_diagnostic_path() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let outcome = run(
+			arguments!["mods", "exec", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+		let path = outcome.diagnostic_log.as_ref().ok_or("expected diagnostic log")?;
+		assert!(path.exists());
+		assert!(hidden_failure_dialog(&outcome)
+			.is_some_and(|message| message.contains(&path.display().to_string())));
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn hidden_exec_runs_managed_execution_and_classifies_its_result() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for failed in [false, true] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			let called = Arc::new(AtomicBool::new(false));
+			let observed = called.clone();
+			let expected_cwd = temp.path().join("tools");
+			dependencies.execute_program.run_managed_program =
+				Arc::new(move |target, cwd, program, arguments, _, cancellation| {
+					observed.store(true, Ordering::SeqCst);
+					assert!(
+						matches!(target, OutputTarget::DataMod(name) if name.as_str() == "Tool Output")
+					);
+					assert_eq!(
+						cwd.as_ref().map(WorkingDirectory::as_path),
+						Some(expected_cwd.as_path())
+					);
+					assert_eq!(program.as_os_str(), "tool.exe");
+					assert_eq!(
+						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
+						["", "--hidden", "雪"]
+					);
+					assert!(!cancellation.is_cancelled());
+					Box::pin(async move {
+						if failed {
+							return Err(report!(
+								ErrorMarker::execution_supervision_failed()
+							));
+						}
+
+						Ok(ExecuteProgramOutput {
+							status: ProcessStatus::new(125),
+							warnings: Vec::new(),
+						})
+					}) as PortFuture<_>
+				});
+
+			let outcome = run(
+				arguments![
+					"mods",
+					"--log-level",
+					"off",
+					"exec",
+					"--hidden",
+					"--cwd",
+					"tools",
+					"--output-target",
+					"Tool Output",
+					"--",
+					"tool.exe",
+					"",
+					"--hidden",
+					"雪"
+				],
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_| Ok(dependencies),
+			)
+			.await?;
+
+			assert!(called.load(Ordering::SeqCst));
+			assert_eq!(outcome.status, 125);
+			assert_eq!(outcome.execution_failed, failed);
+			assert_eq!(hidden_failure_dialog(&outcome).is_some(), failed);
+			assert!(outcome.diagnostic_log.is_none());
+		}
+		Ok(())
+	}
+
+	#[cfg(not(windows))]
+	#[tokio::test]
+	async fn hidden_exec_is_explicitly_unsupported_on_non_windows() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let outcome = run(
+			arguments!["mods", "--log-level", "off", "exec", "--hidden", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+		assert_eq!(outcome.status, 126);
+		assert_eq!(
+			outcome.stderr,
+			"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
+		);
+		assert!(outcome.execution_failed);
 		Ok(())
 	}
 
