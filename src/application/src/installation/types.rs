@@ -1,5 +1,8 @@
 use crate::conflicts::ListEffectiveConflictsOutput;
+use crate::nexus::AcquiredNexusArchive;
+use crate::nexus::NexusProvenance;
 use domain::ArchiveIdentity;
+use domain::ArchivePath;
 use domain::DataRelativePath;
 use domain::EffectiveResult;
 use domain::FileDependencyState;
@@ -340,6 +343,7 @@ pub struct InstallPlan {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovedInstallation {
+	pub nexus: Option<NexusProvenance>,
 	pub source_basename: String,
 	pub fomod_schema_version: Option<String>,
 	pub plan: InstallPlan,
@@ -364,4 +368,15 @@ pub struct InstalledArchive {
 	pub plan: InstallPlan,
 	pub conflicts: ListEffectiveConflictsOutput,
 	pub warnings: Vec<InstallWarning>,
+}
+
+#[derive(Debug, Clone)]
+pub enum InstallArchiveSource {
+	Local(ArchivePath),
+	Nexus(AcquiredNexusArchive),
+}
+impl From<ArchivePath> for InstallArchiveSource {
+	fn from(archive: ArchivePath) -> Self {
+		Self::Local(archive)
+	}
 }

@@ -373,6 +373,8 @@ fn open_or_create_exact(
 
 #[derive(Serialize)]
 struct InstalledMetadata<'a> {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	nexus: Option<NexusMetadata<'a>>,
 	schema_version: u32,
 	source_basename: &'a str,
 	archive_sha256: &'a str,
@@ -385,6 +387,17 @@ struct InstalledMetadata<'a> {
 	fomod_schema_version: Option<&'a str>,
 	choices: Vec<MetadataChoice<'a>>,
 	warnings: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct NexusMetadata<'a> {
+	game_domain: &'a str,
+	mod_id: u64,
+	file_id: u64,
+	file_version: &'a str,
+	mod_version: &'a str,
+	mod_name: &'a str,
+	file_name: &'a str,
 }
 
 #[derive(Serialize)]
@@ -418,6 +431,15 @@ fn write_metadata(mod_dir: &SafeDir, approved: &ApprovedInstallation) -> Result<
 		.collect();
 	let warnings = approved.plan.warnings.iter().map(warning_name).collect();
 	let metadata = InstalledMetadata {
+		nexus: approved.nexus.as_ref().map(|value| NexusMetadata {
+			game_domain: &value.game_domain,
+			mod_id: value.mod_id,
+			file_id: value.file_id,
+			file_version: &value.file_version,
+			mod_version: &value.mod_version,
+			mod_name: &value.mod_name,
+			file_name: &value.file_name,
+		}),
 		schema_version: 1,
 		source_basename,
 		archive_sha256: identity.archive_sha256().as_str(),
@@ -596,6 +618,7 @@ mod tests {
 	use application::installation::PlannedCandidate;
 	use application::installation::ProjectedModState;
 	use application::installation::WinnerReason;
+	use application::nexus::NexusProvenance;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
 	use application::ports::InstallationStateAccess;
@@ -619,6 +642,8 @@ mod tests {
 	use std::path::Path;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
+	use toml::Value;
+	use toml::from_str;
 
 	fn temp_dir() -> TempDir {
 		TempDir::new_in(current_dir().expect("current dir must be available"))
@@ -656,6 +681,7 @@ mod tests {
 	) -> ApprovedInstallation {
 		let mod_name = ModName::new(name.to_owned()).expect("fixture mod name must be valid");
 		ApprovedInstallation {
+			nexus: None,
 			source_basename: archive
 				.file_name()
 				.and_then(OsStr::to_str)
@@ -756,6 +782,50 @@ mod tests {
 			panic!("pending work must require manual cleanup");
 		};
 		assert_eq!(error.current_context().code(), ErrorCode::ManualCleanupRequired);
+	}
+
+	#[test]
+	fn successful_nexus_install_writes_nested_provenance_and_failed_staging_does_not_publish() {
+		let parent = temp_dir();
+		let root = initialized_environment(&parent);
+		let archive = parent.path().join("archive");
+		let mut approved = approved_installation(&archive, "Nexus file", false, false, 0, "textures/a.dds");
+		approved.nexus = Some(NexusProvenance {
+			game_domain: "newvegas".into(),
+			mod_id: 42,
+			file_id: 7,
+			file_version: "01-beta".into(),
+			mod_version: "2.0".into(),
+			mod_name: "Page".into(),
+			file_name: "File".into(),
+		});
+		let transaction =
+			InstallationTransaction::begin(root.as_path(), approved.clone(), &CancellationToken::new())
+				.expect("stage");
+		assert!(!root.as_path().join("mods/Nexus file/meta.toml").exists());
+		drop(transaction);
+		fs::remove_dir_all(root.as_path().join("temp")).expect("fixture cleanup");
+		fs::create_dir(root.as_path().join("temp")).expect("temp");
+		install(&root, approved, "textures/a.dds", b"texture");
+		let text = fs::read_to_string(root.as_path().join("mods/Nexus file/meta.toml")).expect("metadata");
+		let value: Value = from_str(&text).expect("toml");
+		assert_eq!(value["nexus"]["game_domain"].as_str(), Some("newvegas"));
+		assert_eq!(value["nexus"]["file_version"].as_str(), Some("01-beta"));
+		assert_eq!(value["nexus"]["mod_version"].as_str(), Some("2.0"));
+		assert_eq!(value["nexus"]["mod_id"].as_integer(), Some(42));
+		assert_eq!(value["nexus"]["file_id"].as_integer(), Some(7));
+		assert_eq!(value["nexus"]["mod_name"].as_str(), Some("Page"));
+		assert_eq!(value["nexus"]["file_name"].as_str(), Some("File"));
+		assert!(value.get("file_id").is_none());
+		install(
+			&root,
+			approved_installation(&archive, "Local file", false, false, 1, "textures/b.dds"),
+			"textures/b.dds",
+			b"texture",
+		);
+		let text =
+			fs::read_to_string(root.as_path().join("mods/Local file/meta.toml")).expect("local metadata");
+		assert!(!text.contains("[nexus]"));
 	}
 
 	#[test]

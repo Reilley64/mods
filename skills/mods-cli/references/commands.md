@@ -10,7 +10,7 @@ mods init [--game-install PATH]
 mods config list
 mods config get KEY
 mods config set game-dir VALUE
-mods install ARCHIVE [--name NAME] [--replace] [--choice GROUP=OPTION]... [--dry-run]
+mods install ARCHIVE_OR_NEXUS_URL [--file ID] [--name NAME] [--replace] [--choice GROUP=OPTION]... [--dry-run]
 mods conflicts list [--compare-content]
 mods conflicts inspect MOD_NAME [--compare-content]
 mods conflicts explain PATH [--compare-content]
@@ -31,7 +31,7 @@ The released surface has no `--json`, MCP command, conflict-resolution command, 
 
 ## Initialization and settings
 
-`init` optionally accepts `--game-install PATH`; see [setup](setup.md) for selection and prerequisites. `config list` reads all settings. `config get KEY` accepts exactly:
+`init` optionally accepts `--game-install PATH`; see [setup](setup.md) for selection and prerequisites. `config list` reads non-secret settings. `config get KEY` accepts exactly:
 
 | Key | Meaning |
 | --- | --- |
@@ -40,6 +40,8 @@ The released surface has no `--json`, MCP command, conflict-resolution command, 
 | `steam-app-id` | Bound game's Steam identity |
 | `game-dir` | Effective Game Installation path |
 | `observed-build-id` | Recorded Steam build |
+
+The optional `nexus_api_key` in `mods.toml` is secret and is not a queryable key. `MODS_NEXUS_API_KEY` overrides it. See the [Nexus installation requirements and distribution limits](installation.md#nexus-url-input).
 
 Only `game-dir` has a CLI setter. Do not infer setters for the other keys.
 

@@ -1,7 +1,12 @@
 use crate::Resources;
 use application::installation::InstallArchiveDependencies;
+use application::nexus::AcquireNexusDependencies;
+use infrastructure_nexus::NexusAdapter;
 
 impl Resources {
+	pub fn acquire_nexus_dependencies(&self) -> AcquireNexusDependencies {
+		NexusAdapter::new(self.root.clone()).acquisition_dependencies(self.settings.nexus_key_port())
+	}
 	pub fn install_archive_dependencies(&self) -> InstallArchiveDependencies {
 		InstallArchiveDependencies {
 			report_progress: None,

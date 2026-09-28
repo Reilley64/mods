@@ -31,6 +31,7 @@ pub use types::FomodInstaller;
 pub use types::FomodOption;
 pub use types::FomodOptionTypePattern;
 pub use types::IndexedInstaller;
+pub use types::InstallArchiveSource;
 pub use types::InstallMode;
 pub use types::InstallOverlap;
 pub use types::InstallPlan;

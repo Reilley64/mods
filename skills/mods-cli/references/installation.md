@@ -10,11 +10,37 @@ mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures.z
 mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures.zip' --name 'Mojave Textures'
 ```
 
-`ARCHIVE` is required. `--name NAME` overrides the archive filename with its final extension removed. The **Mod Name** is case-insensitively unique. Use a valid directory name; reserved/invalid names fail instead of being silently repaired.
+`ARCHIVE` or a supported Nexus URL is required. `--name NAME` overrides the archive filename with its final extension removed. The **Mod Name** is case-insensitively unique. Use a valid directory name; reserved/invalid names fail instead of being silently repaired.
 
 An **Install Plan** describes validated source-to-Data destinations, winner decisions, and overlaps on planned paths. It is neither an installed mod nor a complete File Conflict report. Inspect `plan.archive_identity`, `plan.mod_name`, `plan.replacement`, choices, warnings, candidates, and `plan.projected_state` before proceeding. A later invocation recomputes the plan; a preview does not freeze the archive or environment.
 
 New installs append to the mod list at the next Mod Priority and are **initially disabled**. Installation success does not mean participation in the Virtual Game View. There is no released enable command; do not invent one or silently edit `profile/modlist.txt`.
+
+## Nexus URL input
+
+The Nexus acquisition implementation is not yet approved for public distribution. Nexus application registration and authorized live acceptance remain external requirements. Premium membership does not replace application registration. The commands below describe the implementation, not completed live acceptance.
+
+`install` also accepts a New Vegas Nexus mod-page URL or a file-specific URL. Local archive inputs still work without Nexus credentials.
+
+```powershell
+mods --environment 'D:\Mod Environments\Mojave' install 'https://www.nexusmods.com/newvegas/mods/12345' --dry-run
+mods --environment 'D:\Mod Environments\Mojave' install 'https://www.nexusmods.com/newvegas/mods/12345' --file 67890 --dry-run
+mods --environment 'D:\Mod Environments\Mojave' install 'https://www.nexusmods.com/newvegas/mods/12345?tab=files&file_id=67890' --dry-run
+```
+
+These IDs are examples. An explicit URL file ID or `--file ID` selects that file. Conflicting IDs fail. Without a file ID, the command selects only when exactly one available Main file exists. Otherwise it lists available file IDs, names, versions, and categories and requires `--file`. It does not guess by date or version. Other games, NXM links, and malformed URLs are unsupported.
+
+New downloads require a Premium account API key. Add optional `nexus_api_key` to the selected environment's `mods.toml`, or supply `MODS_NEXUS_API_KEY` in the process environment. The environment variable overrides the stored key. Storage in `mods.toml` is plaintext. Do not share that file with a key in it. `config get` and `config list` never return the key, and there is no key argument or setter command. Changing `game-dir` preserves the stored key.
+
+If a new download lacks credentials or the account is not Premium, install a local archive instead with `mods install <archive>`. Invalid credentials, rate limits, unavailable files, and network failures produce separate errors. The command does not open a browser.
+
+Completed archives and source metadata stay in `cache/downloads/newvegas-MOD_ID-FILE_ID/` within the environment. Only the exact selected file can reuse that entry. An explicit file input with a complete entry works without network access or authentication. A mod-page input resolves current metadata on every invocation, including repeated FOMOD Choice commands. Failed resolution never selects from stale metadata. A newly selected file goes through the ordinary choice flow; the cache does not remember choices or pin a previous selection.
+
+A remote `--dry-run` may download and retain an archive. It does not install a Data Mod or change Profile State. Transfer failure or cancellation removes partial bytes. Completed archives remain after installation success or failure. There is no automatic retry, resume, or eviction.
+
+The default Nexus Mod Name is the selected file's display name, or the mod-page title if the file name is empty. `--name` overrides it. Invalid names require correction. Name collisions require a different name or explicit `--replace`; matching Nexus IDs do not authorize replacement. All existing archive safety, FOMOD, dependency, and Game Installation protection rules still apply.
+
+Successful URL installations write a `[nexus]` table in the Data Mod's `meta.toml`. It contains `game_domain`, `mod_id`, `file_id`, `file_version`, `mod_version`, `mod_name`, and `file_name`. File and mod-page version strings remain distinct and unchanged. Credentials and temporary download URLs are never provenance. Installing a local path writes no Nexus provenance, even when the path points into the managed cache. Installation does not check for updates or enable the mod.
 
 ## Replacement
 
