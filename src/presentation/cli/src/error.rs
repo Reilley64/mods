@@ -1,6 +1,7 @@
 use crate::output::quote;
 use application::ErrorCode;
 use application::ErrorMarker;
+use application::shortcut::ShortcutFailure;
 use rootcause::Report;
 
 pub(crate) fn exit_status(code: ErrorCode) -> u32 {
@@ -23,7 +24,25 @@ pub(crate) fn execution_exit_status(code: ErrorCode) -> u32 {
 }
 
 pub(crate) fn application_error<C>(report: &Report<C>) -> String {
-	application_marker(report).map_or_else(|| "error: operation failed\n".to_owned(), marker)
+	if let Some(marker_value) = application_marker(report) {
+		return marker(marker_value);
+	}
+
+	if let Some(failure) = report
+		.iter_reports()
+		.find_map(|report| report.downcast_current_context::<ShortcutFailure>())
+	{
+		return match failure {
+			ShortcutFailure::Unsupported => "error [shortcut_unsupported]: Launch Shortcuts are supported only on Windows\n",
+			ShortcutFailure::InvalidName => "error [shortcut_name_invalid]: shortcut name must be a valid Windows filename without a path\n",
+			ShortcutFailure::InvalidDestination => "error [shortcut_destination_invalid]: destination must be a directory; only an existing Shell Link may be replaced\n",
+			ShortcutFailure::InvalidLaunch => "error [shortcut_launch_invalid]: unable to capture valid absolute launch paths\n",
+			ShortcutFailure::ArgumentsTooLong => "error [shortcut_arguments_too_long]: saved arguments exceed the Shell Link storage limit\n",
+			ShortcutFailure::Publication => "error [shortcut_failed]: unable to prepare or publish the Launch Shortcut\n",
+		}.to_owned();
+	}
+
+	"error: operation failed\n".to_owned()
 }
 
 pub(crate) fn application_marker<C>(report: &Report<C>) -> Option<&ErrorMarker> {
