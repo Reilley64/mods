@@ -51,7 +51,7 @@ describe("coding style gate configuration", () => {
 
 		const config = await loadConfig(root);
 		expect(config.ruleThresholds).toEqual({});
-		expect(config.worktreeScope).toBe("registered");
+		expect(config.worktreeScope).toBe("session");
 		expect(config.additionalRoots).toEqual([]);
 	});
 

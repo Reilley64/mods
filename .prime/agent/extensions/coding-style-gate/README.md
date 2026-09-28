@@ -6,7 +6,9 @@
 
 The extension takes a snapshot of tracked and untracked, non-ignored Rust files before `ipython`, `edit`, or `bash` runs. It takes another snapshot after the tool completes and reviews only the resulting task-local changes. Existing dirty files that the tool does not change are not included.
 
-By default, each snapshot covers every worktree returned by `git worktree list` for the session repository. This includes edits made through absolute paths after an agent changes its process directory without changing Prime's session root. Each watched worktree keeps its own style file, thresholds, enabled flag, and tool allowlist. The session model governs every request; the session root still controls which roots are watched and whether findings are advisory or enforced. Explicit `additionalRoots` can include unrelated Git repositories. Every additional root must be an absolute path to the repository root; nested directories and arbitrary filesystem paths are rejected.
+By default, each snapshot covers only the current session worktree. Concurrent edits in other registered worktrees are not reviewed or reported to this session. This repository explicitly uses `worktreeScope: "session"` with no `additionalRoots`.
+
+Multi-root review requires an explicit opt-in: `worktreeScope: "registered"` watches every worktree returned by `git worktree list`, and `additionalRoots` adds unrelated Git repositories. Each opted-in root keeps its own style file, thresholds, enabled flag, and tool allowlist. The session model governs every request; the session root controls the watched roots and advisory/enforce mode. Additional roots must be absolute paths to Git repository roots; nested directories and arbitrary filesystem paths are rejected.
 
 Likely violations are appended to the tool result, so the agent sees them before its next action. In both modes, `agent_end` reviews the complete task-baseline-to-current diff. Advisory mode reports the final result without blocking. Enforce mode retains earlier violations after later clean edits and catches changes that are present when the final snapshot is taken.
 
@@ -60,7 +62,7 @@ The gate submits every item to Jev. Independent rubric questions that share a pa
 - `timeoutMs`: timeout for each OpenRouter attempt;
 - `maxConcurrency`: maximum number of file reviews in flight;
 - `maxFollowUps`: maximum automatic correction turns before the gate asks the user to intervene.
-- `worktreeScope`: `registered` watches every registered worktree; `session` watches only the session root.
+- `worktreeScope`: defaults to `session`, which watches only the session root; `registered` explicitly opts into watching every registered worktree.
 - `additionalRoots`: up to 16 absolute Git repository roots to watch in addition to the selected worktree scope.
 
 The backend is OpenRouter only, at `https://openrouter.ai/api` (the SDK appends `/v1/systemone`). The SDK is only a transport. Legacy `provider` fields are ignored. Only `OPENROUTER_API_KEY` is read; there is no direct API, environment URL override, key fallback, or model fallback. Authentication errors fail the review. Existing valid OpenRouter cache entries remain reusable; old direct-backend entries have a different identity and cannot match.
