@@ -6,11 +6,11 @@ export const release = {
   original: "mods-v0.1.0-x86_64-pc-windows-msvc.zip",
   originalSha256: "a1c01c39412f34cea07c6a26c944cc3303e2f4451872049256a99a9b48231610",
   revision: "1635e408c913181c15b518bc95339ebdd6926169",
-  runtime: "mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip",
+  runtime: "mods-v0.1.0-runtime-r2-x86_64-pc-windows-msvc.zip",
   source: "mods-v0.1.0-source.tar.gz",
   sourceSha256: "ba8bf1b99786a4addbed6c99235bbc87ee04a0f07edb7a8d204c1344efc56cca",
   sourceSize: 99068488,
-  sums: "mods-v0.1.0-runtime-SHA256SUMS",
+  sums: "mods-v0.1.0-runtime-r2-SHA256SUMS",
   sourceUrl: "https://github.com/Reilley64/mods/releases/download/v0.1.0/mods-v0.1.0-source.tar.gz",
 } as const;
 
@@ -21,14 +21,14 @@ export const runtimeFiles = [
   ...[...notices, "LICENSE"].map(name => `licenses/usvfs/${name}`),
   ...notices.map(name => `licenses/native-release/${name}`),
 ].sort();
-export const directories = ["./", "./licenses/", "./usvfs/", "./licenses/native-release/", "./licenses/usvfs/"];
+export const directories = ["licenses/", "usvfs/", "licenses/native-release/", "licenses/usvfs/"];
 const instructionPath = new URL("../docs/runtime-v0.1.0-BUILD-AND-SOURCE.md", import.meta.url);
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const identity = (bytes: Uint8Array) => ({ size: bytes.byteLength, sha256: sha256(bytes) });
 
 export function checkLayout(listing: string, original: boolean) {
-  const expected = new Set([...directories, ...runtimeFiles.map(name => `./${name}`),
-    ...(original ? ["./mods-source.tar.gz"] : [])]);
+  const members = [...directories, ...runtimeFiles];
+  const expected = new Set(original ? ["./", ...members.map(name => `./${name}`), "./mods-source.tar.gz"] : members);
   const entries = listing.endsWith("\n") ? listing.slice(0, -1).split("\n") : listing.split("\n");
   if (entries.length !== expected.size || new Set(entries).size !== entries.length || entries.some(name => !expected.has(name))) {
     throw new Error("Unexpected archive layout (exact paths, directories and unique names required)");
@@ -86,7 +86,7 @@ async function archiveFiles(path: string, original: boolean) {
     throw new Error("Only ordinary files and directories are allowed in the ZIP");
   }
   const files = new Map<string, Uint8Array>();
-  for (const name of runtimeFiles) files.set(name, await tar("-xOf", path, `./${name}`));
+  for (const name of runtimeFiles) files.set(name, await tar("-xOf", path, original ? `./${name}` : name));
   return files;
 }
 
@@ -144,7 +144,8 @@ export async function prepare(inputPath: string, outputDirectory: string) {
     await writeFile(join(work, name), name === "BUILD-AND-SOURCE.md" ? instructions : original.get(name)!, { flag: "wx" });
   }
   await writeFile(join(output, release.source), source, { flag: "wx" });
-  await tar("-a", "-cf", join(output, release.runtime), "-C", work, ".");
+  // Windows Shell exposes no members when this ZIP contains a "./" root entry.
+  await tar("-a", "-cf", join(output, release.runtime), "-C", work, ...new Set(runtimeFiles.map(name => name.split("/")[0]!)));
   await writeFile(join(output, release.sums), checksumText(sha256(await readFile(join(output, release.runtime)))), { flag: "wx" });
   const receipt = await verify(input, output);
   await writeFile(join(output, "repack-receipt.json"), JSON.stringify({

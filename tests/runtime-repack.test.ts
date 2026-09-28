@@ -11,25 +11,28 @@ test("runtime inventory retains notices and native adjacency, but not source", (
   expect(runtimeFiles).toHaveLength(23);
   expect(runtimeFiles.filter(name => name.startsWith("usvfs/"))).toHaveLength(4);
   expect(runtimeFiles.filter(name => name.startsWith("licenses/"))).toHaveLength(15);
-  const listing = [...directories, ...runtimeFiles.map(name => `./${name}`)].join("\n") + "\n";
+  const listing = [...directories, ...runtimeFiles].join("\n") + "\n";
   expect(() => checkLayout(listing, false)).not.toThrow();
-  for (const bad of [listing + "./mods-source.tar.gz\n", listing + "./mods.exe\n",
-    listing.replace("./mods.exe", "../mods.exe"), listing.replace("./LICENSE\n", ""),
-    listing + "./unexpected/\n", listing.replace("./mods.exe", "./MODS.EXE"),
-    listing.replace("./mods.exe", "./usvfs/../mods.exe"), listing.replace("./usvfs/\n", ""),
-    listing.replace("./mods.exe", "./mods.exe\\"), listing.replace("./mods.exe", "/mods.exe")]) {
+  for (const bad of [listing + "mods-source.tar.gz\n", listing + "mods.exe\n",
+    listing.replace("mods.exe", "../mods.exe"), listing.replace("LICENSE\n", ""),
+    listing + "unexpected/\n", listing.replace("mods.exe", "MODS.EXE"),
+    listing.replace("mods.exe", "usvfs/../mods.exe"), listing.replace("usvfs/\n", ""),
+    listing.replace("mods.exe", "mods.exe\\"), listing.replace("mods.exe", "/mods.exe"),
+    "./\n" + listing, listing.replace("mods.exe", "./mods.exe")]) {
     expect(() => checkLayout(bad, false)).toThrow();
   }
-  expect(() => checkLayout(listing + "./mods-source.tar.gz\n", true)).not.toThrow();
+  const original = ["./", ...[...directories, ...runtimeFiles].map(name => `./${name}`), "./mods-source.tar.gz"].join("\n") + "\n";
+  expect(() => checkLayout(original, true)).not.toThrow();
+  expect(() => checkLayout(original.replace("./mods-source.tar.gz\n", ""), false)).toThrow();
 });
 
 test("new checksum identity is exactly runtime then complete source, lowercase with LF", () => {
   const runtimeHash = "1".repeat(64);
-  const text = `${runtimeHash}  mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip\n${release.sourceSha256}  mods-v0.1.0-source.tar.gz\n`;
+  const text = `${runtimeHash}  mods-v0.1.0-runtime-r2-x86_64-pc-windows-msvc.zip\n${release.sourceSha256}  mods-v0.1.0-source.tar.gz\n`;
   expect(checksumText(runtimeHash)).toBe(text);
   expect(() => verifyChecksums(runtimeHash, release.sourceSha256, text)).not.toThrow();
   for (const bad of [text.trim(), text.replaceAll("\n", "\r\n"), text + "extra\n",
-    text.replace("-runtime-x86", "-x86"), text.replace(runtimeHash, "0".repeat(64))]) {
+    text.replace("-runtime-r2-x86", "-x86"), text.replace(runtimeHash, "0".repeat(64))]) {
     expect(() => verifyChecksums(runtimeHash, release.sourceSha256, bad)).toThrow();
   }
   expect(() => verifyChecksums(runtimeHash, "0".repeat(64), text)).toThrow();
