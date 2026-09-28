@@ -39,6 +39,10 @@ Fix blockers in the ticket. Report follow-ups without implementing them unless t
 
 ## Bound repair cycles
 
-Run one repair and re-review cycle for the collected blockers. If the re-review still finds blockers, stop and ask the user to choose the next step. Do not start a chain of repair agents or silently broaden the design.
+Run one repair and re-review cycle for the collected blockers. If the re-review still finds blockers, stop and ask the user to choose the next step, except for the style-only repairs below. Do not start a chain of repair agents or silently broaden the design.
+
+### Style-only repairs
+
+Fix valid coding-style-gate suggestions and documented coding-style violations without explicit user approval, including those found after the repair cycle. Keep these repairs behavior-preserving and within the accepted scope, then recheck the affected code. Accept false positives explicitly with the file, rule, and reason instead of changing compliant code. This permission does not authorize scope changes or bypass an enforce-mode gate; those still require explicit approval through the existing process.
 
 At each progress update, state whether scope changed. Completion requires the in-scope checks to pass, unavailable checks to be listed explicitly, and follow-up work to remain separate.
