@@ -45,7 +45,10 @@ historical; their pending statements do not reopen completed checks.
 
 Publication/public-delivery/Winget proof necessarily follows the owner's
 publication decision; it is not silently claimed as prepublication evidence.
-Keep #33 open, #103 draft and `Refs #33` until applicable acceptance is complete.
+The owner subsequently approved merging implementation PR #103 with `Refs #33`
+while #33 remains open for release delivery. This supersedes the earlier
+draft-until-all-acceptance restriction for #103 only. It does not authorize
+merging release PR #36, enabling publication, or Winget submission.
 CLI Ctrl+C and disconnected rebuilding remain owner-waived/unverified, MCP is
 post-MVP #105, and AV diagnosis remains optional for the approved functional
 credit. No numeric performance threshold or new upstream filesystem harness is
