@@ -4,13 +4,7 @@
 
 Use Windows 11 x64 with WinGet available. A Steam-managed Fallout: New Vegas Game Installation supplies the clean shared base. Both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables are runtime prerequisites. Rust, a compiler, and the source archive are not required to run the release.
 
-Prefer WinGet. First check whether the exact package is available:
-
-```powershell
-winget show --id Reilley64.Mods --exact --source winget
-```
-
-When the package is available, install after user approval:
+Install through WinGet after user approval:
 
 ```powershell
 winget install Reilley64.Mods
@@ -19,8 +13,6 @@ mods --help
 ```
 
 Confirm that WinGet selects `Reilley64.Mods`; stop if it reports an ambiguous or different package. If `mods` is not immediately available, open a new terminal and check `Get-Command mods` before retrying installation.
-
-At this reference's validation, the [WinGet package submission](https://github.com/microsoft/winget-pkgs/pull/442597) was still open, so public availability is not yet verified. A package-not-found result is not a reason to change WinGet sources or install a similarly named package.
 
 ### Release ZIP fallback
 
