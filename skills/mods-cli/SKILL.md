@@ -2,7 +2,7 @@
 name: mods-cli
 description: Use the released mods Windows CLI to set up Fallout New Vegas Mod Environments, configure Game Bindings, install Data Mods with FOMOD Choices, preview Install Plans, inspect File Conflicts, and run games or tools with an Output Target. Use when a user asks for mods CLI commands or troubleshooting.
 license: GPL-3.0-or-later
-compatibility: Windows 11 x64; mods v0.1.0 with its bundled usvfs runtime and both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables.
+compatibility: Windows 11 x64; mods with its matching bundled usvfs runtime and both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables. Reference v0.1.0; minor and patch differences are allowed after installed-help checks.
 metadata:
   reference-version: v0.1.0
 ---
@@ -11,7 +11,7 @@ metadata:
 
 Reference: published **v0.1.0**. This is a user CLI reference, not a contributor guide.
 
-1. Check `mods --version`, `mods --help`, and the relevant subcommand's `--help` before constructing a command. If the installed version differs, use its help to check compatibility; stop and report unsupported behavior rather than assume unreleased features exist.
+1. Check `mods --version`, `mods --help`, and the relevant subcommand's `--help` before constructing a command. Minor and patch version differences within the same major version are allowed when installed help confirms the requested command and options; do not reject a version solely because it differs from the reference. Version numbers alone do not guarantee behavioral compatibility, especially for `0.x` releases. For a major-version change or conflicting behavior, verify version-specific documentation before proceeding. Stop and report unsupported behavior rather than assume unreleased features exist.
 2. Identify the intended Environment Root and use explicit `--environment` when ambiguity matters. For missing CLI/runtime files, installation, initialization, or Game Binding issues, read [setup](references/setup.md).
 3. Read the reference for the requested action:
    - [Commands and configuration](references/commands.md): global options, initialization, settings, and output conventions.
