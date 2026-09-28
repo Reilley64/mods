@@ -63,8 +63,10 @@ The owner approved a bounded fix for PR #36's inherited local dependency version
 mismatch. Only the root workspace's three internal path dependency version
 constraints (`application`, `domain`, `infrastructure-dependencies`) were removed.
 These packages remain independently versioned and `publish = false`; their paths
-remain fixed. Direct member path/version references retain Release Please's
-existing updater behavior. No package version, repository lockfile, external or
+remain fixed. In the subsequent owner-approved consistency change, the five
+direct internal path dependencies also omit version constraints. The release
+regression now bumps all nine workspace packages and checks those five resolved
+edges as well. The earlier root-only test counts below describe that checkpoint. No package version, repository lockfile, external or
 native pin, release configuration, publication gate or accepted candidate byte
 was changed.
 

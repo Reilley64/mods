@@ -9,11 +9,16 @@ const bumpedPackages = [
   ["src/application", "application"],
   ["src/infrastructure/dependencies", "infrastructure-dependencies"],
   ["src/presentation/cli", "mods"],
+  ["src/infrastructure/environment", "infrastructure-environment"],
+  ["src/infrastructure/settings", "infrastructure-settings"],
+  ["src/infrastructure/game_platform", "infrastructure-game-platform"],
+  ["src/infrastructure/archive", "infrastructure-archive"],
+  ["src/infrastructure/execution", "infrastructure-execution"],
 ] as const;
 
 test.each([
-  ["first release", ["0.1.0", "0.1.0", "0.1.0", "0.1.0"]],
-  ["independent releases", ["0.2.0", "0.3.1", "0.4.0", "0.5.2"]],
+  ["first release", ["0.1.0", "0.1.0", "0.1.0", "0.1.0", "0.1.0", "0.1.0", "0.1.0", "0.1.0", "0.1.0"]],
+  ["independent releases", ["0.2.0", "0.3.1", "0.4.0", "0.5.2", "0.6.0", "0.7.1", "0.8.0", "0.9.2", "0.10.0"]],
 ] as const)("local release graph resolves with coherent locked versions: %s", (_, versions) => {
   const directory = mkdtempSync(join(tmpdir(), "mods-release-versions-"));
   try {
@@ -59,6 +64,10 @@ test.each([
     }
     for (const [name, dependencies] of [
       ["application", ["domain"]],
+      ["infrastructure-dependencies", [
+        "infrastructure-environment", "infrastructure-settings",
+        "infrastructure-game-platform", "infrastructure-archive", "infrastructure-execution",
+      ]],
       ["mods", ["application", "domain", "infrastructure-dependencies"]],
     ] as const) {
       const local = graph.packages.find((pkg: any) => pkg.name === name && pkg.source === null);

@@ -16,7 +16,8 @@ workspace path dependencies intentionally omit registry version requirements:
 Release Please updates member manifests and the lockfile, but skips dependency
 versions in the virtual root manifest. A stale root requirement such as `^0.0.0`
 otherwise rejects a bumped local crate before Cargo can resolve the release.
-Direct member path dependencies retain their Release Please-managed versions.
+Direct member path dependencies also omit version requirements. Internal paths
+select the local crates; package versions remain independently managed.
 See the [Cargo path dependency contract](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations)
 and [Release Please workspace plugin](https://github.com/googleapis/release-please/blob/main/src/plugins/cargo-workspace.ts).
 
