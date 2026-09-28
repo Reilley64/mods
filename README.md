@@ -65,6 +65,14 @@ npx skills update
 
 The skill uses `v0.1.0` as its tested reference. It allows minor and patch version differences when installed help confirms the requested commands and options. Read the [skill](skills/mods-cli/SKILL.md) or learn about [skills.sh](https://skills.sh/docs).
 
+## AI in development
+
+We use AI agents to research changes, write code and tests, update documentation, and review code. Maintainers set the scope and remain responsible for what ships. Agents follow the repository's [coding standards](CODING_STYLE.md) and task instructions in [AGENTS.md](AGENTS.md).
+
+We check changes through human code reviews, compiler checks, formatting, linting, and tests. An AI-assisted style check reviews Rust changes against the coding standards. These checks and agent reviews can miss bugs. They do not replace testing with the game. Agents must report checks they could not run and limits in what they tested.
+
+The optional [agent skill](skills/mods-cli/SKILL.md) lets your agent use the CLI. You can use the CLI without an AI agent.
+
 ## Documentation
 
 - [Troubleshooting and diagnostics](skills/mods-cli/references/troubleshooting.md)
