@@ -48,7 +48,7 @@
     "linux-review-principles-retained-language-neutral-review-priorities": 0.41,
     "linux-review-principles-retained-rust-conventions-over-linux-c-idioms": 0.395
   },
-  "worktreeScope": "registered",
+  "worktreeScope": "session",
   "additionalRoots": [],
   "provider": "openrouter"
 }

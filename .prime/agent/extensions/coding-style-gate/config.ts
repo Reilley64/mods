@@ -28,7 +28,7 @@ export const DEFAULT_CONFIG: GateConfig = {
 	timeoutMs: 10_000,
 	maxConcurrency: 4,
 	maxFollowUps: 2,
-	worktreeScope: "registered",
+	worktreeScope: "session",
 	additionalRoots: [],
 };
 
