@@ -59,6 +59,7 @@ Examples were checked against these released definitions and tests. Paths, tool 
 ## Validation results
 
 - Release API: `gh release view` identified `v0.1.0` and its published runtime assets.
+- WinGet follow-up: the public manifest path was absent and [package PR #442597](https://github.com/microsoft/winget-pkgs/pull/442597) was open. Setup therefore prefers `winget install Reilley64.Mods` only after an exact-package availability check, with the release ZIP as fallback. Command syntax was checked against [Microsoft documentation](https://learn.microsoft.com/en-us/windows/package-manager/winget/install); no Windows installation was run.
 - Downloaded runtime ZIP SHA-256: `3a71d12b77cbfd8e2371258075ae0e5148db219865006cb3e0f952b9f31f44f9`; matches downloaded `mods-v0.1.0-runtime-SHA256SUMS`. Inspected ZIP inventory: `mods.exe`, both DLLs, both proxies, notices, and source instructions.
 - `npx skills@1.7.0 add . --skill mods-cli --list`: exit 0, exactly one skill discovered, correct name and description.
 - `npx skills@1.7.0 add <checkout> --skill mods-cli --agent codex --yes --copy`: exit 0 in a disposable consumer project; installed `.agents/skills/mods-cli`. Telemetry disabled for validation.

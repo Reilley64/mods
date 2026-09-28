@@ -2,31 +2,31 @@
 
 ## Acquire the released CLI
 
-Use Windows 11 x64 and install **both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables** from Microsoft. A Steam-managed Fallout: New Vegas Game Installation supplies the clean shared base. Rust, a compiler, and the source archive are not required to run the release.
+Use Windows 11 x64 with WinGet available. A Steam-managed Fallout: New Vegas Game Installation supplies the clean shared base. Both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables are runtime prerequisites. Rust, a compiler, and the source archive are not required to run the release.
 
-After user approval, download the Windows x64 runtime ZIP and matching runtime checksum file from [v0.1.0](https://github.com/Reilley64/mods/releases/tag/v0.1.0). Use a fresh download directory. PowerShell 7 example:
+Prefer WinGet. First check whether the exact package is available:
 
 ```powershell
-$ErrorActionPreference = 'Stop'
-$base = 'https://github.com/Reilley64/mods/releases/download/v0.1.0'
-$zip = 'mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip'
-if ((Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath 'mods-v0.1.0-runtime-SHA256SUMS')) {
-    throw 'Use a fresh download directory'
-}
-Invoke-WebRequest "$base/$zip" -OutFile $zip
-Invoke-WebRequest "$base/mods-v0.1.0-runtime-SHA256SUMS" -OutFile 'mods-v0.1.0-runtime-SHA256SUMS'
-$expectedHash = '3a71d12b77cbfd8e2371258075ae0e5148db219865006cb3e0f952b9f31f44f9'
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash -ne $expectedHash) {
-    throw 'Runtime checksum mismatch'
-}
-$destination = Join-Path $env:LOCALAPPDATA 'Programs\mods-v0.1.0'
-if (Test-Path -LiteralPath $destination) { throw 'Choose a fresh extraction directory' }
-Expand-Archive -LiteralPath $zip -DestinationPath $destination
-& "$destination\mods.exe" --version
-& "$destination\mods.exe" --help
+winget show --id Reilley64.Mods --exact --source winget
 ```
 
-The pinned hash also appears in `mods-v0.1.0-runtime-SHA256SUMS`. Stop on a mismatch. Keep the complete extracted layout, including licenses and `BUILD-AND-SOURCE.md`:
+When the package is available, install after user approval:
+
+```powershell
+winget install Reilley64.Mods
+mods --version
+mods --help
+```
+
+Confirm that WinGet selects `Reilley64.Mods`; stop if it reports an ambiguous or different package. If `mods` is not immediately available, open a new terminal and check `Get-Command mods` before retrying installation.
+
+At this reference's validation, the [WinGet package submission](https://github.com/microsoft/winget-pkgs/pull/442597) was still open, so public availability is not yet verified. A package-not-found result is not a reason to change WinGet sources or install a similarly named package.
+
+### Release ZIP fallback
+
+If WinGet cannot find the package, offer the [v0.1.0 release ZIP](https://github.com/Reilley64/mods/releases/tag/v0.1.0) as an alternative and obtain approval before installation. Download `mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip` and `mods-v0.1.0-runtime-SHA256SUMS`. Verify the ZIP's SHA-256 against the matching checksum file, then extract into a fresh installation directory. Stop on a mismatch.
+
+Install both Microsoft Visual C++ redistributables if missing. Keep the complete extracted layout, including licenses and `BUILD-AND-SOURCE.md`:
 
 ```text
 mods.exe
@@ -38,15 +38,7 @@ usvfs/usvfs_proxy_x64.exe
 
 Do not move only `mods.exe` or substitute native files from another release. The original all-in-one `mods-v0.1.0-x86_64-pc-windows-msvc.zip` remains supported and has its own `SHA256SUMS`; it includes corresponding source. The smaller runtime ZIP has a separate source download linked in `BUILD-AND-SOURCE.md`.
 
-To make `mods` available in this PowerShell session, with approval:
-
-```powershell
-$env:PATH = "$destination;$env:PATH"
-Get-Command mods
-mods --version
-```
-
-Alternatively use the full executable path with PowerShell's `&` operator. Persistent PATH edits require separate authorization. There is no verified public package-manager installation route in this reference; use the published ZIP rather than assume a Winget, Chocolatey, or Scoop package exists.
+Use the full executable path with PowerShell's `&` operator, or add its installation directory to PATH with user approval. Check `mods --version` and `mods --help` after setup. Do not assume Chocolatey or Scoop availability.
 
 ## Select a Mod Environment
 
