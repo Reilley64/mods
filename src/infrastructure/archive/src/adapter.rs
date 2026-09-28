@@ -122,6 +122,7 @@ fn index_for_application(
 	let started = Instant::now();
 	let core = index_archive_with_progress(archive.as_path(), checkpoint, cancellation)
 		.map_err(|error| map_archive_report(error, "archive_validation"))?;
+
 	if cancellation.is_cancelled() {
 		return Err(map_archive_report(
 			report!(ArchiveError::Cancelled),
@@ -134,6 +135,7 @@ fn index_for_application(
 			"archive_validation",
 		));
 	}
+
 	let archive_sha256 = digest(core.sha256)?;
 	let package_root = core.discovery.package_root.join("/");
 	let Some(configuration_ordinal) = core.discovery.configuration_ordinal else {

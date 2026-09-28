@@ -5,7 +5,8 @@
   "version": "0.0.0",
   "scripts": {
     "check": "bun run check:rust && bun run check:tools",
-    "check:rust": "bun run format:check && bun run lint && bun run dependency:check && bun run test:rust",
+    "check:rust": "bun run format:check && bun run lint && bun run dependency:check && bun run test:release-versions && bun run test:rust",
+    "test:release-versions": "bun test scripts/release-versions.test.ts",
     "check:tools": "bun run test:tools",
     "format:check": "cargo fmt --all -- --check",
     "lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",

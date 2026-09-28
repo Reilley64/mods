@@ -228,7 +228,7 @@ let output = Output::new();
 
 #### Rule
 
-Preserve `presentation -> application -> domain`. Infrastructure implements application-owned ports. Framework, transport, filesystem, Windows API, and provider types stay outside domain and application. The root is a virtual workspace. Binary presentation packages own `mods.exe` and `mods-mcp.exe` plus their composition roots.
+Preserve `presentation -> application -> domain`. Infrastructure implements application-owned ports. Framework, transport, filesystem, Windows API, and provider types stay outside domain and application. The root is a virtual workspace. Binary presentation packages own their executables and composition roots. In the CLI-only MVP, the CLI package owns `mods.exe`.
 
 #### Violation
 

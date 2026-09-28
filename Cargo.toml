@@ -9,7 +9,6 @@ members = [
   "src/infrastructure/execution",
   "src/infrastructure/dependencies",
   "src/presentation/cli",
-  "src/presentation/mcp",
 ]
 resolver = "3"
 
@@ -17,11 +16,12 @@ resolver = "3"
 license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
-application = { path = "src/application", version = "0.0.0" }
+# Internal crates are unpublished; inherited paths must allow independent releases.
+application = { path = "src/application" }
 cap-std = "4.0.3"
-domain = { path = "src/domain", version = "0.0.0" }
+domain = { path = "src/domain" }
 encoding_rs = "0.8.41"
-infrastructure-dependencies = { path = "src/infrastructure/dependencies", version = "0.0.0" }
+infrastructure-dependencies = { path = "src/infrastructure/dependencies" }
 libc = "0.2.189"
 rootcause = "0.13.0"
 serde = "1.0.229"

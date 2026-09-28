@@ -31,7 +31,7 @@ pub struct ProfileText<'a> {
 	pub text: &'a str,
 }
 
-/// One effective Data file, with its backing-file modification time.
+/// An analytical Data winner with backing-file modification time, not observed runtime visibility.
 #[derive(Debug, Clone)]
 pub struct VisibleProfileFile {
 	pub path: DataRelativePath,
@@ -76,7 +76,7 @@ pub enum ProfileWarning {
 	Unlisted {
 		plugin: String,
 	},
-	/// Upstream does not impose the derived order through virtual timestamps.
+	/// The analytical projection is advisory; virtual timestamps do not enforce its order.
 	LoadOrderNotEnforced,
 }
 
@@ -106,7 +106,9 @@ impl fmt::Display for ProfileConfigurationError {
 }
 impl Error for ProfileConfigurationError {}
 
-/// Builds game-owned mapping and activation decisions without editing canonical state.
+/// Builds canonical profile mappings and an advisory analytical plugin projection.
+/// The projection does not establish runtime visibility, activation, or order and
+/// does not edit canonical state or select the files used by profile mappings.
 ///
 /// # Errors
 ///

@@ -428,11 +428,11 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 					let mut stderr = String::new();
 					for warning in output.warnings {
 						let message = match warning {
-                            ExecutionWarning::LoadOrderNotEnforced => "warning [load_order_not_enforced]: upstream does not enforce game-visible plugin timestamps or load order\n".to_owned(),
-                            ExecutionWarning::StalePluginEntry { name } => format!("warning [stale_plugin_entry]: ignoring unavailable plugin {}\n", output::quote(&name)),
-                            ExecutionWarning::StaleLoadOrderEntry { name } => format!("warning [stale_load_order_entry]: ignoring unavailable load-order entry {}\n", output::quote(&name)),
-                            ExecutionWarning::DuplicatePluginEntry { file, name } => format!("warning [duplicate_plugin_entry]: using first occurrence of {} in {}\n", output::quote(&name), output::quote(&file)),
-                            ExecutionWarning::UnlistedPlugin { name } => format!("warning [unlisted_plugin]: using modification-time fallback for {}\n", output::quote(&name)),
+                            ExecutionWarning::LoadOrderNotEnforced => "warning [load_order_not_enforced]: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.\n".to_owned(),
+                            ExecutionWarning::StalePluginEntry { name } => format!("warning [stale_plugin_entry]: analysis projection: plugins.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", output::quote(&name)),
+                            ExecutionWarning::StaleLoadOrderEntry { name } => format!("warning [stale_load_order_entry]: analysis projection: loadorder.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", output::quote(&name)),
+                            ExecutionWarning::DuplicatePluginEntry { file, name } => format!("warning [duplicate_plugin_entry]: duplicate entry {} in {}; analysis projection uses the first occurrence; canonical file is unchanged.\n", output::quote(&name), output::quote(&file)),
+                            ExecutionWarning::UnlistedPlugin { name } => format!("warning [unlisted_plugin]: analysis projection: {} is absent from loadorder.txt; projected order uses backing-file modification time.\n", output::quote(&name)),
                             ExecutionWarning::ProfileStateInvalid => "warning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n".to_owned(),
                         };
 						stderr.push_str(&message);
@@ -540,6 +540,7 @@ mod tests {
 	use application::environment::InitializeEnvironmentDependencies;
 	use application::execution::ExecuteProgramDependencies;
 	use application::execution::ExecuteProgramOutput;
+	use application::execution::ExecutionWarning;
 	use application::installation::InstallArchiveDependencies;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
@@ -850,6 +851,52 @@ mod tests {
 			assert!(outcome.stdout.is_empty());
 			assert!(outcome.stderr.is_empty());
 		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn exec_qualifies_projection_warnings_without_changing_child_output() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		dependencies.execute_program.run_managed_program = Arc::new(|_, _, _, _, _, _| {
+			Box::pin(async {
+				Ok(ExecuteProgramOutput {
+					status: ProcessStatus::new(259),
+					warnings: vec![
+						ExecutionWarning::LoadOrderNotEnforced,
+						ExecutionWarning::StalePluginEntry {
+							name: "Missing.esp".into(),
+						},
+						ExecutionWarning::StaleLoadOrderEntry {
+							name: "Ordered.esp".into(),
+						},
+						ExecutionWarning::DuplicatePluginEntry {
+							file: "plugins.txt".into(),
+							name: "Duplicate.esp".into(),
+						},
+						ExecutionWarning::UnlistedPlugin {
+							name: "Unlisted.esp".into(),
+						},
+						ExecutionWarning::ProfileStateInvalid,
+					],
+				})
+			}) as PortFuture<_>
+		});
+
+		let outcome = run(
+			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+
+		assert_eq!(outcome.status, 259);
+		assert!(outcome.stdout.is_empty());
+		assert_eq!(
+			outcome.stderr,
+			"warning [load_order_not_enforced]: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.\nwarning [stale_plugin_entry]: analysis projection: plugins.txt entry \"Missing.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [stale_load_order_entry]: analysis projection: loadorder.txt entry \"Ordered.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [duplicate_plugin_entry]: duplicate entry \"Duplicate.esp\" in \"plugins.txt\"; analysis projection uses the first occurrence; canonical file is unchanged.\nwarning [unlisted_plugin]: analysis projection: \"Unlisted.esp\" is absent from loadorder.txt; projected order uses backing-file modification time.\nwarning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n"
+		);
 		Ok(())
 	}
 

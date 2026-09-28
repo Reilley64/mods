@@ -63,6 +63,7 @@ impl ProfileActivation {
 				.flatten()
 				.filter_map(activation_plugin_key));
 		}
+
 		Ok(Self { active_plugins })
 	}
 

@@ -1,11 +1,12 @@
 # Pinned usvfs release
 
 mods consumes the public <https://github.com/Reilley64/usvfs-rs> fork. The fork
-owns the unmodified upstream source, native build, raw `usvfs-sys` crate and
-exception shim. mods retains its safe wrapper, configuration and process policy.
-The upstream source revision remains
-`57f1ea5e6ad13f7435a7af184748e6c1312c5637`. Do not substitute the upstream
-v0.5.7.2 binaries: their source revision differs despite the same version string.
+owns the pinned upstream native baseline, the approved issue #33 proxy logging
+fallback, the native build, the raw `usvfs-sys` crate, and the exception shim.
+mods retains its safe wrapper, configuration, and process policy. The upstream
+baseline revision is `57f1ea5e6ad13f7435a7af184748e6c1312c5637`; the fork
+revision in the release manifest identifies the baseline plus the proxy change.
+Do not substitute upstream v0.5.7.2 binaries for the exact fork release.
 
 ## Fetch the native bundle
 
@@ -15,7 +16,7 @@ Use PowerShell 7 and an authorized script host:
 ./native/fetch.ps1
 $env:MODS_USVFS_ARTIFACTS = "$pwd/native/artifacts/bin"
 $env:LIBCLANG_PATH = "C:/path/to/LLVM/bin"
-cargo build --locked --target x86_64-pc-windows-msvc --package mods --package mods-mcp
+cargo build --locked --target x86_64-pc-windows-msvc --package mods
 ```
 
 `native/usvfs-release.json` must pin an actually published release before this
@@ -28,7 +29,7 @@ The manifest contract is:
 | --- | --- |
 | `schema` | `1` |
 | `repository` | `Reilley64/usvfs-rs` |
-| `tag` | `usvfs-0.5.7.2-rs.1` |
+| `tag` | `usvfs-0.5.7.2-rs.2` |
 | `bundleAsset` | ZIP asset basename |
 | `bundleSha256` | Verified lowercase SHA-256 of the published ZIP |
 | `sourceRevision` | The upstream revision above |
@@ -38,8 +39,9 @@ The manifest contract is:
 
 The downloader uses the explicit HTTPS GitHub release URL. It verifies the ZIP
 hash before extraction, then validates `bin/source-revision.txt` and
-`bin/artifacts.json`. The latter contains `source`, `configuration` (`Release`),
-and `artifacts`, with exactly four filename-to-SHA-256 entries:
+`bin/artifacts.json`. The latter records the upstream `source` marker,
+`forkRevision`, the approved `nativeDelta`, `configuration` (`Release`), and
+`artifacts`, with exactly four filename-to-SHA-256 entries:
 `usvfs_x86.dll`, `usvfs_x64.dll`, `usvfs_proxy_x86.exe`, and
 `usvfs_proxy_x64.exe`. The release bundle also contains license notices.
 
@@ -64,8 +66,7 @@ injection tests.
 
 mods' build script retains source-marker validation and embeds hashes of all
 four exact native inputs from `MODS_USVFS_ARTIFACTS`. Cargo tracks those inputs
-for revalidation. Install the four files under `usvfs/` beside `mods.exe` and
-`mods-mcp.exe`. The loader never accepts an Environment Root, cwd, PATH or
+for revalidation. Install the four files under `usvfs/` beside `mods.exe`. The loader never accepts an Environment Root, cwd, PATH or
 caller-selected DLL path. It checks every embedded artifact hash before loading
 the architecture's controller with DLL-directory/System32-only search. Proxies
 remain beside both DLLs. Windows 11 and both x86 and x64 Microsoft Visual C++
@@ -82,11 +83,13 @@ Native rebuilding and shim tests belong in the fork, not this consumer tree.
 
 **Combined mods binary preview publishing remains disabled** by the literal
 false gate in the workflow. A native release does not itself satisfy mods' full
-corresponding-source requirements. The disabled packaging recipe checks the
-native source asset hash and includes its notices, but mods' Rust dependencies
-and other required source/build inputs still need a reviewed distribution
-arrangement. Registry references alone are not a substitute. Do not enable this
-job as part of the native dependency migration.
+corresponding-source requirements. The disabled packaging recipe now uses
+`scripts/package-windows.ps1`, which vendors locked Rust dependencies and includes
+the pinned native source and notices. See [distribution instructions](../docs/distribution.md).
+This is candidate packaging only. The owner waived the disconnected consumer rebuild check for #33; it is skipped,
+not passed. Complete corresponding source, notices, an actual connected consumer
+rebuild, and remaining acceptance are still required before the gate can change.
+Neither static policy tests nor a warm-cache build establish source completeness.
 
 ## Owned lifecycle and tests
 
@@ -128,8 +131,8 @@ upstream filesystem tests. The extracted shim's unit tests belong in the fork.
 
 ## Evidence boundary
 
-The prior clean build and archive-only evidence is recorded in repository
-history and `docs/research/issue-30-upstream-usvfs.md`. It is not evidence that the
-new release download or consumer Windows build has passed. Validate both Windows
-architectures against the final published manifest and final Git revision before
-merging the local CI change. No remote CI or publication is changed by local edits.
+The fork's release-preparation run `36247682460` rebuilt library sources with
+origin fallback blocked and packaged the reviewed `rs.2` archives. A temporary
+exact-pin consumer passed ordered x64 then x86 virtual Data reads before native
+publication. Neither result replaces final-head Windows CI or the complete #33
+acceptance matrix. The mods preview publication gate remains disabled.

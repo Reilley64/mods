@@ -8,12 +8,6 @@ const validPackages = [
     manifest_path: "/repo/src/presentation/cli/Cargo.toml",
     targets: [{ name: "mods", kind: ["bin"] }],
   },
-  {
-    name: "mods-mcp",
-    dependencies: [{ name: "application" }, { name: "domain" }, { name: "infrastructure-dependencies" }],
-    manifest_path: "/repo/src/presentation/mcp/Cargo.toml",
-    targets: [{ name: "mods-mcp", kind: ["bin"] }],
-  },
   { name: "domain", dependencies: [] },
   { name: "application", dependencies: [{ name: "domain" }] },
   { name: "infrastructure-environment", dependencies: [{ name: "application" }, { name: "domain" }] },
@@ -36,7 +30,7 @@ const validPackages = [
 ];
 
 describe("workspace dependency graph", () => {
-  test("accepts the presentation-owned binary workspace fixture", () => {
+  test("accepts the CLI-only binary workspace fixture", () => {
     expect(validateProjectGraph({ packages: validPackages })).toEqual([]);
   });
 
@@ -67,5 +61,11 @@ describe("workspace dependency graph", () => {
 test("rejects an unexpected workspace package", () => {
   expect(validateProjectGraph({ packages: [{ name: "unexpected", dependencies: [] }] })).toContain(
     "workspace must not contain package unexpected",
+  );
+});
+
+test("rejects the deferred MCP presentation in the MVP workspace", () => {
+  expect(validateProjectGraph({ packages: [...validPackages, { name: "mods-mcp", dependencies: [] }] })).toContain(
+    "workspace must not contain package mods-mcp",
   );
 });
