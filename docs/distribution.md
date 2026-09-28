@@ -2,7 +2,10 @@
 
 The owner approved CLI-only `v0.1.0` stable publication and release PR merge.
 Stable publication is enabled; preview publication and Winget remain disabled.
-Approval is not evidence that stable assets have been published or verified.
+The actual `v0.1.0` public ZIP/checksum and existing-host portable lifecycle are
+now verified; see the [acceptance ledger](acceptance/issue-33.md#published-stable-package-and-portable-lifecycle--2026-09-28).
+Configured-`tar` Winget validation/install/alias/uninstall passed on the recorded
+existing host; default Shell extraction failed. Human-controlled submission remains pending.
 The aggregate version belongs to `version.txt` and `vX.Y.Z`, not the CLI package.
 The CLI-only MVP source and workspace contain `mods.exe` but no MCP Presentation;
 its ZIP ships only `mods.exe`. The earlier two-executable ZIP is historical evidence,
@@ -110,15 +113,16 @@ disconnected build. Preserve the recorded source inventory and actual build
 evidence, including source identities, tool versions, commands, inputs, hashes
 and results. Complete corresponding source and required notices remain mandatory.
 The waiver alone does not authorize publication or waive the remaining acceptance checks.
-The owner separately approved CLI-only `v0.1.0` publication; actual stable-artifact
-lifecycle and Winget evidence remain pending in [issue #33](acceptance/issue-33.md).
+The owner separately approved CLI-only `v0.1.0` publication. Public-byte and
+existing-host portable lifecycle evidence is recorded in [issue #33](acceptance/issue-33.md);
+Configured-`tar` Winget install/alias/uninstall passed; submission remains pending.
 
 The disabled preview recipe delegates to the shared script and uploads the ZIP
 and checksum with full-SHA naming and 90-day retention. Enabling it additionally
 requires accepted-main-push gating and successful Rust and repository-tool
 checks. Stable publication is enabled as described below; Winget remains disabled.
-Actual stable-artifact smoke tests and Windows installation/removal evidence
-remain issue #33 acceptance requirements, not claimed prepublication passes.
+Actual stable-artifact help/version and owned installation/removal passed on the
+recorded existing Windows host. This is not a pristine-host or Winget result.
 There is no byte-for-byte reproducibility claim.
 
 
@@ -132,8 +136,10 @@ The owner approved enabling stable publication for CLI-only `v0.1.0` and merging
 the regenerated release PR #36. Only the stable job's `false &&` gate was removed;
 the dispatch/non-prerelease event condition and release validation remain.
 There is no new manual approval environment: merging the release PR is publication
-approval. Public ZIP/checksum verification and actual stable-artifact lifecycle
-evidence still have to be recorded; approval does not claim those checks passed.
+approval. Public ZIP/checksum verification and bounded existing-host portable
+lifecycle results are now recorded in the acceptance ledger. These results are
+separate from the earlier approval. The local Winget check below is limited to
+configured-`tar` extraction; submission remains outstanding.
 
 Publication adds missing assets only. It never replaces public ZIP bytes, deletes
 a release, or recreates a version. Anonymous HTTPS downloads verify the exact
@@ -147,12 +153,20 @@ No stable product URL or hash in tests is evidence of actual publication.
 
 ## Winget bootstrap and later updates (disabled)
 
-No product manifest is committed yet: there is no verified public `v0.1.0` product
-ZIP/hash or clean Windows portable-install evidence. This is an explicit blocker,
-not a placeholder manifest. After that release is public, a human must first run
-`bun scripts/stable-release.ts verify v0.1.0`, then use its verified URL with
-`wingetcreate new <verified-url> --out <manifest-directory>`. Do not submit from
-the wizard until reviewing the generated files and testing installation/removal.
+No product manifest is committed yet. The public `v0.1.0` ZIP/hash and bounded
+existing-host portable ZIP lifecycle are verified in the acceptance ledger.
+The separately approved hand-authored manifest passed native validation and
+existing-host installation/alias/removal with WinGet's supported `tar` extractor.
+The default Windows Shell extractor failed; preserve that result rather than
+claiming default-extractor or pristine-host acceptance. Both temporary settings
+were restored. See the [local Winget evidence](acceptance/issue-33.md#local-winget-validation-and-configured-tar-lifecycle--2026-09-28).
+
+The retained manifest is hand-authored, not WingetCreate output. Before initial
+human-controlled submission, reverify current public bytes with
+`bun scripts/stable-release.ts verify v0.1.0`. The recommended interactive
+`wingetcreate new <verified-url> --out <manifest-directory>` workflow remains
+available; any regenerated manifest must be reviewed and validated again.
+Do not accept its submission prompt without separate owner approval.
 Use package identifier `Reilley64.Mods`, package name `mods`, and aggregate version
 `0.1.0`. The installer manifest must describe:
 
@@ -163,12 +177,17 @@ Use package identifier `Reilley64.Mods`, package name `mods`, and aggregate vers
   `Microsoft.VCRedist.2015+.x86` and `Microsoft.VCRedist.2015+.x64`;
 - exact verified `InstallerUrl` and `InstallerSha256`, and no self-updater.
 
-Validate the real generated manifest with `winget validate --manifest <directory>`.
-On a clean Windows 11 host, enable local manifests for testing, install the local
-manifest silently, run the `mods` alias, and uninstall silently. Confirm the whole
+Validate the actual manifest with `winget validate --manifest <directory>`.
+Record the target's prerequisite state and original Winget settings. For local
+testing, enable local manifests only if needed, install the local manifest
+silently, run the `mods` alias, and uninstall silently. Restore settings changed
+by the test. The completed check used existing reill/SID1003 and temporary
+`installBehavior.archiveExtractionMethod: tar`, not default Shell extraction. Confirm the whole
 ZIP remains installed, especially `usvfs/` beside `mods.exe`, and that uninstall
-removes the alias and package files. Merely listing `mods.exe` in a manifest does
-not prove runtime layout or VFS behavior. Preserve
+removes the alias and package files. WinGet adds its own hidden tracking database
+inside the portable installation; verify the 24 release files separately and
+preserve that database until native uninstall. Merely listing `mods.exe` in a
+manifest does not prove runtime layout or VFS behavior. Preserve
 logs, tool versions, hashes, and managed Steam Data unchanged evidence. Record
 accepted manifest validation, ZIP layout, and clean install/run/remove evidence
 before submitting the human-controlled initial package.
@@ -195,6 +214,8 @@ references used for CLI and manifest fields:
 - https://github.com/microsoft/winget-create/blob/main/doc/token.md
 - https://github.com/microsoft/winget-pkgs/blob/master/doc/manifest/schema/1.10.0/installer.md
 
-Context7 lookup was unavailable because its monthly quota was exhausted; the
-upstream documents above were fetched directly instead. No Winget client,
-manifest validation, submission, or Windows installation was executed here.
+The original preparation used direct upstream documents when Context7 was
+unavailable. Later local testing used WinGet `1.29.380`; exact-version source
+and current documentation confirmed the portable tracking database, dependency
+handling and supported `tar` option. Manifest validation and the configured-tar
+lifecycle passed within the recorded limits. No submission occurred.
