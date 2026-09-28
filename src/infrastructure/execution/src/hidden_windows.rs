@@ -42,7 +42,7 @@ pub fn show_error(message: &str) -> Result<(), ErrorMarker> {
 		)
 	};
 	if response.0 == 0 {
-		return Err(WindowsError::from_win32()).context(ErrorMarker::execution_supervision_failed());
+		return Err(WindowsError::from_thread()).context(ErrorMarker::execution_supervision_failed());
 	}
 
 	Ok(())
