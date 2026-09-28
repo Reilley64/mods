@@ -1,6 +1,312 @@
 # Issue 33 acceptance evidence ledger
 
-Status (2026-09-27): **CLI-only MVP candidate built; three outstanding bounded synthetic non-game scenarios now passed; not accepted for stable release.** The owner superseded the old two-executable #25/#33 contract. Current source head `96f0c91800d2cb6f2a9a8bef8668eceb60a86665` and its new unpublished CLI-only Windows ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c` are distinct from the historical two-binary ZIP. No controlled real-game run, real Known Folder import or stable/Winget sign-off is recorded. The older chronological evidence below remains historical and revision-bound.
+Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. Stable release is not yet accepted.** Runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. Remaining applicable handoff scenarios are being reconciled; stable-package lifecycle, release approval and Winget sign-off remain separate. Older chronological checkpoints below are historical and revision-bound.
+
+## Current closeout checklist — 2026-09-28
+
+This is the current gap list. Dated preparation/non-game checkpoints below are
+historical; their pending statements do not reopen completed checks.
+
+- [x] Credit the CLI-only candidate build/source/package/connected rebuild and
+  owned portable extraction/help/version/removal within their recorded limits.
+- [x] Credit human source import, same-environment save/reload, original normal
+  and FOMOD weather installs, visible effect and owner-confirmed qualitative
+  performance. Preserve every raw nonzero quit and stopped attempt.
+- [x] Reconcile issue #33 and draft PR #103 with the
+  [weather checkpoint](https://github.com/Reilley64/mods/issues/33#issuecomment-5864744497).
+- [ ] Finish only the unproved **selected-environment save-view comparison**.
+  [Save decision #21](https://gist.github.com/Reilley64/7dd26ed6a0aa8267bd43c078fa983849),
+  acceptance 2/3/11, requires different selected save contents, switching via
+  `--environment` without copying/merging/synchronizing, and no cross-environment
+  visibility in the configured managed-save view. Existing runs already prove
+  load/write in two roots; they do not record switching away from the weather
+  root and returning to the first view after Save 2 exists. Do not repeat the
+  completed load/write/weather checks or reinstate arbitrary-path hiding.
+- [ ] Resolve the observed **release-version consistency failure** before release
+  approval. [Release PR #36 CI 36358212966](https://github.com/Reilley64/mods/actions/runs/36358212966)
+  fails because `application 0.1.0` requires path `domain ^0.0.0`, while the path
+  package is `0.1.0`. PR #36 also predates the CLI-only tree and still describes
+  MCP. It must not be merged as an approved CLI-only release in this state.
+- [ ] Obtain an owner-designated clean Windows 11 target/baseline and complete
+  the remaining **actual stable artifact** install/run/remove evidence, recording
+  prerequisites and managed Steam Data preservation. The unpublished candidate's
+  owned lifecycle is already passed. A new directory alone does not establish
+  clean-host dependency state, but no OS reinstall or game add-on removal is
+  mandated by these requirements.
+- [ ] Obtain explicit owner approval for the CLI-only stable snapshot/version
+  and publication. Verify real public ZIP/checksum bytes before using their URL
+  and hash for Winget; do not invent a manifest or reuse the candidate hash for
+  different release bytes.
+- [ ] Validate the initial `Reilley64.Mods` Winget manifest and clean-target
+  install/alias/uninstall, then obtain the human-controlled initial submission.
+
+Publication/public-delivery/Winget proof necessarily follows the owner's
+publication decision; it is not silently claimed as prepublication evidence.
+Keep #33 open, #103 draft and `Refs #33` until applicable acceptance is complete.
+CLI Ctrl+C and disconnected rebuilding remain owner-waived/unverified, MCP is
+post-MVP #105, and AV diagnosis remains optional for the approved functional
+credit. No numeric performance threshold or new upstream filesystem harness is
+required. Current-main green CI did not execute Rust/native/x86 steps in
+[run 36358188085](https://github.com/Reilley64/mods/actions/runs/36358188085);
+retain the separate passing exact-head issue-branch runs rather than transferring
+coverage. No credentials blocker has been established.
+
+## Authorized real weather-archive installation — 2026-09-28
+
+**Installation checkpoint: passed; activation/gameplay were pending at this point.**
+The completed agent04 human cycle below supersedes that pending state. The
+owner authorized autonomous installation of both downloaded Better Vanilla
+Weather Extended archives, with the FOMOD's upscaled sun (1K) and sky (2K) options,
+and later activation only in fresh owned Profile State. Game launches remain
+human-operated.
+
+Prepared root: `issue33-weather-20260928-agent02`, under the designated account's
+Local AppData `mods/acceptance/`. The fixture copies the completed run's verified
+owned manifest/profile/test save; it is **test-fixture copying, not a new CLI
+init/import acceptance result or an import of real user saves**. Provenance
+records the actual preparer (`prime`) separately from the target human account.
+
+- Main archive, version 4.1, SHA-256
+  `9de153bcbdc2a51c66011b9cf7aa72079153dc6c49ce2279014e33f89e7fc445`:
+  installed as `BVWE-Main`. `Better Vanilla Weather.esp` is 149,059 bytes,
+  SHA-256 `f82dae797a5096ed6d83f5c9141c6343ebf0f704884a8b13c9f8f8be71c1b269`.
+- Texture archive, version 3.3.3, SHA-256
+  `98fe0dedd74dbe6fa592fc6970410c484ce0dd02b38d94596346463019de066a`:
+  installed as `BVWE-Textures`. The original UTF-16LE FOMOD config was accepted as
+  schema `5.0`, without conversion/repacking or manual extraction as a fallback.
+  Exact CLI choices were `sun.textures-of-sun=upscaled-textures` and
+  `sky.textures-of-sky=upscaled-textures`. All 18 DDS destinations match the
+  selected Install Plan (five sun, thirteen sky files).
+- Texture discovery, selected-texture preview, main preview and both commits all
+  returned 0 with drained streams. The only installer warnings accepted the two
+  unused empty “don't install” options. Raw argv/results/streams and committed
+  file hashes are retained in the prepared root's evidence.
+- All thirteen full protected snapshots were byte-identical, SHA-256
+  `64db31ff833e1f799bff85c6e9e79215db8ab71071f4e137472d4d81ea6b101d`.
+  These cover the captured Game Installation, real profile sources, entire
+  completed source run and the stopped first attempt. This is bounded snapshot
+  preservation evidence, not a general runtime write-prevention claim.
+- Both installed Data Mods remain disabled in `modlist.txt`; owned `plugins.txt`
+  and `loadorder.txt` are empty for the baseline. The human wizard will activate
+  only the fresh owned lists after baseline observations. Such activation is
+  controlled fixture setup, not a new CLI capability or an edit to real lists.
+
+The first attempt, `issue33-weather-20260928-agent01`, stopped at `settings_load`
+with `environment_invalid` before any install. The agent's initial clone omitted
+mandatory generated `cache/Fallout - Invalidation.bsa`; the CLI correctly
+rejected the incomplete fixture. One bounded correction used a new root and
+copied the verified 36-byte source artifact, SHA-256
+`9670d8f38320f7729cd5e184b37e30c47e35f96460e2c9b9122aea95dce54d3b`.
+The stopped attempt remains intact. No product changes were made.
+
+The pinned CLI-only ZIP/executable remain unchanged. No init, exec, game launch,
+plugin activation, real profile modification, rollback or cleanup was performed
+by the installation agent. At that checkpoint, visible effects, modded save/reload
+and comparative performance still required human evidence; the completed agent04
+cycle and subsequent owner confirmation below supply bounded credit.
+
+### Weather wizard binding refusal and bounded repair
+
+The first human weather wizard attempt refused Bind before any game opened.
+No `weather-evidence` directory was created, and a read-only inspection found no
+live game/mods processes. A native read-only reproduction identified a wizard
+bug: `Tree` returns ordered dictionaries, but `Select-Object path,bytes,sha256`
+projected null properties instead of dictionary keys. The resulting comparison
+falsely reported a changed `BVWE-Main` payload. The earlier 90 safe cases did not
+exercise this actual type boundary; their pass did not prove real Bind would work.
+
+The replacement uses explicit field projection, with a native regression through
+actual `Tree` and `AssertFixture`. The original bundle and prepared agent02 root
+remain preserved. Fresh root `issue33-weather-20260928-agent03` copies verified
+owned profile/cache/mods/package bytes from agent02, omitting log history. This
+performed no new CLI install, init/import, exec or game launch; original install
+receipts remain attributed to agent02. Protected before/after snapshots match,
+including the entire agent02 root as well as the earlier protected sources.
+
+The agent03 provenance receipt has a malformed `targetUser` display string.
+It is retained unchanged and is not verified identity evidence. The correct
+SID and explicit target folders are recorded separately; the wizard checks the
+actual Windows identity SID and Known Folders and records the human identity at
+Bind. No original receipt is silently repaired. Replacement validation and
+independent re-review completed with no remaining blocker. The replacement
+passed 98 safe cases (including seven actual inventory-seam cases), seven
+native PowerShell parses, and Bash syntax validation. A separate read-only
+check of the corrected inventory/profile/list functions passed against actual
+agent03 files as the preparation account; this was not human Bind or a game
+launch. All 19 staged bundle hashes matched. The replacement human bundle is
+`C:/Users/reill/mods33-weather-wizard-20260928-02`. Human integration was pending
+at this preparation checkpoint; the following agent03/agent04 records show the
+subsequent outcomes.
+
+The human agent03 attempt subsequently completed Bind, the baseline observation,
+activation, and the modded launch. It stopped at modded Observe because the human
+reported completed=no after forgetting the new manual save; normalQuit=yes and
+visibleEffect=yes were recorded in private notes. Both raw CLI statuses were
+`-1073741819`, retained without attribution. The final owned save inventory
+contained only the original seed FOS/NVSE pair, and the post-modded snapshot
+classification required no guarded-source review. There was no reload or Final.
+This was an expected completion guard, not recurrence of the binding defect;
+partial observations do not establish modded save/reload acceptance.
+
+The owner authorized a fresh attempt. Agent04 copies the verified disabled
+agent02 fixture, with no new CLI install/init/game calls and no reuse of agent03
+observations. Agent03 and its STOP/evidence are preserved as an additional
+protected source. The fresh-attempt wizard retains the corrected runtime guards
+and emphasizes making and verifying a NEW manual save before the second Quit.
+
+
+## Human weather/save/reload cycle — 2026-09-28
+
+**Bounded weather effect, save/routing/reload and qualitative performance checks
+passed under the owner-approved quit-anomaly criteria. Overall issue acceptance
+remains separate.** Completed root:
+`C:/Users/reill/AppData/Local/mods/acceptance/issue33-weather-20260928-agent04`.
+Final receipt timestamp: `2026-09-28T06:20:58.731568Z`; SHA-256
+`5e4d95844af1a72def3bf706d8cb8ccd6d76875f13dc2a1134f479d1b2e0ce3f`.
+
+Exactly three managed launches are recorded: disabled baseline, enabled modded
+comparison/new save, and reload. Each raw CLI status is `-1073741819`
+(`0xC0000005`), and the human separately confirmed completed=yes and normalQuit=yes
+for all three. Both modded observations record visibleEffect=yes. The anomaly
+remains abnormal and unattributed; these are not clean exits or proof of an
+external cause. No STOP or live named game/mods process remained at inspection.
+
+The second-run Quit answer initially failed parameter validation before the
+helper body ran. The root had a pending observation, not a STOP. A separately
+reviewed, human-operated continuation recorded fresh corrected observations and
+performed only the remaining reload launch. It did not repeat earlier launches,
+clear markers, execute old notes or rewrite earlier evidence.
+
+- New manual save: `Save 2     New Vegas Strip  00 02 41.fos`, 1,532,750 bytes,
+  SHA-256 `6e3f6db7e3e99913898f027d7d1fb71ea30743eb7f9970f58695e2b59e6de76f`.
+  Its 298-byte `.nvse` has SHA-256
+  `44c77aa9b90d83416234f0b67778be76cf6f841fff2dc0bf30e95551b8b8a863`.
+  Both are stable from after creation through reload, Final and a current
+  read-only native file check. Co-save metadata does not validate pair contents.
+- The copied seed FOS/NVSE remained unchanged in every captured save inventory.
+  The human confirmed loading the selected new save and its scene. The raw
+  descriptive save label contains a leading U+0016; it is preserved unchanged.
+  The exact filename and hash above do not contain that control character.
+- All sixteen protected snapshots preserve the four entire prior source roots,
+  the captured real Documents/Local profile sources and guarded game entries.
+  The only final differences are unmanaged root logs: `FalloutNV_d3d9.log`,
+  `falloutnv_havok.log`, `nvse_steam_loader.log`, `nvse.log`, and `ReShade.log`.
+  The classifier reports reviewRequired=false. This is not whole-tree equality
+  or a universal write-prevention guarantee.
+- Baseline notes describe midday/clear sky and no stutter, but give only an
+  uncertain “like a minute” estimate; subsequent notes say “same as before.”
+  The owner subsequently confirmed in conversation: “visual change conmfirmed
+  and performance was fine”. This supports the observed visual effect and a
+  qualitative acceptable-performance verdict for this fixture. It is not a
+  measured startup time, quantified overhead result or general benchmark.
+  No numeric performance claim is derived from the notes or total CLI durations.
+
+Independent read-only audit: `/tmp/mods33-weather-completed/AUDIT.md`; copied raw
+receipts/snapshots are in its `weather-evidence/` directory. Original Windows
+roots, stopped attempts and private notes remain retained. This cycle does not
+establish new CLI init/import coverage, cross-environment compatibility,
+enforced plugin ordering, or release/publication approval.
+
+## Human save/reload cycle — 2026-09-28
+
+**Bounded verdict: passed under the owner-approved quit-anomaly criteria.**
+[Issue evidence checkpoint](https://github.com/Reilley64/mods/issues/33#issuecomment-5863188619). This
+is successful observed save creation and human-confirmed reload in the same fresh
+Mod Environment, not clean process termination or full issue acceptance.
+
+Run: `issue33-save-reload-20260928T034608Z-1748`, beneath the designated account's
+Local AppData `mods/acceptance/`. The five-stage human wizard completed and wrote
+`final.json` at `2026-09-28T04:04:03.6083157Z`. No `STOP.json` exists. A subsequent
+read-only check found no game, mods, USVFS proxy or ProcDump process.
+
+- Candidate ZIP identity matches the pinned CLI-only artifact. The actual
+  extracted `mods.exe` SHA-256 remains
+  `af763be69bd2a7331d7c039763cca06514c12371937955f4eb6ef5242041ccfb`.
+- Init and settings returned 0. The human recorded `IMPORT_REVIEW=PASS`; the
+  automated import comparison reports only expected managed INI differences,
+  with imported `plugins.txt` and `Plugins.fnvviewsettings` byte-identical.
+- The owned save directory was empty before the first launch. The human recorded
+  the new manual save label `Save 1     New Vegas Strip  00 02 25` and confirmed
+  both the requested step and normal Quit. On the second launch, the human
+  confirmed loading that same save, verifying its scene, and selecting normal Quit.
+  Raw notes contain a leading control character; they are preserved unchanged,
+  not executed or rewritten. The display label above omits that control character.
+- The `.fos` is 1,533,896 bytes, SHA-256
+  `5c0b7bf835afd15bd8aa6619021d7ae0b16e45d45f0c05ad51805a251325f98f`.
+  The `.nvse` is 270 bytes, SHA-256
+  `515f33191bf41ef9acbf601dbf3a29416c6fda85e7c3086e00f0220a8af79e00`.
+  Full owned-save inventories match after creation, before reload, after reload,
+  and at Final; a later read-only hash check also matches. This is not independent
+  co-save pair-content validation.
+- Both launch receipts retain signed `-1073741819` (`0xC0000005`). Their durable
+  observation receipts contain `completed=yes` and `normalQuit=yes`. The anomaly
+  remains unattributed; neither status is normalized to zero or called a clean exit.
+- All recorded phase comparisons report no review-required changes. Independent
+  before/Final comparison confirms unchanged captured Steam Data, named source
+  profile/save entries, binaries and root metadata. There is no claim of absence
+  of transient writes or universal runtime write prevention.
+- Final unmanaged differences were `ReShade.ini`, `ReShade.log`,
+  `falloutnv_error.log`, `falloutnv_havok.log`, `nvse.log`, and
+  `nvse_steam_loader.log`. Their changes are retained, not assumed harmless. In
+  particular, this is **not** a claim that all external configuration was unchanged.
+
+The new run and original stopped run remain intact. No product fixes, game
+settings/add-on changes, crash capture, publication or cleanup were performed by
+the agent. The next real-game work is representative Data Mod behavior and
+observed performance; applicable cross-environment acceptance still needs its
+own evidence. This same-environment cycle does not replace those scenarios.
+
+## Owner-authorized bounded real-game credit — 2026-09-28
+
+The owner approved the existing Game Installation, including its current external
+add-ons; a pristine Steam game installation is not required. The owner also
+approved evaluating the original run per scenario rather than treating its
+nonzero quit status as a blanket failure. This is **not** a finding that the
+shutdown anomaly is unrelated to the product.
+
+Retained run: `issue33-game-20260928T010848Z-1864` under the designated account's
+Local AppData `mods/acceptance/`. Its original `STOP.json`, snapshots, CLI receipt,
+logs, Environment Root and saves remain intact. It is not resumed or relabeled.
+
+| Check | Bounded verdict | Evidence and limits |
+| --- | --- | --- |
+| Save destination and persistence | **Passed for the observed write** | A new 1,567,713-byte `.fos` and 270-byte `.nvse` were present in owned `environment/profile/saves/` after the process drained. This does not establish reloadability, pair consistency, all save operations or cross-environment behavior. |
+| Captured source preservation | **Passed at the captured boundaries** | Before/after entries for Steam `Data`, named real profile sources and recorded real-save paths were unchanged in the captured fields (including file bytes/hash and ACL). This does not prove absence of transient writes or universal upstream isolation. |
+| Game quit status | **Unattributed anomaly retained** | The human reported a normal Quit to Desktop. The loader logged `returned from winmain (0)`; the CLI receipt recorded signed `-1073741819` / `0xC0000005`. No matched fault artifact identifies the cause. Neither a clean final exit nor product/external fault attribution is established. |
+| Save reload and remaining real-game scenarios | **Not yet accepted** | The old wizard stopped before the remaining observations and reload. New controlled evidence is required. |
+
+The nine changed entries were unmanaged root outputs (logs/cache/`ExitData.mhd`)
+and the unnamed Documents sibling `RendererInfo.txt`. The old controller's
+whole-tree equality check was broader than the current #25/#30/#31 mapping
+contract. These changes alone do not establish a mapping defect or harmlessness.
+
+The save contract requires completed filesystem writes to persist after zero
+**and nonzero** process exit. Consequently a dump investigation is not a prerequisite
+for crediting these bounded save/source observations. See
+[the primary-source shutdown research](../research/new-vegas-quit-to-desktop.md)
+and [save decision #21](https://gist.github.com/Reilley64/7dd26ed6a0aa8267bd43c078fa983849).
+Older closed-namespace promises remain superseded by #30/#31.
+
+For continuation, a separate human-operated wizard uses a fresh Mod Environment
+and retains raw CLI statuses. Only status 0 or the already observed `0xC0000005`
+can advance to human observation; the latter is recorded as an unattributed
+anomaly. Before continuing, the human must confirm that the requested scenario
+completed and that they selected Quit to Desktop. A gameplay crash, absent quit
+confirmation, other exit status, pending observation, failed preservation check
+or missing expected save stops the run. Init/settings still require status 0.
+No ProcDump/EULA step is required for this bounded save/reload cycle.
+
+Controller readiness (not game acceptance): the new temporary bundle
+`mods33-save-reload-wizard-20260928-01` is staged for the human. Its unchanged
+snapshot policy, generic runner and observation gates passed 53 focused Windows
+fixture checks (12 policy, 12 controller, 29 flow), plus parsing, Bash syntax,
+hash verification and an independent read-only review with no blockers. No game,
+product CLI or end-to-end wizard was executed by the agent. At that preparation checkpoint, actual save/reload and import-review evidence
+was pending; the completed cycle is recorded above.
+
+No original evidence is deleted, restored or normalized. No product code,
+candidate bytes, runtime API or release/Winget gate changes. Full acceptance,
+publication approval and crash attribution remain separate decisions.
 
 ## Authorized non-game continuation — merge checkpoint
 
@@ -71,31 +377,40 @@ product changes. External controllers and raw records remain retained on the des
 Windows host; the result/root/script identities are in the active tasklist above.
 Local `bun run check` passed again (389 Rust, 100 tools). Protected snapshots and recorded
 PID checks were independently inspected after each run. No game, real user-folder write,
-new release artifact, gate enablement, or publication occurred. Source import and public
-stable/Winget acceptance remain unavailable/gated, not silently waived.
+new release artifact, gate enablement, or publication occurred in that non-game
+continuation. Source import was then unavailable; the later human cycle passed
+its bounded import review. Public stable/Winget acceptance remains gated.
 
 ### Non-game release-readiness audit
 
-The bounded workflow/package audit found no new distribution-code blocker. Existing
+At that historical checkpoint, the bounded workflow/package audit found no new
+distribution-code blocker. The later live Release PR failure is recorded in the
+current closeout checklist above. Existing
 source/notices/checksum, connected consumer rebuild and owned portable lifecycle
 evidence remain scoped to `96f0c91`. No new package was built after the tooling merge.
 Release Please is enabled and has open PR #36 proposing aggregate `0.1.0`; this is
 not publication approval. Preview upload, stable asset publication and Winget jobs
 remain false-gated. Public stable install/remove and the human Winget bootstrap
 require the actual approved public artifact; no placeholder manifest or guessed
-URL/checksum was created. Real Known Folder import remains unverified because the
-designated account has no source trees; none were created for this test.
+URL/checksum was created. Real Known Folder import was unverified in that
+synthetic test; the later human-account import review supersedes that limitation
+for its recorded fixture.
 
-## Live CLI-only scenario crosswalk (2026-09-27 scope)
+## Current CLI-only scenario crosswalk — 2026-09-28
 
 | MVP area | Current bounded evidence | Remaining limit or action |
 |---|---|---|
-| CLI initialization, settings, normal/FOMOD preview and fail-closed errors | New `96f0c91` package passed five portable synthetic calls plus exact 125/126/127 owned fail-closed cases in fresh roots; raw streams and protected snapshots retained. | Fresh owned non-dry normal/FOMOD commits and active conflict-winner smoke passed; activation was one explicit owned fixture edit, not a CLI verb. Real Known Folder source import and game launch remain unverified. |
-| Managed Virtual Game View, native x86/x64 adapters, Profile State and save routing | Published rs.2 pins, current package/native-source audits, fresh connected CLI consumer build and new ZIP bounded x64/x86 synthetic Virtual Game View reads passed. Historical two-binary runtime stays separate. | Fresh ordered x64/x86 descendant parent-status/marker/drain observations and one x64 synthetic save-routing witness passed after reviewed controller repairs. Child OS exit status and internal Job accounting were not independently measured. Controlled real game/profile/save evidence remains excluded and unverified. |
-| CLI diagnostics and cancellation | Exact-head CLI automated tests cover diagnostics off/setup-failure and cancellation/pending refusal after MCP removal. CLI Ctrl+C remains **owner-waived/unverified**; MCP diagnostics/cancellation are deferred to #105. | Do not transfer MCP protocol evidence into MVP acceptance; no additional ZIP fault-injection harness is authorized. |
-| Distribution and release | New ZIP, source audits, connected consumer build and portable synthetic preview passed within their stated scopes; enabled exact-head Windows CI passed. | Separate clean-target extraction, CLI help/version and owned install removal passed; disconnected rebuild is waived/skipped. Stable public version, release approval, public clean-target install and human Winget bootstrap remain gated. |
+| Initialization, settings and source import | Pinned CLI synthetic calls and later human init/settings/import-review passed with retained protected sources. | No blanket Known Folder/import blocker remains; optional absent files are not claimed present. |
+| Normal/FOMOD install and conflicts | Synthetic committed installs/conflict winner and original BVWE archives with selected 18 DDS files passed. Human confirmed visible effect. | Activation is owned fixture setup, not an invented CLI verb; no plugin-order enforcement claim. |
+| Native x86/x64, descendants and routing | Configured native reads, root status/markers/drain and synthetic save witness passed; later real-game saves supply distinct game evidence. | Child OS status/internal Job accounting were not independently measured; that limitation does not itself mandate another test. |
+| Real game/profile/save | Human same-environment and weather save/reload passed with stable owned seed/new save, source snapshots and explicit normal-Quit confirmation. | Selected-environment save-view separation/return remains the narrow required aspect. AV statuses remain unattributed, not clean exits. |
+| Performance | Owner confirmed visible change and performance fine after the baseline/modded comparison. | Qualitative credit only; no measured startup time, general-scale benchmark or numeric threshold claim. |
+| Diagnostics/cancellation | CLI automated checks remain recorded; Ctrl+C owner-waived/unverified. | MCP checks are deferred to #105; no new native fault-injection harness. |
+| Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency, approved stable snapshot/public bytes, clean-target stable lifecycle and human Winget bootstrap remain open. |
 
-**Blocked outside these non-game checks:** controlled `FalloutNV.exe` compatibility, real profile/save behavior and game-scale observations need separate authorization. The designated account lacks real Known Folder source trees. Stable Release Please approval, public stable ZIP/install, first Winget manifest/submission and publication gates remain blocked. Preview/stable/Winget jobs stay disabled; issue #33 stays open and PR #103 draft.
+The detailed requirements, current CI caveats and authorization boundaries are in
+the current closeout checklist above. Historical non-game checkpoints are not
+current game/import/performance blockers.
 
 ## Historical two-binary final-ZIP evidence
 
