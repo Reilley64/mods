@@ -10,6 +10,7 @@ export function containsVersion(files: { path?: string; filename?: string }[], v
 }
 
 if (import.meta.main) {
+  // publicAssets verifies runtime, complete source and their checksum set anonymously.
   const release = await publicAssets(Bun.argv[2] ?? "");
   const path = manifestPath(release.version);
   const merged = await fetch(`https://api.github.com/repos/microsoft/winget-pkgs/contents/${path}`);

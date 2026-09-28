@@ -23,7 +23,7 @@ describe("Windows distribution recipe policy", () => {
 		expect(script).toContain("Copy-Item LICENSE, COPYRIGHT.md $package");
 		expect(script).toContain('Copy-Item -Recurse licenses/usvfs "$package/licenses"');
 		expect(script).toContain('Copy-Item -Recurse native/artifacts/licenses "$package/licenses/native-release"');
-		expect(script.indexOf("Native corresponding-source checksum mismatch")).toBeLessThan(script.indexOf('tar -czf "$package/mods-source.tar.gz"'));
+		expect(script.indexOf("Native corresponding-source checksum mismatch")).toBeLessThan(script.indexOf('tar -czf "$result/$sourceName"'));
 	});
 
 	test("preserves the pinned external header tree at the vendored shim's relative path", () => {
@@ -38,10 +38,10 @@ describe("Windows distribution recipe policy", () => {
 	});
 
 	test("writes a checksum of the final ZIP outside the ZIP", () => {
-		expect(script).toContain('tar -a -cf "$result/$name" -C $package .');
+		expect(script).toContain('New-RuntimeZip -Directory $package -Archive "$result/$name"');
 		expect(script).toContain('(Get-FileHash -Algorithm SHA256 -LiteralPath "$result/$name").Hash.ToLowerInvariant()');
-		expect(script).toContain('"$hash  $name" | Set-Content -Encoding ascii "$result/SHA256SUMS"');
-		expect(script.indexOf('tar -a -cf')).toBeLessThan(script.indexOf('"$hash  $name"'));
+		expect(script).toContain('@("$hash  $name", "$sourceHash  $sourceName") | Set-Content -Encoding ascii "$result/SHA256SUMS"');
+		expect(script.indexOf('New-RuntimeZip')).toBeLessThan(script.indexOf('"$hash  $name"'));
 	});
 
 	test("requires successful same-SHA Rust and tool checks on main pushes before preview readiness", () => {
@@ -69,7 +69,17 @@ describe("Windows distribution recipe policy", () => {
 			.toBe("./scripts/package-windows.ps1 -ReleaseId $env:GITHUB_SHA");
 		const upload = preview.steps.find((step: any) => step.name === "Upload tagless preview");
 		expect(upload.with.path).toContain("dist/SHA256SUMS");
-		expect(upload.with.path).toContain("dist/mods-${{ github.sha }}-x86_64-pc-windows-msvc.zip");
+		expect(upload.with.path).toContain("dist/mods-${{ github.sha }}-runtime-x86_64-pc-windows-msvc.zip");
 		expect(upload.with["retention-days"]).toBe(90);
 	});
+});
+
+test("Windows Shell regression is always on and real package smoke precedes upload", () => {
+  const steps = workflow.jobs.check.steps as any[];
+  const synthetic = steps.find(step => step.run?.includes("-Synthetic"));
+  expect(synthetic.if).toBeUndefined();
+  expect(synthetic.run).toContain("-STA");
+  const preview = workflow.jobs.preview.steps as any[];
+  expect(preview.findIndex(step => step.run?.includes("test-windows-package.ps1"))).toBeLessThan(preview.findIndex(step => step.name === "Upload tagless preview"));
+  expect(preview.find(step => step.name === "Upload tagless preview").with.path).toContain("-source.tar.gz");
 });

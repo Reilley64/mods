@@ -4,24 +4,43 @@ export function stableRelease(tag: string) {
   if (!/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(tag) || tag === "v0.0.0") {
     throw new Error("Expected a nonzero aggregate stable tag");
   }
-  const archive = `mods-${tag}-x86_64-pc-windows-msvc.zip`;
-  return { tag, version: tag.slice(1), archive,
-    url: `https://github.com/Reilley64/mods/releases/download/${tag}/${archive}` };
+  const archive = `mods-${tag}-runtime-x86_64-pc-windows-msvc.zip`;
+  const source = `mods-${tag}-source.tar.gz`;
+  const base = `https://github.com/Reilley64/mods/releases/download/${tag}/`;
+  return { tag, version: tag.slice(1), archive, source, url: base + archive, sourceUrl: base + source, checksumUrl: base + "SHA256SUMS" };
 }
 
-export function verifyChecksum(archive: string, bytes: Uint8Array, sums: string) {
+export function parseChecksums(tag: string, sums: string) {
+  const release = stableRelease(tag);
+  const lines = sums.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n");
+  const names = [release.archive, release.source];
+  if (lines.length !== 2) throw new Error("Expected exactly two checksum entries");
+  return Object.fromEntries(names.map((name, index) => {
+    const match = /^([0-9a-f]{64})  (.+)$/.exec(lines[index]!);
+    if (!match || match[2] !== name) throw new Error("Checksum filename, order or hash is invalid");
+    return [name, match[1]!];
+  }));
+}
+
+export function verifyChecksum(name: string, bytes: Uint8Array, expected: string) {
   const hash = createHash("sha256").update(bytes).digest("hex");
-  if (sums.trim() !== `${hash}  ${archive}`) throw new Error("Public ZIP checksum mismatch");
+  if (hash !== expected) throw new Error(`Checksum mismatch: ${name}; do not mix rebuilt and published artifacts`);
   return hash;
+}
+
+async function publicBytes(url: string) {
+  // Deliberately anonymous; authenticated downloads are not public evidence.
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Asset is not public: ${url}`);
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 export async function publicAssets(tag: string) {
   const release = stableRelease(tag);
-  // Deliberately anonymous: an authenticated API download is not public evidence.
-  const [zip, sums] = await Promise.all([fetch(release.url), fetch(new URL("SHA256SUMS", release.url))]);
-  if (!zip.ok || !sums.ok) throw new Error("Stable assets are not publicly available");
-  const hash = verifyChecksum(release.archive, new Uint8Array(await zip.arrayBuffer()), await sums.text());
-  return { ...release, hash };
+  const sums = parseChecksums(tag, new TextDecoder().decode(await publicBytes(release.checksumUrl)));
+  const hash = verifyChecksum(release.archive, await publicBytes(release.url), sums[release.archive]!);
+  const sourceHash = verifyChecksum(release.source, await publicBytes(release.sourceUrl), sums[release.source]!);
+  return { ...release, hash, sourceHash };
 }
 
 export async function gh(...args: string[]) {
@@ -31,28 +50,73 @@ export async function gh(...args: string[]) {
   return output;
 }
 
+export function validateMode(mode: string | undefined, tag: string) {
+  if (mode !== "publish" && mode !== "verify") throw new Error("Expected publish or verify");
+  const release = stableRelease(tag);
+  if (mode === "publish" && tag === "v0.1.0") throw new Error("Historical v0.1.0 is immutable; use its version-specific verification recipe");
+  return release;
+}
+
+export function downloadBody(body: string, tag: string) {
+  const release = stableRelease(tag);
+  const start = "<!-- mods-downloads:start -->";
+  const end = "<!-- mods-downloads:end -->";
+  const section = `${start}\n## Downloads\n\n- [Windows runtime ZIP](${release.url})\n- [Complete corresponding source (free)](${release.sourceUrl})\n- [SHA-256 checksums](${release.checksumUrl})\n${end}`;
+  if (body.includes(start) || body.includes(end)) {
+    if (body.split(start).length !== 2 || body.split(end).length !== 2 || body.indexOf(end) < body.indexOf(start)) throw new Error("Malformed download markers");
+    return body.slice(0, body.indexOf(start)) + section + body.slice(body.indexOf(end) + end.length);
+  }
+  return `${section}\n\n${body}`;
+}
+
+// Injectable operations keep recovery tests local and do not publish fixtures.
+export async function publishAssets(tag: string, metadata: { assets: { name: string }[]; body?: string }, io: {
+  local: (name: string) => Promise<Uint8Array>;
+  remote: (url: string) => Promise<Uint8Array>;
+  upload: (name: string) => Promise<void>;
+  editBody: (body: string) => Promise<void>;
+}) {
+  const release = validateMode("publish", tag);
+  const names = new Set(metadata.assets.map(asset => asset.name));
+  const ordered = [release.source, release.archive, "SHA256SUMS"];
+  const urls = { [release.source]: release.sourceUrl, [release.archive]: release.url, SHA256SUMS: release.checksumUrl };
+  const complete = ordered.every(name => names.has(name));
+  const checksumBytes = complete ? await io.remote(release.checksumUrl) : await io.local("SHA256SUMS");
+  const sums = parseChecksums(tag, new TextDecoder().decode(checksumBytes));
+  // Validate the entire packaged set and every existing public asset before any write.
+  if (!complete) {
+    for (const name of [release.source, release.archive]) verifyChecksum(name, await io.local(name), sums[name]!);
+  }
+  for (const name of ordered.filter(name => names.has(name))) {
+    const bytes = await io.remote(urls[name]!);
+    if (name === "SHA256SUMS") {
+      const existing = parseChecksums(tag, new TextDecoder().decode(bytes));
+      if (JSON.stringify(existing) !== JSON.stringify(sums)) throw new Error("Public checksum set conflicts with packaged set");
+    } else verifyChecksum(name, bytes, sums[name]!);
+  }
+  for (const name of ordered) {
+    if (!names.has(name)) await io.upload(name);
+    // Source must be publicly verified before runtime upload.
+    const bytes = await io.remote(urls[name]!);
+    if (name === "SHA256SUMS") {
+      if (JSON.stringify(parseChecksums(tag, new TextDecoder().decode(bytes))) !== JSON.stringify(sums)) throw new Error("Public checksum set changed");
+    } else verifyChecksum(name, bytes, sums[name]!);
+  }
+  const body = downloadBody(metadata.body ?? "", tag);
+  if (body !== (metadata.body ?? "")) await io.editBody(body);
+}
+
 if (import.meta.main) {
-  const [mode, tag] = Bun.argv.slice(2);
-  const release = stableRelease(tag ?? "");
+  const [mode, tag, ...extra] = Bun.argv.slice(2);
+  if (extra.length) throw new Error("Expected mode and tag only");
+  const release = validateMode(mode, tag ?? "");
   const metadata = JSON.parse(await gh("api", `repos/Reilley64/mods/releases/tags/${release.tag}`));
   if (metadata.draft || metadata.prerelease || metadata.tag_name !== release.tag) throw new Error("Release must be published and stable");
-  if (mode === "publish") {
-    // Never clobber public bytes or delete the release. Recovery adds only missing assets.
-    let uploadedHash: string | undefined;
-    const names = new Set(metadata.assets.map((asset: { name: string }) => asset.name));
-    if (!names.has(release.archive)) {
-      if (names.has("SHA256SUMS")) throw new Error("Checksum exists without ZIP; investigate before recovery");
-      uploadedHash = verifyChecksum(release.archive, new Uint8Array(await Bun.file(`dist/${release.archive}`).arrayBuffer()), await Bun.file("dist/SHA256SUMS").text());
-      await gh("release", "upload", release.tag, `dist/${release.archive}`, "--repo", "Reilley64/mods");
-    }
-    if (!names.has("SHA256SUMS")) {
-      const zip = await fetch(release.url);
-      if (!zip.ok) throw new Error("Uploaded ZIP is not public; retry recovery later");
-      const hash = createHash("sha256").update(new Uint8Array(await zip.arrayBuffer())).digest("hex");
-      if (uploadedHash && hash !== uploadedHash) throw new Error("Public ZIP differs from packaged ZIP");
-      await Bun.write("dist/SHA256SUMS", `${hash}  ${release.archive}\n`);
-      await gh("release", "upload", release.tag, "dist/SHA256SUMS", "--repo", "Reilley64/mods");
-    }
-  } else if (mode !== "verify") throw new Error("Expected publish or verify");
+  if (mode === "publish") await publishAssets(release.tag, metadata, {
+    local: async name => new Uint8Array(await Bun.file(`dist/${name}`).arrayBuffer()),
+    remote: publicBytes,
+    upload: async name => { await gh("release", "upload", release.tag, `dist/${name}`, "--repo", "Reilley64/mods"); },
+    editBody: async body => { await gh("api", "--method", "PATCH", `repos/Reilley64/mods/releases/${metadata.id}`, "-f", `body=${body}`); },
+  });
   console.log(JSON.stringify(await publicAssets(release.tag), null, 2));
 }

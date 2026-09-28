@@ -42,7 +42,7 @@ Set `LIBCLANG_PATH` to the LLVM `bin` directory. Use a clean committed checkout:
 ```powershell
 ./scripts/package-windows.ps1 -ReleaseId (git rev-parse HEAD)
 # For a stable candidate, check out its existing aggregate tag, then:
-# ./scripts/package-windows.ps1 -ReleaseId v0.1.0
+# ./scripts/package-windows.ps1 -ReleaseId v0.2.0
 ```
 
 The output directory must not exist. `-OutputDirectory` selects another location.
@@ -51,14 +51,26 @@ release assets; the same hash checks apply. The script archives HEAD, vendors al
 locked Cargo dependencies (including Git dependencies), and builds the CLI
 package from that snapshot with `--frozen`. It does not publish or change tags.
 
-The ZIP contains only `mods.exe`, exactly four native runtime files under
+Future candidates contain three files:
+
+- `mods-<ReleaseId>-runtime-x86_64-pc-windows-msvc.zip`;
+- `mods-<ReleaseId>-source.tar.gz`;
+- `SHA256SUMS`, with runtime then source SHA-256 entries.
+
+The runtime ZIP contains `mods.exe`, exactly four native runtime files under
 `usvfs/`, root `LICENSE` and `COPYRIGHT.md`, upstream and native release notices,
-and `mods-source.tar.gz`. The source archive contains the tracked project,
+and `BUILD-AND-SOURCE.md`. ZIP paths have no `./` prefix. Corresponding source
+stays outside the runtime ZIP. Its complete archive contains the tracked project,
 Cargo.lock, vendored dependency source and its notices, generated Cargo source
 replacement configuration, native source asset and original native binary ZIP.
 The latter two are pinned by `native/usvfs-release.json`. The source revision is
 recorded in `SOURCE-REVISION.txt`. Do not replace native assets with same-version
-upstream binaries. `SHA256SUMS` accompanies the final ZIP; it is not inside it.
+upstream binaries. `BUILD-AND-SOURCE.md` preserves these rebuild instructions and adds the exact
+source filename, SHA-256 and revision. For stable releases it links to the free,
+version-specific source download. For previews it points to the source alongside
+the runtime in the same retained Actions artifact. No preview release URL is invented.
+Vendored encrypted fixtures and native closure inputs are not filtered or truncated.
+`SHA256SUMS` accompanies both archives; it is not inside the ZIP.
 Windows 11 and both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables
 are runtime prerequisites. Keep `usvfs/` beside `mods.exe`.
 
@@ -69,7 +81,8 @@ networking connected; no network-isolated build or offline environment is requir
 This waiver does not waive complete corresponding source, notices, source/hash
 verification, or accurate build evidence. It is a skipped check, not an offline pass.
 
-Extract `mods-source.tar.gz` into a fresh directory. Preinstall the toolchain,
+Verify the source entry in `SHA256SUMS`, then extract `mods-<ReleaseId>-source.tar.gz`
+into a fresh directory. Historical embedded-source packages retain their original filenames. Preinstall the toolchain,
 MSVC, Windows SDK, LLVM/libclang and PowerShell listed above. Use a new empty
 Cargo home and target directory, with the installed Rust toolchain available
 through rustup. From the extracted source root:
@@ -96,7 +109,7 @@ script. The nested Git archive identifies fork revision
 `c23705ce1a4baba19c72156900bb913c9e090307` (the manifest's `forkRevision`);
 that checkout preserves the approved upstream headers. The outer source SHA-256 is
 `fff05ea6e168694646806295def137ee06d37433eaff415baf88069ede32f92a`.
-These headers ship at the source root in `mods-source.tar.gz`, not just inside
+These headers ship at the source root in the corresponding-source sidecar, not just inside
 the nested native archive. Run from the source root so Cargo
 uses that configuration. No registry or Git download is required by Cargo.
 This consumer rebuild compiles the Rust packages and shim against the pinned
@@ -118,7 +131,7 @@ existing-host portable lifecycle evidence is recorded in [issue #33](acceptance/
 Configured-`tar` Winget install/alias/uninstall passed; submission remains pending.
 
 The disabled preview recipe delegates to the shared script and uploads the ZIP
-and checksum with full-SHA naming and 90-day retention. Enabling it additionally
+and complete source sidecar and checksum in one artifact with full-SHA naming and 90-day retention. Enabling it additionally
 requires accepted-main-push gating and successful Rust and repository-tool
 checks. Stable publication is enabled as described below; Winget remains disabled.
 Actual stable-artifact help/version and owned installation/removal passed on the
@@ -141,15 +154,38 @@ lifecycle results are now recorded in the acceptance ledger. These results are
 separate from the earlier approval. The local Winget check below is limited to
 configured-`tar` extraction; submission remains outstanding.
 
-Publication adds missing assets only. It never replaces public ZIP bytes, deletes
-a release, or recreates a version. Anonymous HTTPS downloads verify the exact
-ZIP filename and SHA-256 from public `SHA256SUMS` before the Winget job can run.
-Recovery can restore a missing checksum from the existing public ZIP. A conflicting
-checksum or checksum without ZIP requires investigation, not automatic overwrite.
-If upload visibility is delayed, verification fails safely; rerun after visibility
-is restored. Re-dispatch the exact tag for missing assets, or rerun only the failed
-Winget job for a submission failure. A valid GitHub Release survives either failure.
-No stable product URL or hash in tests is evidence of actual publication.
+Future publication adds missing assets only. It never replaces public bytes,
+deletes a release, or recreates a version. The generic publisher refuses historical
+`v0.1.0` publication before any write; the existing tag, assets and version-specific
+r2 helper remain unchanged. Future names do not fall back to the old embedded-source ZIP.
+
+The Windows workflow extracts the actual runtime through Windows Shell, compares
+every payload path and hash, and runs packaged `--help` and `--version` before upload.
+Run locally with PowerShell 7 in STA mode:
+
+```powershell
+pwsh -NoProfile -STA -File ./scripts/test-windows-package.ps1 -ReleaseId v0.2.0
+```
+
+The smoke uses fresh temporary outputs, retains failures, and removes only its own
+successful outputs. It does not change extractor settings or install anything.
+The always-on Windows CI synthetic regression exercises the same ZIP formatter and
+Shell extractor. It is not evidence of an actual production package build.
+
+Publication verifies the complete local checksum set and all existing public assets
+before adding anything. It uploads source first and verifies its anonymous public
+hash before adding runtime, then publishes the original two-entry checksum file.
+Only after all three public assets pass verification does it add an idempotent
+marked download section to the release body, preserving the changelog.
+
+Partial recovery requires the original candidate, retained as a workflow artifact
+for 90 days. A rebuilt candidate with different bytes fails closed; do not mix it
+with existing assets. Restore the original candidate to `dist/` and run
+`bun scripts/stable-release.ts publish <tag>`. The workflow may rebuild on dispatch;
+that does not authorize replacing assets if the rebuilt hashes differ. A complete
+public set can be verified with `bun scripts/stable-release.ts verify <tag>` without
+local `dist/`. Visibility delays fail verification safely; retry after visibility
+returns. No URL or hash in tests is evidence of publication.
 
 ## Winget bootstrap and later updates (disabled)
 
@@ -163,7 +199,7 @@ were restored. See the [local Winget evidence](acceptance/issue-33.md#local-wing
 
 The retained manifest is hand-authored, not WingetCreate output. Before initial
 human-controlled submission, reverify current public bytes with
-`bun scripts/stable-release.ts verify v0.1.0`. The recommended interactive
+the recorded version-specific `v0.1.0` verification recipe (not the future-layout publisher). The recommended interactive
 `wingetcreate new <verified-url> --out <manifest-directory>` workflow remains
 available; any regenerated manifest must be reviewed and validated again.
 Do not accept its submission prompt without separate owner approval.

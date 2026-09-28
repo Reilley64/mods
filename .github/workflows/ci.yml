@@ -46,6 +46,9 @@ jobs:
           bun-version: "1.4.2"
       - name: Install repository tools
         run: bun install --frozen-lockfile
+      - name: Synthetic Windows Shell ZIP regression (not a release build)
+        shell: pwsh
+        run: pwsh -NoProfile -STA -File ./scripts/test-windows-package.ps1 -Synthetic
       - name: Set up Rust
         if: steps.rust-changes.outputs.changed == 'true'
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
@@ -112,11 +115,15 @@ jobs:
       - name: Package preview
         shell: pwsh
         run: ./scripts/package-windows.ps1 -ReleaseId $env:GITHUB_SHA
+      - name: Smoke packaged preview with Windows Shell
+        shell: pwsh
+        run: pwsh -NoProfile -STA -File ./scripts/test-windows-package.ps1 -ReleaseId $env:GITHUB_SHA
       - name: Upload tagless preview
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mods-${{ github.sha }}-x86_64-pc-windows-msvc.zip
+          name: mods-${{ github.sha }}-windows-candidate
           path: |
-            dist/mods-${{ github.sha }}-x86_64-pc-windows-msvc.zip
+            dist/mods-${{ github.sha }}-runtime-x86_64-pc-windows-msvc.zip
+            dist/mods-${{ github.sha }}-source.tar.gz
             dist/SHA256SUMS
           retention-days: 90

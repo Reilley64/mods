@@ -92,14 +92,32 @@ try {
   # Preserve all vendored crate license/readme files in the corresponding source.
   # The hashed native ZIP remains available for a fresh offline fetch.
   Remove-Item -Recurse -Force native/artifacts
-  tar -czf "$package/mods-source.tar.gz" -C $source .
+  $sourceName = "mods-$ReleaseId-source.tar.gz"
+  # Do not filter vendor fixtures (including encrypted archives) or native inputs.
+  tar -czf "$result/$sourceName" -C $source .
   if ($LASTEXITCODE -ne 0) { throw "Corresponding-source archive failed" }
-  $name = "mods-$ReleaseId-x86_64-pc-windows-msvc.zip"
-  # tar's ZIP mode includes dotfiles; Compress-Archive omits hidden files.
-  tar -a -cf "$result/$name" -C $package .
-  if ($LASTEXITCODE -ne 0) { throw "Distribution ZIP failed" }
+  $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "$result/$sourceName").Hash.ToLowerInvariant()
+  $access = if ($ReleaseId.StartsWith("v")) {
+    "Free corresponding source: https://github.com/Reilley64/mods/releases/download/$ReleaseId/$sourceName"
+  } else {
+    "Corresponding source is alongside this runtime ZIP in the same retained Actions artifact (90 days). Download the complete artifact."
+  }
+  @"
+
+## Corresponding source for this runtime
+
+$access
+
+Source filename: $sourceName
+SHA-256: $sourceHash
+Source revision: $revision
+Verify the source hash before extracting it. Rebuild instructions above remain applicable.
+"@ | Add-Content -Encoding utf8NoBOM "$package/BUILD-AND-SOURCE.md"
+  $name = "mods-$ReleaseId-runtime-x86_64-pc-windows-msvc.zip"
+  . "$PSScriptRoot/windows-package.ps1"
+  New-RuntimeZip -Directory $package -Archive "$result/$name"
   $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "$result/$name").Hash.ToLowerInvariant()
-  "$hash  $name" | Set-Content -Encoding ascii "$result/SHA256SUMS"
+  @("$hash  $name", "$sourceHash  $sourceName") | Set-Content -Encoding ascii "$result/SHA256SUMS"
   New-Item -ItemType Directory -Force (Split-Path -Parent $output) | Out-Null
   [IO.Directory]::Move($result, $output)
   Write-Output "Candidate distribution: $output (publication remains gated)"
