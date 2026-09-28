@@ -135,7 +135,13 @@ test("native gate refuses personal hosts, old OS, preexisting installations and 
   expect(install).toContain("src/presentation/cli/Cargo.toml");
   expect(install).toContain('"mods $cliVersion"');
   expect(install).toContain("finally {");
-  expect(install).toContain("'uninstall', '--id', $packageId, '--exact'");
+  expect(install).toContain("'uninstall', '--product-code', $productCode, '--exact'");
+  expect(install).toContain("Reilley64.Mods__DefaultSource");
+  expect(install).toContain("Preexisting local package registration");
+  expect(install).toContain("$installedRegistration.DisplayVersion -cne $Version");
+  expect(install).toContain("$remaining.DisplayVersion -cne $Version");
+  expect(install).toContain("Mods registration remains after cleanup");
+  expect(install.slice(install.indexOf("$installAttempted = $true"))).not.toContain("$listArguments");
   expect(install).toContain("'settings', '--disable', 'LocalManifestFiles'");
   expect(install).toContain("Portable alias remains after cleanup");
   for (const bypass of ["--ignore-security-hash", "--ignore-local-archive-malware-scan", "'--force'", "Stop-Process"]) {

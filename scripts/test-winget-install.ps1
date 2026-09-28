@@ -15,6 +15,9 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hoste
 $evidence = Join-Path $env:GITHUB_WORKSPACE 'dist/winget-evidence'
 New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 $packageId = 'Reilley64.Mods'
+# A local-manifest portable install has this product code even before catalog correlation.
+$productCode = 'Reilley64.Mods__DefaultSource'
+$registration = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$productCode"
 $aliasPath = Join-Path $env:LOCALAPPDATA 'Microsoft/WinGet/Links/mods.exe'
 $machineAlias = Join-Path $env:ProgramFiles 'WinGet/Links/mods.exe'
 $nativeLogs = Join-Path $env:LOCALAPPDATA 'Packages/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe/LocalState/DiagOutputDir'
@@ -65,6 +68,7 @@ try {
     $listArguments = @('list', '--id', $packageId, '--exact', '--accept-source-agreements', '--disable-interactivity', '--verbose-logs')
     $before = Invoke-Recorded $winget $listArguments @(0, $noApplications)
     if ($before.ExitCode -eq 0) { throw 'Mods is already installed; refusing to modify it.' }
+    if (Test-Path -LiteralPath $registration) { throw 'Preexisting local package registration; refusing to modify it.' }
     foreach ($link in @($aliasPath, $machineAlias)) {
         if (Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue) { throw "Preexisting alias: $link" }
     }
@@ -94,7 +98,9 @@ try {
 
     $installAttempted = $true
     Invoke-Recorded $winget @('install', '--manifest', $manifest, '--scope', 'user', '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--verbose-logs') | Out-Null
-    Invoke-Recorded $winget $listArguments | Out-Null
+    $installedRegistration = Get-ItemProperty -LiteralPath $registration -ErrorAction Stop
+    $installedRegistration | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $evidence 'installed-registration.json')
+    if ($installedRegistration.DisplayVersion -cne $Version) { throw 'Unexpected installed package version.' }
     if (-not (Get-Item -LiteralPath $aliasPath -Force -ErrorAction SilentlyContinue)) { throw 'Installed portable alias is missing.' }
     # WinGet changes the persisted user PATH, not this PowerShell process.
     $env:PATH = "$(Split-Path $aliasPath);$originalPath"
@@ -113,12 +119,12 @@ finally {
     $env:PATH = $originalPath
     if ($installAttempted) {
         try {
-            $remaining = Invoke-Recorded $winget $listArguments @(0, $noApplications)
-            if ($remaining.ExitCode -eq 0) {
-                Invoke-Recorded $winget @('uninstall', '--id', $packageId, '--exact', '--version', $Version, '--scope', 'user', '--silent', '--accept-source-agreements', '--disable-interactivity', '--verbose-logs') | Out-Null
+            if (Test-Path -LiteralPath $registration) {
+                $remaining = Get-ItemProperty -LiteralPath $registration -ErrorAction Stop
+                if ($remaining.DisplayVersion -cne $Version) { throw 'Unexpected registration version; refusing to uninstall.' }
+                Invoke-Recorded $winget @('uninstall', '--product-code', $productCode, '--exact', '--version', $Version, '--scope', 'user', '--silent', '--accept-source-agreements', '--disable-interactivity', '--verbose-logs') | Out-Null
             }
-            $after = Invoke-Recorded $winget $listArguments @(0, $noApplications)
-            if ($after.ExitCode -ne $noApplications) { throw 'Mods remains installed after cleanup.' }
+            if (Test-Path -LiteralPath $registration) { throw 'Mods registration remains after cleanup.' }
             if (Get-Item -LiteralPath $aliasPath -Force -ErrorAction SilentlyContinue) { throw 'Portable alias remains after cleanup.' }
         }
         catch { $failures.Add("Uninstall/alias cleanup: $_") }
