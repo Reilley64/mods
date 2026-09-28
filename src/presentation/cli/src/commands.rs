@@ -90,6 +90,8 @@ impl fmt::Display for LogLevel {
 #[derive(Debug, Args)]
 pub(crate) struct InstallArgs {
 	pub(crate) archive: PathBuf,
+	#[arg(long, value_name = "ID")]
+	pub(crate) file: Option<u64>,
 	#[arg(long)]
 	pub(crate) name: Option<String>,
 	#[arg(long)]
@@ -159,6 +161,32 @@ mod tests {
 	use super::parse_from;
 	use std::error::Error;
 	use std::ffi::OsString;
+
+	#[test]
+	fn nexus_file_selection_preserves_existing_install_options() -> Result<(), Box<dyn Error>> {
+		let parsed = parse_from([
+			"mods",
+			"install",
+			"https://www.nexusmods.com/newvegas/mods/42",
+			"--file",
+			"7",
+			"--name",
+			"Chosen",
+			"--replace",
+			"--dry-run",
+			"--choice",
+			"group=option",
+		])?;
+		let Command::Install(arguments) = parsed.command else {
+			return Err("install must parse".into());
+		};
+		assert_eq!(arguments.file, Some(7));
+		assert_eq!(arguments.name.as_deref(), Some("Chosen"));
+		assert!(arguments.replace && arguments.dry_run);
+		assert_eq!(arguments.choice, ["group=option"]);
+		assert!(parse_from(["mods", "config", "get", "nexus-api-key"]).is_err());
+		Ok(())
+	}
 
 	#[test]
 	fn parses_environment_log_level_and_issue_twenty_seven_commands() {

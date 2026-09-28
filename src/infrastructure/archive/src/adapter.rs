@@ -1526,6 +1526,20 @@ mod tests {
 		Ok(converter.convert(&document)?)
 	}
 
+	#[tokio::test]
+	async fn completed_download_without_extension_uses_archive_signature() -> TestResult {
+		let temp = TempDir::new()?;
+		let path = temp.path().join("archive");
+		write_zip(&path, &[("Data/textures/a.dds", b"texture")])?;
+
+		let index = ArchiveAdapter
+			.index_port()
+			.call((archive_path(&path)?, None, CancellationToken::new()))
+			.await?;
+		assert!(matches!(index.installer, IndexedInstaller::Plain { candidates, .. } if candidates.len() == 1));
+		Ok(())
+	}
+
 	#[test]
 	fn single_not_usable_option_preserves_exactly_one_for_no_choice_error() -> TestResult {
 		let installer = single_option_installer(r#"<type name="NotUsable" />"#)?;

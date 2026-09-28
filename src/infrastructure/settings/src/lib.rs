@@ -6,7 +6,9 @@ mod layout;
 mod manifest_writer;
 
 use application::ErrorMarker;
+use application::nexus::NexusApiKey;
 use application::ports::CheckSettingsReadiness;
+use application::ports::LoadNexusApiKey;
 use application::ports::LoadSettings;
 use application::ports::PortFuture;
 use application::ports::PreviewGameBinding;
@@ -145,6 +147,7 @@ impl SettingsAdapter {
 			.to_str()
 			.ok_or_else(|| report!(ErrorMarker::setting_value_invalid()))?;
 		let replacement = toml::to_string_pretty(&WritableManifest {
+			nexus_api_key: manifest.nexus_api_key.as_deref(),
 			schema_version: manifest.schema_version,
 			name: manifest.name.as_deref(),
 			steam_app_id: manifest.steam_app_id,
@@ -215,6 +218,25 @@ impl SettingsAdapter {
 		})
 	}
 
+	pub fn nexus_key_port(&self) -> LoadNexusApiKey {
+		let adapter = self.clone();
+		Arc::new(move || {
+			let result = (|| {
+				let (_, text) = open_bound_root(&adapter.root)?;
+				let (_, effective, _) = config_source::read_sources(
+					&text,
+					&adapter.environment,
+					ErrorMarker::settings_environment_invalid(),
+				)?;
+				Ok(effective
+					.nexus_api_key
+					.filter(|value| !value.trim().is_empty())
+					.map(NexusApiKey::new))
+			})();
+			Box::pin(async move { result }) as PortFuture<_>
+		})
+	}
+
 	pub fn load_port(&self) -> LoadSettings {
 		let adapter = self.clone();
 		Arc::new(move || {
@@ -268,6 +290,8 @@ struct PreparedGameBinding {
 
 #[derive(Serialize)]
 struct WritableManifest<'a> {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	nexus_api_key: Option<&'a str>,
 	schema_version: u32,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<&'a str>,
@@ -533,6 +557,34 @@ mod tests {
 			),
 		)?;
 		Ok((temp, root))
+	}
+
+	#[test]
+	fn game_directory_rewrite_preserves_stored_key_without_exposing_it_in_settings() -> Result<()> {
+		let (temp, root) = fixture()?;
+		let path = temp.path().join("mods.toml");
+		let text = format!(
+			"{}\nnexus_api_key = 'synthetic-stored-key'\n",
+			fs::read_to_string(&path)?
+		);
+		fs::write(&path, text)?;
+		let adapter = SettingsAdapter::with_environment(
+			root,
+			vec![(
+				OsString::from("MODS_NEXUS_API_KEY"),
+				OsString::from("synthetic-override-key"),
+			)],
+		);
+		let binding = GameBinding::new(
+			GameInstallationPath::new(STORED_GAME_DIR.into())?,
+			SteamBuildId::new(7)?,
+		);
+		adapter.store_game_binding(binding, CancellationToken::new())?;
+		let stored = fs::read_to_string(path)?;
+		assert!(stored.contains("synthetic-stored-key"));
+		assert!(!stored.contains("synthetic-override-key"));
+		assert!(!format!("{:?}", adapter.load()?).contains("synthetic"));
+		Ok(())
 	}
 
 	#[test]

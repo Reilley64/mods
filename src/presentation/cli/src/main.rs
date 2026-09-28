@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![feature(fn_traits)]
 
 mod commands;
 mod conflict_output;
@@ -29,6 +30,7 @@ async fn main() {
 		let install_archive = resources.install_archive_dependencies();
 		let execution_force_cancellation = CancellationToken::new();
 		Ok(runner::Dependencies {
+			acquire_nexus: resources.acquire_nexus_dependencies(),
 			execute_program: resources
 				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
 			execution_force_cancellation,

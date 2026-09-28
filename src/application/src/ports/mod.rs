@@ -3,6 +3,12 @@ use rootcause::Result;
 use std::future::Future;
 use std::pin::Pin;
 
+mod nexus;
+pub use nexus::DownloadNexusArchive;
+pub use nexus::LoadNexusApiKey;
+pub use nexus::ParseNexusSource;
+pub use nexus::ReadNexusCache;
+pub use nexus::ResolveNexusMod;
 mod archive;
 mod environment;
 mod execution;

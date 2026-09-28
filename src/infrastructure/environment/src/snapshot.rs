@@ -13,6 +13,7 @@ use crate::safe_fs::is_reparse;
 use crate::safe_fs::read_bounded;
 use crate::safe_fs::validate_exact_entries;
 use crate::validate_bsa_file;
+use crate::validate_download_cache_entries;
 use application::ErrorCode;
 use application::ErrorMarker;
 use application::installation::CandidateDecision;
@@ -182,7 +183,7 @@ fn load_inner(
 	)?;
 	validate_manifest(&root, cancellation)?;
 	let cache = root.open_dir("cache").context(ErrorMarker::environment_invalid(None))?;
-	validate_exact_entries(&cache, &[INVALIDATION_ARCHIVE], cancellation)?;
+	validate_download_cache_entries(&cache, cancellation)?;
 	validate_bsa_file(&cache, cancellation)?;
 	if root.exists("logs").context(ErrorMarker::environment_invalid(None))? {
 		root.open_dir("logs").context(ErrorMarker::environment_invalid(None))?;
