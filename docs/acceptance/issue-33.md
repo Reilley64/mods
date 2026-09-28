@@ -1,6 +1,6 @@
 # Issue 33 acceptance evidence ledger
 
-Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. Stable release is not yet accepted.** Runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. Remaining applicable handoff scenarios are being reconciled; stable-package lifecycle, release approval and Winget sign-off remain separate. Older chronological checkpoints below are historical and revision-bound.
+Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. Stable release is not yet accepted.** Runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. The owner also confirmed selected-Mod-Environment save-view isolation and return from prior runs. No additional game run is required for this aspect; stable-package lifecycle, release approval and Winget sign-off remain separate. Older chronological checkpoints below are historical and revision-bound.
 
 ## Current closeout checklist — 2026-09-28
 
@@ -14,14 +14,17 @@ historical; their pending statements do not reopen completed checks.
   performance. Preserve every raw nonzero quit and stopped attempt.
 - [x] Reconcile issue #33 and draft PR #103 with the
   [weather checkpoint](https://github.com/Reilley64/mods/issues/33#issuecomment-5864744497).
-- [ ] Finish only the unproved **selected-environment save-view comparison**.
-  [Save decision #21](https://gist.github.com/Reilley64/7dd26ed6a0aa8267bd43c078fa983849),
-  acceptance 2/3/11, requires different selected save contents, switching via
-  `--environment` without copying/merging/synchronizing, and no cross-environment
-  visibility in the configured managed-save view. Existing runs already prove
-  load/write in two roots; they do not record switching away from the weather
-  root and returning to the first view after Save 2 exists. Do not repeat the
-  completed load/write/weather checks or reinstate arbitrary-path hiding.
+- [x] Credit **selected-Mod-Environment save-view isolation and return** from the
+  owner's explicit confirmation of prior runs. In response to the specific
+  question, the owner confirmed Save 2 absent in A, present in B, and absent
+  after returning to A, without copying or moving saves between selections:
+  "yes the save isolation is already confirmed by me". This closes the remaining
+  save-view aspect of [Save decision #21](https://gist.github.com/Reilley64/7dd26ed6a0aa8267bd43c078fa983849),
+  acceptance 2/3/11, alongside existing load/write/reload evidence. This is a
+  retrospective human observation, not a new instrumented A/B/A run. No new
+  argv, snapshot, hash or clean-exit receipt is claimed. The prepared cross-view
+  wizard is not required; preserve its unused fixture and all earlier evidence.
+  Do not repeat completed game checks or infer arbitrary-path hiding.
 - [ ] Resolve the observed **release-version consistency failure** before release
   approval. [Release PR #36 CI 36358212966](https://github.com/Reilley64/mods/actions/runs/36358212966)
   fails because `application 0.1.0` requires path `domain ^0.0.0`, while the path
@@ -445,7 +448,7 @@ for its recorded fixture.
 | Initialization, settings and source import | Pinned CLI synthetic calls and later human init/settings/import-review passed with retained protected sources. | No blanket Known Folder/import blocker remains; optional absent files are not claimed present. |
 | Normal/FOMOD install and conflicts | Synthetic committed installs/conflict winner and original BVWE archives with selected 18 DDS files passed. Human confirmed visible effect. | Activation is owned fixture setup, not an invented CLI verb; no plugin-order enforcement claim. |
 | Native x86/x64, descendants and routing | Configured native reads, root status/markers/drain and synthetic save witness passed; later real-game saves supply distinct game evidence. | Child OS status/internal Job accounting were not independently measured; that limitation does not itself mandate another test. |
-| Real game/profile/save | Human same-environment and weather save/reload passed with stable owned seed/new save, source snapshots and explicit normal-Quit confirmation. | Selected-environment save-view separation/return remains the narrow required aspect. AV statuses remain unattributed, not clean exits. |
+| Real game/profile/save | Human same-environment and weather save/reload passed with stable owned seed/new save, source snapshots and explicit normal-Quit confirmation. | Selected-Mod-Environment save-view isolation/return is also passed by explicit owner confirmation of prior runs; no new instrumented A/B/A receipt is claimed. AV statuses remain unattributed, not clean exits. |
 | Performance | Owner confirmed visible change and performance fine after the baseline/modded comparison. | Qualitative credit only; no measured startup time, general-scale benchmark or numeric threshold claim. |
 | Diagnostics/cancellation | CLI automated checks remain recorded; Ctrl+C owner-waived/unverified. | MCP checks are deferred to #105; no new native fault-injection harness. |
 | Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency, approved stable snapshot/public bytes, clean-target stable lifecycle and human Winget bootstrap remain open. |
