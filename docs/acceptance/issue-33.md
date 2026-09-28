@@ -1,6 +1,6 @@
 # Issue 33 acceptance evidence ledger
 
-Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. CLI-only `v0.1.0` publication and release PR merge are owner-approved; actual stable delivery/lifecycle and Winget remain pending.** Runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. The owner also confirmed selected-Mod-Environment save-view isolation and return from prior runs. No additional game run is required for this aspect; stable-package lifecycle and Winget sign-off remain pending. Older chronological checkpoints below are historical and revision-bound.
+Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. CLI-only `v0.1.0` is published; public bytes, bounded package/source audit and existing-host portable install/help/version/removal passed. Winget remains pending.** Earlier game and synthetic runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. The owner also confirmed selected-Mod-Environment save-view isolation and return from prior runs. No additional game run is required for this aspect; Winget validation/install/alias/uninstall and human-controlled submission remain pending. Older chronological checkpoints below are historical and revision-bound.
 
 ## Current closeout checklist — 2026-09-28
 
@@ -31,18 +31,18 @@ historical; their pending statements do not reopen completed checks.
   [CI 36393034673](https://github.com/Reilley64/mods/actions/runs/36393034673).
   This resolves the generated-release verification blocker, not runtime or
   public-artifact acceptance.
-- [ ] Obtain an owner-designated clean Windows 11 target/baseline and complete
-  the remaining **actual stable artifact** install/run/remove evidence, recording
-  prerequisites and managed Steam Data preservation. The unpublished candidate's
-  owned lifecycle is already passed. A new directory alone does not establish
-  clean-host dependency state, but no OS reinstall or game add-on removal is
-  mandated by these requirements.
+- [x] Complete the **actual stable artifact** portable install/help/version/remove
+  check on the owner's only available Windows 11 PC, with its recorded baseline
+  and installed x86/x64 VC runtimes. All 24 package files and nine protected
+  snapshots matched; only the fresh extracted installation was removed.
+  This is existing-host evidence, not a pristine OS or undeclared-dependency
+  absence claim. It does not replace the remaining Winget install/alias checks.
 - [x] Record explicit owner approval for CLI-only `v0.1.0` stable publication,
   stable workflow enablement and release PR #36 merge. Preview and Winget remain
   false-gated; this approval does not authorize Winget submission.
-- [ ] Publish and verify real stable ZIP/checksum bytes before using their URL
-  and hash for Winget; do not invent a manifest or reuse the candidate hash for
-  different release bytes.
+- [x] Publish and independently verify the real `v0.1.0` ZIP/checksum bytes.
+  The actual stable URL/hash are recorded below, separate from the old candidate.
+  No Winget manifest validation or submission is implied.
 - [ ] Validate the initial `Reilley64.Mods` Winget manifest and clean-target
   install/alias/uninstall, then obtain the human-controlled initial submission.
 
@@ -53,15 +53,62 @@ while #33 remains open for release delivery. This supersedes the earlier
 draft-until-all-acceptance restriction for #103 only. The subsequent explicit
 CLI-only `v0.1.0` approval now authorizes release PR #36 merge and stable workflow
 enablement, but not Winget submission. This current status supersedes historical
-pending-approval and disabled-stable notes below. Issue #33 remains open for
-actual stable delivery/lifecycle and Winget acceptance; no publication is claimed.
+pending-approval and disabled-stable notes below. PRs #103, #107 and #36 are
+merged. Stable publication and bounded portable lifecycle are now verified;
+issue #33 remains open for Winget validation/install/alias/uninstall and the
+human-controlled initial submission. Winget submission is not yet authorized.
 CLI Ctrl+C and disconnected rebuilding remain owner-waived/unverified, MCP is
 post-MVP #105, and AV diagnosis remains optional for the approved functional
 credit. No numeric performance threshold or new upstream filesystem harness is
-required. Current-main green CI did not execute Rust/native/x86 steps in
+required. Historical main CI did not execute Rust/native/x86 steps in
 [run 36358188085](https://github.com/Reilley64/mods/actions/runs/36358188085);
 retain the separate passing exact-head issue-branch runs rather than transferring
 coverage. No credentials blocker has been established.
+
+## Published stable package and portable lifecycle — 2026-09-28
+
+The owner-approved release PR #36 merged as
+`1635e408c913181c15b518bc95339ebdd6926169`, the `v0.1.0` source/tag revision.
+[Publish stable run 36395758330](https://github.com/Reilley64/mods/actions/runs/36395758330)
+passed; Winget was skipped. Repository-tooling release-note entries and the
+accidental #33 closing reference were removed through Release Please overrides,
+without rewriting main history. Issue #33 remains open.
+
+- [Public ZIP](https://github.com/Reilley64/mods/releases/download/v0.1.0/mods-v0.1.0-x86_64-pc-windows-msvc.zip):
+  103,991,530 bytes, SHA-256
+  `a1c01c39412f34cea07c6a26c944cc3303e2f4451872049256a99a9b48231610`.
+  The project verifier and a separately retained anonymous download matched
+  public `SHA256SUMS`; the Windows copy matched again.
+- Static audit: exact recipe-derived 24-file layout, one `mods.exe`, four pinned
+  native binaries, notices and corresponding-source archive. All 266 tracked
+  release source blobs match with only the approved CRLF normalization where
+  needed (264 normalized, two raw); 222 vendored packages and 9,993 checksum-listed
+  files passed. Native source/input closure was checked within the retained
+  audit's limits. No native rebuild, legal opinion or byte-identical build claim.
+- CLI SHA-256:
+  `4e63c84cce4e2a27e4ab40ffc1b2623f39b91fb497074c3d0f3b14a2f3439b55`.
+  The fresh `C:/Users/prime/r3stable-v0.1.0-lifecycle-01` run verified all 24
+  installed files and executed only `--help` and `--version`: both exited 0,
+  stderr was empty, streams drained without capture errors, and version stdout
+  was exactly `mods 0.1.0` plus LF. Help has no MCP command.
+- All nine full protected snapshots share SHA-256
+  `f09e8c8b9aa807d71f4a41dc3188e6777f8e8a2591572f062d61815b1c8c859a`.
+  Captured scope: Game Installation including Steam Data, Steam appmanifest,
+  and the executor's FalloutNV Documents/Local subtrees. This is snapshot
+  evidence, not a guarantee against transient or out-of-scope writes.
+- Actual executor was `officepc\Prime`, SID ending 1005, on existing Windows 11
+  Home build 26200 with both VC runtimes installed, not human reill/SID1003.
+  Only this run's fresh `install/` was removed after all guards passed. Current
+  inspection found no install, failure record or named product/game process.
+  Root, evidence, public archive and checksum remain retained. Result receipt
+  SHA-256: `f4ee6a62f807fc4deff4832bad4d6085e080955ff3a7ac0d6a256d184265dfa1`.
+
+Audit and copied receipts: `/tmp/mods33-stable-public/`. Original Windows evidence
+is in the lifecycle root's `evidence/`; public archive/controller are retained at
+`C:/Users/prime/mods33-stable-v0.1.0-artifacts-01`. All earlier roots and raw game
+statuses remain untouched. No game, MCP, Winget, registry/PATH registration or
+configuration initialization was performed by this lifecycle. It is a portable
+ZIP check on the recorded existing host, not a pristine-host or Winget pass.
 
 ## Approved release-version repair — generated-release verification resolved
 
@@ -463,7 +510,7 @@ for its recorded fixture.
 | Real game/profile/save | Human same-environment and weather save/reload passed with stable owned seed/new save, source snapshots and explicit normal-Quit confirmation. | Selected-Mod-Environment save-view isolation/return is also passed by explicit owner confirmation of prior runs; no new instrumented A/B/A receipt is claimed. AV statuses remain unattributed, not clean exits. |
 | Performance | Owner confirmed visible change and performance fine after the baseline/modded comparison. | Qualitative credit only; no measured startup time, general-scale benchmark or numeric threshold claim. |
 | Diagnostics/cancellation | CLI automated checks remain recorded; Ctrl+C owner-waived/unverified. | MCP checks are deferred to #105; no new native fault-injection harness. |
-| Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency is resolved and CLI-only `v0.1.0` publication is owner-approved. Actual public bytes, stable lifecycle and human Winget bootstrap remain open. |
+| Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency is resolved and CLI-only `v0.1.0` publication is owner-approved. Actual public bytes and existing-host portable lifecycle now passed; Winget validation/install/alias/uninstall and human bootstrap remain open. |
 
 The detailed requirements, current CI caveats and authorization boundaries are in
 the current closeout checklist above. Historical non-game checkpoints are not

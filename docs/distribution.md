@@ -2,7 +2,9 @@
 
 The owner approved CLI-only `v0.1.0` stable publication and release PR merge.
 Stable publication is enabled; preview publication and Winget remain disabled.
-Approval is not evidence that stable assets have been published or verified.
+The actual `v0.1.0` public ZIP/checksum and existing-host portable lifecycle are
+now verified; see the [acceptance ledger](acceptance/issue-33.md#published-stable-package-and-portable-lifecycle--2026-09-28).
+Winget validation and submission are still pending.
 The aggregate version belongs to `version.txt` and `vX.Y.Z`, not the CLI package.
 The CLI-only MVP source and workspace contain `mods.exe` but no MCP Presentation;
 its ZIP ships only `mods.exe`. The earlier two-executable ZIP is historical evidence,
@@ -110,15 +112,16 @@ disconnected build. Preserve the recorded source inventory and actual build
 evidence, including source identities, tool versions, commands, inputs, hashes
 and results. Complete corresponding source and required notices remain mandatory.
 The waiver alone does not authorize publication or waive the remaining acceptance checks.
-The owner separately approved CLI-only `v0.1.0` publication; actual stable-artifact
-lifecycle and Winget evidence remain pending in [issue #33](acceptance/issue-33.md).
+The owner separately approved CLI-only `v0.1.0` publication. Public-byte and
+existing-host portable lifecycle evidence is recorded in [issue #33](acceptance/issue-33.md);
+Winget validation/install/alias/uninstall and submission remain pending.
 
 The disabled preview recipe delegates to the shared script and uploads the ZIP
 and checksum with full-SHA naming and 90-day retention. Enabling it additionally
 requires accepted-main-push gating and successful Rust and repository-tool
 checks. Stable publication is enabled as described below; Winget remains disabled.
-Actual stable-artifact smoke tests and Windows installation/removal evidence
-remain issue #33 acceptance requirements, not claimed prepublication passes.
+Actual stable-artifact help/version and owned installation/removal passed on the
+recorded existing Windows host. This is not a pristine-host or Winget result.
 There is no byte-for-byte reproducibility claim.
 
 
@@ -132,8 +135,9 @@ The owner approved enabling stable publication for CLI-only `v0.1.0` and merging
 the regenerated release PR #36. Only the stable job's `false &&` gate was removed;
 the dispatch/non-prerelease event condition and release validation remain.
 There is no new manual approval environment: merging the release PR is publication
-approval. Public ZIP/checksum verification and actual stable-artifact lifecycle
-evidence still have to be recorded; approval does not claim those checks passed.
+approval. Public ZIP/checksum verification and bounded existing-host portable
+lifecycle results are now recorded in the acceptance ledger. These results are
+separate from the earlier approval and do not establish Winget acceptance.
 
 Publication adds missing assets only. It never replaces public ZIP bytes, deletes
 a release, or recreates a version. Anonymous HTTPS downloads verify the exact
@@ -147,9 +151,11 @@ No stable product URL or hash in tests is evidence of actual publication.
 
 ## Winget bootstrap and later updates (disabled)
 
-No product manifest is committed yet: there is no verified public `v0.1.0` product
-ZIP/hash or clean Windows portable-install evidence. This is an explicit blocker,
-not a placeholder manifest. After that release is public, a human must first run
+No product manifest is committed yet. The public `v0.1.0` ZIP/hash and bounded
+existing-host portable ZIP lifecycle are verified in the acceptance ledger.
+Winget manifest validation and actual Winget installation/alias/removal are still
+pending; the portable ZIP check does not establish those results. A human must
+first reverify current public bytes with
 `bun scripts/stable-release.ts verify v0.1.0`, then use its verified URL with
 `wingetcreate new <verified-url> --out <manifest-directory>`. Do not submit from
 the wizard until reviewing the generated files and testing installation/removal.
