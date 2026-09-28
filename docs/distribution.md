@@ -9,6 +9,24 @@ Ordinary CLI mutation success remains quiet. The pinned upstream usvfs baseline
 and approved non-modal proxy logging fallback retain the other native behavior
 and limits.
 
+## Release-version consistency
+
+Internal Cargo packages remain independently versioned with `publish = false`. Inherited
+workspace path dependencies intentionally omit registry version requirements:
+Release Please updates member manifests and the lockfile, but skips dependency
+versions in the virtual root manifest. A stale root requirement such as `^0.0.0`
+otherwise rejects a bumped local crate before Cargo can resolve the release.
+Direct member path dependencies retain their Release Please-managed versions.
+See the [Cargo path dependency contract](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations)
+and [Release Please workspace plugin](https://github.com/googleapis/release-please/blob/main/src/plugins/cargo-workspace.ts).
+
+Run `bun run test:release-versions` after Cargo dependencies are cached by the
+normal Rust checks. It uses the pinned project toolchain and temporary workspace
+copies to check first-release and independent-version resolution, locked metadata,
+and unchanged external dependency pins. It also runs in `bun run check:rust`.
+This is release-wiring evidence, not a new Windows package acceptance run or
+permission to publish. The aggregate version and publication gates are unchanged.
+
 ## Prepare a candidate
 
 On Windows, use PowerShell 7, Git, Windows tar, the pinned Rust toolchain in

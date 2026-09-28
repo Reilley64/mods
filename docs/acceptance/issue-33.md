@@ -51,6 +51,33 @@ required. Current-main green CI did not execute Rust/native/x86 steps in
 retain the separate passing exact-head issue-branch runs rather than transferring
 coverage. No credentials blocker has been established.
 
+## Approved release-version repair — pending generated-release verification
+
+The owner approved a bounded fix for PR #36's inherited local dependency version
+mismatch. Only the root workspace's three internal path dependency version
+constraints (`application`, `domain`, `infrastructure-dependencies`) were removed.
+These packages remain independently versioned and `publish = false`; their paths
+remain fixed. Direct member path/version references retain Release Please's
+existing updater behavior. No package version, repository lockfile, external or
+native pin, release configuration, publication gate or accepted candidate byte
+was changed.
+
+The new project-owned regression copies the actual workspace manifests/source,
+lockfile and pinned toolchain into temporary fixtures, then checks first-release
+and independent local version bumps with real Cargo. Both cases failed on the
+original `domain ^0.0.0` constraint before the fix. After the fix they pass Cargo
+workspace update, locked host-filtered metadata, resolved local edges and
+unchanged external lock records. The check runs after Rust lint in `check:rust`,
+not in Bun-only tooling CI.
+
+Final local `bun run check` passed formatting, Clippy, dependency checks, both
+new release cases (46 assertions), 389 Rust tests and 100 existing tooling tests.
+Independent Standards and Spec reviews found no blockers; no repair cycle was
+needed for this patch. This is not a live Release Please regeneration or a new
+Windows package/runtime pass. Exact-patch Windows CI remains to be recorded.
+The old release PR must be regenerated against the approved CLI-only tree and
+pass its own checks before an owner-approved release merge/publication.
+
 ## Authorized real weather-archive installation — 2026-09-28
 
 **Installation checkpoint: passed; activation/gameplay were pending at this point.**
