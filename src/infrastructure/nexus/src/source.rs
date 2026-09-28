@@ -1,5 +1,5 @@
+use crate::types::NexusRequest;
 use application::ErrorMarker;
-use application::nexus::NexusRequest;
 use reqwest::Url;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;

@@ -1,6 +1,4 @@
 use crate::conflicts::ListEffectiveConflictsOutput;
-use crate::nexus::AcquiredNexusArchive;
-use crate::nexus::NexusProvenance;
 use domain::ArchiveIdentity;
 use domain::ArchivePath;
 use domain::DataRelativePath;
@@ -373,10 +371,50 @@ pub struct InstalledArchive {
 #[derive(Debug, Clone)]
 pub enum InstallArchiveSource {
 	Local(ArchivePath),
-	Nexus(AcquiredNexusArchive),
+	Downloaded(DownloadedMod),
 }
 impl From<ArchivePath> for InstallArchiveSource {
 	fn from(archive: ArchivePath) -> Self {
 		Self::Local(archive)
 	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NexusProvenance {
+	pub game_domain: String,
+	pub mod_id: u64,
+	pub file_id: u64,
+	pub file_version: String,
+	pub mod_version: String,
+	pub mod_name: String,
+	pub file_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModSource {
+	Local(ArchivePath),
+	Remote(RemoteModSource),
+}
+#[derive(Debug, Clone)]
+pub struct RemoteModSource {
+	pub url: String,
+	pub file_id: Option<u64>,
+}
+#[derive(Debug, Clone)]
+pub struct DownloadedMod {
+	pub suggested_name: String,
+	pub archive: ArchivePath,
+	pub provenance: Option<NexusProvenance>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadModFile {
+	pub file_id: u64,
+	pub name: String,
+	pub version: String,
+	pub category: String,
+}
+#[derive(Debug, Clone)]
+pub enum DownloadModOutput {
+	Downloaded(DownloadedMod),
+	SelectionRequired(Vec<DownloadModFile>),
 }

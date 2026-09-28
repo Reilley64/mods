@@ -6,9 +6,7 @@ mod layout;
 mod manifest_writer;
 
 use application::ErrorMarker;
-use application::nexus::NexusApiKey;
 use application::ports::CheckSettingsReadiness;
-use application::ports::LoadNexusApiKey;
 use application::ports::LoadSettings;
 use application::ports::PortFuture;
 use application::ports::PreviewGameBinding;
@@ -218,23 +216,15 @@ impl SettingsAdapter {
 		})
 	}
 
-	pub fn nexus_key_port(&self) -> LoadNexusApiKey {
-		let adapter = self.clone();
-		Arc::new(move || {
-			let result = (|| {
-				let (_, text) = open_bound_root(&adapter.root)?;
-				let (_, effective, _) = config_source::read_sources(
-					&text,
-					&adapter.environment,
-					ErrorMarker::settings_environment_invalid(),
-				)?;
-				Ok(effective
-					.nexus_api_key
-					.filter(|value| !value.trim().is_empty())
-					.map(NexusApiKey::new))
-			})();
-			Box::pin(async move { result }) as PortFuture<_>
-		})
+	/// Keeps credentials outside the queryable settings registry.
+	pub fn load_nexus_api_key(&self) -> Result<Option<String>, ErrorMarker> {
+		let (_, text) = open_bound_root(&self.root)?;
+		let (_, effective, _) = config_source::read_sources(
+			&text,
+			&self.environment,
+			ErrorMarker::settings_environment_invalid(),
+		)?;
+		Ok(effective.nexus_api_key.filter(|value| !value.trim().is_empty()))
 	}
 
 	pub fn load_port(&self) -> LoadSettings {

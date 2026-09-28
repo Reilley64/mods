@@ -1,7 +1,7 @@
+use crate::types::NexusRequest;
 use application::ErrorMarker;
-use application::nexus::AcquiredNexusArchive;
-use application::nexus::NexusProvenance;
-use application::nexus::NexusRequest;
+use application::installation::DownloadedMod;
+use application::installation::NexusProvenance;
 use domain::ArchivePath;
 use domain::EnvironmentRoot;
 use rootcause::Result;
@@ -13,6 +13,7 @@ use std::fs;
 use std::io::ErrorKind;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -58,6 +59,10 @@ pub(crate) fn directory(root: &EnvironmentRoot, create: bool) -> Result<Option<P
 	let mut path = PathBuf::new();
 	for component in root.as_path().components() {
 		path.push(component);
+		// A Windows drive prefix is not an absolute root until RootDir is appended.
+		if matches!(component, Component::Prefix(_)) {
+			continue;
+		}
 		require_kind(&path, true)?;
 	}
 	for name in ["cache", "downloads"] {
@@ -105,7 +110,7 @@ pub(crate) fn read(
 	root: &EnvironmentRoot,
 	request: &NexusRequest,
 	cancellation: &CancellationToken,
-) -> Result<Option<AcquiredNexusArchive>, ErrorMarker> {
+) -> Result<Option<DownloadedMod>, ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
@@ -138,9 +143,16 @@ pub(crate) fn read(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	Ok(Some(AcquiredNexusArchive {
+	let provenance = metadata.provenance();
+	let suggested_name = if provenance.file_name.is_empty() {
+		provenance.mod_name.clone()
+	} else {
+		provenance.file_name.clone()
+	};
+	Ok(Some(DownloadedMod {
+		suggested_name,
 		archive: ArchivePath::new(archive_path).context(ErrorMarker::unsafe_archive())?,
-		provenance: metadata.provenance(),
+		provenance: Some(provenance),
 	}))
 }
 
@@ -160,6 +172,25 @@ mod tests {
 			file_id: Some(file_id),
 		}
 	}
+	#[cfg(windows)]
+	#[test]
+	fn canonical_windows_root_keeps_verbatim_prefix_until_root_is_complete() {
+		let temp = TempDir::new().expect("temporary environment");
+		let canonical = temp.path().canonicalize().expect("canonical Windows path");
+		assert!(matches!(canonical.components().next(), Some(Component::Prefix(_))));
+		let root = EnvironmentRoot::new(canonical).expect("environment root");
+
+		let downloads = directory(&root, true)
+			.expect("canonical cache directory")
+			.expect("downloads");
+
+		assert_eq!(downloads, root.as_path().join("cache/downloads"));
+		assert!(downloads.is_dir());
+		assert!(read(&root, &request(42, 7), &CancellationToken::new())
+			.expect("empty cache")
+			.is_none());
+	}
+
 	#[test]
 	fn cache_requires_exact_identity_and_complete_bytes_and_ignores_partial_directories() {
 		let temp = TempDir::new().expect("root");

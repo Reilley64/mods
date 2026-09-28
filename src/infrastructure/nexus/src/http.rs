@@ -1,12 +1,12 @@
 use crate::cache;
 use crate::cache::CompletedMetadata;
+use crate::types::NexusApiKey;
+use crate::types::NexusFile;
+use crate::types::NexusMod;
+use crate::types::NexusRequest;
 use application::ErrorMarker;
-use application::nexus::AcquiredNexusArchive;
-use application::nexus::NexusApiKey;
-use application::nexus::NexusFile;
-use application::nexus::NexusMod;
-use application::nexus::NexusProvenance;
-use application::nexus::NexusRequest;
+use application::installation::DownloadedMod;
+use application::installation::NexusProvenance;
 use domain::ArchivePath;
 use domain::EnvironmentRoot;
 use reqwest::Client;
@@ -160,7 +160,7 @@ async fn download_with(
 	provenance: NexusProvenance,
 	key: NexusApiKey,
 	cancellation: CancellationToken,
-) -> Result<AcquiredNexusArchive, ErrorMarker> {
+) -> Result<DownloadedMod, ErrorMarker> {
 	let user: UserResponse = get(http, "users/validate.json", &key, &cancellation).await?;
 	if !user.is_premium {
 		return Err(report!(ErrorMarker::nexus_premium_required()));
@@ -247,9 +247,15 @@ async fn download_with(
 	}
 	fs::rename(temporary.path(), &destination).context(ErrorMarker::io_failure())?;
 
-	Ok(AcquiredNexusArchive {
+	let suggested_name = if provenance.file_name.is_empty() {
+		provenance.mod_name.clone()
+	} else {
+		provenance.file_name.clone()
+	};
+	Ok(DownloadedMod {
+		suggested_name,
 		archive: ArchivePath::new(destination.join("archive")).context(ErrorMarker::unsafe_archive())?,
-		provenance,
+		provenance: Some(provenance),
 	})
 }
 
@@ -265,7 +271,7 @@ pub(crate) async fn download(
 	provenance: NexusProvenance,
 	key: NexusApiKey,
 	cancellation: CancellationToken,
-) -> Result<AcquiredNexusArchive, ErrorMarker> {
+) -> Result<DownloadedMod, ErrorMarker> {
 	download_with(&NexusHttp::system()?, root, provenance, key, cancellation).await
 }
 
@@ -389,7 +395,7 @@ mod tests {
 		let cached = cache::read(&root, &request, &CancellationToken::new())
 			.expect("read")
 			.expect("cache");
-		assert_eq!(cached.provenance, provenance());
+		assert_eq!(cached.provenance, Some(provenance()));
 		let requests = requests.lock().expect("requests");
 		assert!(requests[0].contains("apikey: synthetic-api-key"));
 		assert!(!requests[2].contains("apikey"));

@@ -3,12 +3,6 @@ use rootcause::Result;
 use std::future::Future;
 use std::pin::Pin;
 
-mod nexus;
-pub use nexus::DownloadNexusArchive;
-pub use nexus::LoadNexusApiKey;
-pub use nexus::ParseNexusSource;
-pub use nexus::ReadNexusCache;
-pub use nexus::ResolveNexusMod;
 mod archive;
 mod environment;
 mod execution;
@@ -57,3 +51,5 @@ pub use settings::StoreGameBinding;
 pub use settings::StoredAndEffectiveBinding;
 
 pub type PortFuture<T, ErrorContext = ErrorMarker> = Pin<Box<dyn Future<Output = Result<T, ErrorContext>> + Send>>;
+mod download_mod;
+pub use download_mod::DownloadMod;

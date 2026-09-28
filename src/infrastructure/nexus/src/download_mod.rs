@@ -1,89 +1,73 @@
-use crate::ErrorMarker;
-use crate::nexus::AcquiredNexusArchive;
-use crate::nexus::NexusFile;
-use crate::nexus::NexusProvenance;
 use crate::ports::DownloadNexusArchive;
 use crate::ports::LoadNexusApiKey;
 use crate::ports::ParseNexusSource;
 use crate::ports::ReadNexusCache;
 use crate::ports::ResolveNexusMod;
+use application::ErrorMarker;
+use application::installation::DownloadModFile;
+use application::installation::DownloadModOutput;
+use application::installation::NexusProvenance;
 use rootcause::Result;
-use rootcause::prelude::ResultExt;
 use rootcause::report;
-use std::fmt;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
-pub struct AcquireNexusDependencies {
+pub(crate) struct DownloadDependencies {
 	pub parse_source: ParseNexusSource,
 	pub load_key: LoadNexusApiKey,
 	pub read_cache: ReadNexusCache,
 	pub resolve_mod: ResolveNexusMod,
 	pub download: DownloadNexusArchive,
 }
-#[derive(Debug, Clone)]
-pub enum AcquireNexusOutput {
-	Acquired(AcquiredNexusArchive),
-	SelectionRequired(Vec<NexusFile>),
-}
-#[derive(Debug, Clone, Copy)]
-pub struct AcquireNexusError;
-impl fmt::Display for AcquireNexusError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		f.write_str("failed to acquire Nexus archive")
-	}
-}
-#[tracing::instrument(skip_all)]
-pub async fn acquire_nexus(
-	dependencies: AcquireNexusDependencies,
+pub(crate) async fn download_mod(
+	dependencies: DownloadDependencies,
 	source: String,
 	file_id: Option<u64>,
 	cancellation: CancellationToken,
-) -> Result<AcquireNexusOutput, AcquireNexusError> {
-	let mut request = dependencies
-		.parse_source
-		.call((source, file_id))
-		.await
-		.context(AcquireNexusError)?;
+) -> Result<DownloadModOutput, ErrorMarker> {
+	let mut request = dependencies.parse_source.call((source, file_id)).await?;
 	if request.file_id.is_some()
 		&& let Some(cached) = dependencies
 			.read_cache
 			.call((request.clone(), cancellation.clone()))
-			.await
-			.context(AcquireNexusError)?
+			.await?
 	{
-		return Ok(AcquireNexusOutput::Acquired(cached));
+		return Ok(DownloadModOutput::Downloaded(cached));
 	}
 
 	let key = dependencies
 		.load_key
 		.call(())
-		.await
-		.context(AcquireNexusError)?
-		.ok_or_else(|| report!(ErrorMarker::nexus_premium_required()))
-		.context(AcquireNexusError)?;
+		.await?
+		.ok_or_else(|| report!(ErrorMarker::nexus_premium_required()))?;
 	let metadata = dependencies
 		.resolve_mod
 		.call((request.clone(), key.clone(), cancellation.clone()))
-		.await
-		.context(AcquireNexusError)?;
+		.await?;
 
 	let selected = if let Some(file_id) = request.file_id {
 		metadata.files
 			.iter()
 			.find(|file| file.file_id == file_id && file.available)
-			.ok_or_else(|| report!(ErrorMarker::nexus_unavailable()))
-			.context(AcquireNexusError)?
+			.ok_or_else(|| report!(ErrorMarker::nexus_unavailable()))?
 	} else {
 		let mut main_files = metadata.files.iter().filter(|file| file.available && file.main);
 		let first = main_files.next();
 		if first.is_none() || main_files.next().is_some() {
-			return Ok(AcquireNexusOutput::SelectionRequired(
-				metadata.files.into_iter().filter(|file| file.available).collect(),
+			return Ok(DownloadModOutput::SelectionRequired(
+				metadata.files
+					.into_iter()
+					.filter(|file| file.available)
+					.map(|file| DownloadModFile {
+						file_id: file.file_id,
+						name: file.name,
+						version: file.version,
+						category: file.category,
+					})
+					.collect(),
 			));
 		}
-		first.ok_or_else(|| report!(ErrorMarker::nexus_unavailable()))
-			.context(AcquireNexusError)?
+		first.ok_or_else(|| report!(ErrorMarker::nexus_unavailable()))?
 	};
 	request.file_id = Some(selected.file_id);
 	let provenance = NexusProvenance {
@@ -96,34 +80,32 @@ pub async fn acquire_nexus(
 		file_name: selected.name.clone(),
 	};
 
-	if let Some(mut cached) = dependencies
-		.read_cache
-		.call((request, cancellation.clone()))
-		.await
-		.context(AcquireNexusError)?
-	{
-		cached.provenance = provenance;
-		return Ok(AcquireNexusOutput::Acquired(cached));
+	if let Some(mut cached) = dependencies.read_cache.call((request, cancellation.clone())).await? {
+		cached.suggested_name = if provenance.file_name.is_empty() {
+			provenance.mod_name.clone()
+		} else {
+			provenance.file_name.clone()
+		};
+		cached.provenance = Some(provenance);
+		return Ok(DownloadModOutput::Downloaded(cached));
 	}
 
-	let archive = dependencies
-		.download
-		.call((provenance, key, cancellation))
-		.await
-		.context(AcquireNexusError)?;
+	let archive = dependencies.download.call((provenance, key, cancellation)).await?;
 
-	Ok(AcquireNexusOutput::Acquired(archive))
+	Ok(DownloadModOutput::Downloaded(archive))
 }
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "synthetic fixture setup and outcome assertions")]
 mod tests {
 	use super::*;
-	use crate::ErrorCode;
-	use crate::nexus::NexusApiKey;
-	use crate::nexus::NexusMod;
-	use crate::nexus::NexusRequest;
-	use crate::ports::PortFuture;
+	use crate::types::NexusApiKey;
+	use crate::types::NexusFile;
+	use crate::types::NexusMod;
+	use crate::types::NexusRequest;
+	use application::ErrorCode;
+	use application::installation::DownloadedMod;
+	use application::ports::PortFuture;
 	use domain::ArchivePath;
 	use std::env::temp_dir;
 	use std::sync::Arc;
@@ -141,10 +123,11 @@ mod tests {
 			main,
 		}
 	}
-	fn acquired(id: u64) -> AcquiredNexusArchive {
-		AcquiredNexusArchive {
+	fn acquired(id: u64) -> DownloadedMod {
+		DownloadedMod {
+			suggested_name: format!("File {id}"),
 			archive: ArchivePath::new(temp_dir().join(format!("nexus-{id}"))).expect("archive"),
-			provenance: NexusProvenance {
+			provenance: Some(NexusProvenance {
 				game_domain: "newvegas".into(),
 				mod_id: 42,
 				file_id: id,
@@ -152,15 +135,15 @@ mod tests {
 				mod_version: "2.0".into(),
 				mod_name: "Page".into(),
 				file_name: format!("File {id}"),
-			},
+			}),
 		}
 	}
 	fn dependencies(
 		files: Vec<NexusFile>,
 		calls: Arc<Mutex<Vec<&'static str>>>,
 		cached: Option<u64>,
-	) -> AcquireNexusDependencies {
-		AcquireNexusDependencies {
+	) -> DownloadDependencies {
+		DownloadDependencies {
 			parse_source: Arc::new(|_, file_id| {
 				Box::pin(async move {
 					Ok(NexusRequest {
@@ -205,16 +188,34 @@ mod tests {
 				calls.lock().expect("calls").push("download");
 				Box::pin(async move {
 					let mut output = acquired(provenance.file_id);
-					output.provenance = provenance;
+					output.provenance = Some(provenance);
 					Ok(output)
 				}) as PortFuture<_>
 			}),
 		}
 	}
 	#[tokio::test]
+	async fn fresh_metadata_supplies_suggested_name_without_application_provider_logic() {
+		let calls = Arc::new(Mutex::new(Vec::new()));
+		let mut main = file(7, true);
+		main.name.clear();
+		let result = download_mod(
+			dependencies(vec![main], calls, Some(7)),
+			"source".into(),
+			None,
+			CancellationToken::new(),
+		)
+		.await
+		.expect("cached selection");
+		assert!(
+			matches!(result, DownloadModOutput::Downloaded(value) if value.suggested_name == "Page" && value.provenance.as_ref().is_some_and(|source| source.file_name.is_empty()))
+		);
+	}
+
+	#[tokio::test]
 	async fn exact_explicit_cache_hit_never_loads_credentials_or_resolves() {
 		let calls = Arc::new(Mutex::new(Vec::new()));
-		let result = acquire_nexus(
+		let result = download_mod(
 			dependencies(vec![], calls.clone(), Some(7)),
 			"source".into(),
 			Some(7),
@@ -222,13 +223,15 @@ mod tests {
 		)
 		.await
 		.expect("cached");
-		assert!(matches!(result, AcquireNexusOutput::Acquired(value) if value.provenance.file_id == 7));
+		assert!(
+			matches!(result, DownloadModOutput::Downloaded(value) if value.provenance.as_ref().is_some_and(|source| source.file_id == 7))
+		);
 		assert_eq!(*calls.lock().expect("calls"), ["cache"]);
 	}
 	#[tokio::test]
 	async fn page_resolves_fresh_then_reuses_exact_bytes() {
 		let calls = Arc::new(Mutex::new(Vec::new()));
-		let result = acquire_nexus(
+		let result = download_mod(
 			dependencies(vec![file(7, true), file(8, false)], calls.clone(), Some(7)),
 			"source".into(),
 			None,
@@ -237,7 +240,7 @@ mod tests {
 		.await
 		.expect("cached");
 		assert!(
-			matches!(result, AcquireNexusOutput::Acquired(value) if value.provenance.file_version == "01.20-beta" && value.provenance.mod_version == "2.0")
+			matches!(result, DownloadModOutput::Downloaded(value) if value.provenance.as_ref().is_some_and(|source| source.file_version == "01.20-beta" && source.mod_version == "2.0"))
 		);
 		assert_eq!(*calls.lock().expect("calls"), ["key", "resolve", "cache"]);
 	}
@@ -245,7 +248,7 @@ mod tests {
 	async fn zero_or_multiple_main_files_require_explicit_choice_with_available_details() {
 		for files in [vec![file(8, false)], vec![file(7, true), file(8, true)]] {
 			let calls = Arc::new(Mutex::new(Vec::new()));
-			let result = acquire_nexus(
+			let result = download_mod(
 				dependencies(files.clone(), calls.clone(), None),
 				"source".into(),
 				None,
@@ -253,7 +256,9 @@ mod tests {
 			)
 			.await
 			.expect("selection");
-			assert!(matches!(result, AcquireNexusOutput::SelectionRequired(values) if values == files));
+			assert!(
+				matches!(result, DownloadModOutput::SelectionRequired(values) if values == files.into_iter().map(|file| DownloadModFile { file_id: file.file_id, name: file.name, version: file.version, category: file.category }).collect::<Vec<_>>())
+			);
 			assert_eq!(*calls.lock().expect("calls"), ["key", "resolve"]);
 		}
 	}
@@ -277,11 +282,11 @@ mod tests {
 		});
 		for id in [7, 8] {
 			current.store(id, Ordering::SeqCst);
-			let result = acquire_nexus(deps.clone(), "source".into(), None, CancellationToken::new())
+			let result = download_mod(deps.clone(), "source".into(), None, CancellationToken::new())
 				.await
 				.expect("fresh");
 			assert!(
-				matches!(result, AcquireNexusOutput::Acquired(value) if value.provenance.file_id == id)
+				matches!(result, DownloadModOutput::Downloaded(value) if value.provenance.as_ref().is_some_and(|source| source.file_id == id))
 			);
 		}
 	}
@@ -292,7 +297,7 @@ mod tests {
 		deps.resolve_mod = Arc::new(|_, _, _| {
 			Box::pin(async { Err(report!(ErrorMarker::nexus_rate_limited())) }) as PortFuture<_>
 		});
-		let error = acquire_nexus(deps.clone(), "source".into(), None, CancellationToken::new())
+		let error = download_mod(deps.clone(), "source".into(), None, CancellationToken::new())
 			.await
 			.expect_err("resolution failure");
 		assert!(error.iter_reports().any(|r| r
@@ -300,7 +305,7 @@ mod tests {
 			.is_some_and(|m| m.code() == ErrorCode::NexusRateLimited)));
 		assert_eq!(*calls.lock().expect("calls"), ["key"]);
 		deps.load_key = Arc::new(|| Box::pin(async { Ok(None) }) as PortFuture<_>);
-		let error = acquire_nexus(deps, "source".into(), None, CancellationToken::new())
+		let error = download_mod(deps, "source".into(), None, CancellationToken::new())
 			.await
 			.expect_err("missing key");
 		assert!(error.iter_reports().any(|r| r
@@ -311,11 +316,13 @@ mod tests {
 	async fn explicit_optional_file_is_selected_and_unavailable_file_is_rejected() {
 		let calls = Arc::new(Mutex::new(Vec::new()));
 		let deps = dependencies(vec![file(7, true), file(8, false)], calls, None);
-		let result = acquire_nexus(deps.clone(), "source".into(), Some(8), CancellationToken::new())
+		let result = download_mod(deps.clone(), "source".into(), Some(8), CancellationToken::new())
 			.await
 			.expect("optional");
-		assert!(matches!(result, AcquireNexusOutput::Acquired(value) if value.provenance.file_id == 8));
-		assert!(acquire_nexus(deps, "source".into(), Some(9), CancellationToken::new())
+		assert!(
+			matches!(result, DownloadModOutput::Downloaded(value) if value.provenance.as_ref().is_some_and(|source| source.file_id == 8))
+		);
+		assert!(download_mod(deps, "source".into(), Some(9), CancellationToken::new())
 			.await
 			.is_err());
 	}

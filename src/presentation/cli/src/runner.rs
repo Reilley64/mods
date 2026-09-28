@@ -24,14 +24,12 @@ use application::environment::initialize_environment;
 use application::execution::ExecuteProgramDependencies;
 use application::execution::ExecutionWarning;
 use application::execution::execute_program;
-use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
-use application::installation::InstallArchiveSource;
-use application::installation::install_archive;
-use application::nexus::AcquireNexusDependencies;
-use application::nexus::AcquireNexusOutput;
-use application::nexus::acquire_nexus;
-use application::ports::InstallationStateAccess;
+use application::installation::InstallModDependencies;
+use application::installation::InstallModOutput;
+use application::installation::ModSource;
+use application::installation::RemoteModSource;
+use application::installation::install_mod;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
 use application::settings::SetGameDirectoryDependencies;
@@ -62,14 +60,13 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub(crate) struct Dependencies {
-	pub(crate) acquire_nexus: AcquireNexusDependencies,
 	pub(crate) execution_force_cancellation: CancellationToken,
 	pub(crate) execute_program: ExecuteProgramDependencies,
 	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
 	pub(crate) list_settings: ListSettingsDependencies,
 	pub(crate) get_setting: GetSettingDependencies,
 	pub(crate) set_game_directory: SetGameDirectoryDependencies,
-	pub(crate) install_archive: InstallArchiveDependencies,
+	pub(crate) install_mod: InstallModDependencies,
 	pub(crate) list_effective_conflicts: ListEffectiveConflictsDependencies,
 	pub(crate) inspect_mod_conflicts: InspectModConflictsDependencies,
 	pub(crate) explain_path: ExplainPathDependencies,
@@ -264,49 +261,13 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 		Command::Install(arguments) => {
 			let cancellation = operation::ctrl_c_token();
 
-			let install_dependencies = dependencies.install_archive;
-			let requested_name = arguments.name;
-
-			let archive = if let Some(source) =
+			let source = if let Some(url) =
 				arguments.archive.to_str().filter(|source| source.contains("://"))
 			{
-				if let Err(report) = install_dependencies
-					.load_installation_state
-					.call((InstallationStateAccess::Preview, cancellation.clone()))
-					.await
-				{
-					return report_outcome(&report);
-				}
-				match acquire_nexus(
-					dependencies.acquire_nexus,
-					source.to_owned(),
-					arguments.file,
-					cancellation.clone(),
-				)
-				.await
-				{
-					Ok(AcquireNexusOutput::Acquired(acquired)) => {
-						InstallArchiveSource::Nexus(acquired)
-					}
-					Ok(AcquireNexusOutput::SelectionRequired(files)) => {
-						let mut stderr = "error [nexus_file_selection_required]: Select a file with --file <id>.\n".to_owned();
-						for file in files {
-							stderr.push_str(&format!(
-								"file_id = {}, name = {}, version = {}, category = {}\n",
-								file.file_id,
-								output::quote(&file.name),
-								output::quote(&file.version),
-								output::quote(&file.category)
-							));
-						}
-						return RunOutcome {
-							status: 2,
-							stdout: String::new(),
-							stderr,
-						};
-					}
-					Err(report) => return report_outcome(&report),
-				}
+				ModSource::Remote(RemoteModSource {
+					url: url.to_owned(),
+					file_id: arguments.file,
+				})
 			} else {
 				if arguments.file.is_some() {
 					return marker_outcome(ErrorMarker::nexus_source_invalid());
@@ -314,10 +275,10 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				let Ok(archive) = ArchivePath::new(resolve_path(&arguments.archive, &startup)) else {
 					return marker_outcome(ErrorMarker::unsafe_archive());
 				};
-				InstallArchiveSource::Local(archive)
+				ModSource::Local(archive)
 			};
 
-			let mod_name = if let Some(value) = requested_name {
+			let mod_name = if let Some(value) = arguments.name {
 				let Ok(value) = ModName::new(value) else {
 					return marker_outcome(ErrorMarker::invalid_mod_name());
 				};
@@ -330,9 +291,9 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				Err(report) => return report_outcome(&report),
 			};
 
-			match install_archive(
-				install_dependencies,
-				archive,
+			match install_mod(
+				dependencies.install_mod,
+				source,
 				mod_name,
 				arguments.replace,
 				choices,
@@ -341,7 +302,26 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			)
 			.await
 			{
-				Ok(InstallArchiveOutput::AdditionalSelectionsRequired(output_value)) => {
+				Ok(InstallModOutput::SelectionRequired(files)) => {
+					let mut stderr = "error [nexus_file_selection_required]: Select a file with --file <id>.\n".to_owned();
+					for file in files {
+						stderr.push_str(&format!(
+							"file_id = {}, name = {}, version = {}, category = {}\n",
+							file.file_id,
+							output::quote(&file.name),
+							output::quote(&file.version),
+							output::quote(&file.category)
+						));
+					}
+					RunOutcome {
+						status: 2,
+						stdout: String::new(),
+						stderr,
+					}
+				}
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::AdditionalSelectionsRequired(
+					output_value,
+				))) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
 					RunOutcome {
 						status: 0,
@@ -349,7 +329,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 						stderr,
 					}
 				}
-				Ok(InstallArchiveOutput::Preview(output_value)) => {
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::Preview(output_value))) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
 					RunOutcome {
 						status: 0,
@@ -357,11 +337,13 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 						stderr,
 					}
 				}
-				Ok(InstallArchiveOutput::Installed(output_value)) => RunOutcome {
-					status: 0,
-					stdout: String::new(),
-					stderr: output::install_warnings(&output_value.warnings),
-				},
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::Installed(output_value))) => {
+					RunOutcome {
+						status: 0,
+						stdout: String::new(),
+						stderr: output::install_warnings(&output_value.warnings),
+					}
+				}
 				Err(report) => report_outcome(&report),
 			}
 		}
@@ -598,17 +580,17 @@ mod tests {
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
 	use application::installation::ArchiveIndex;
+	use application::installation::DownloadModOutput;
+	use application::installation::DownloadedMod;
 	use application::installation::FomodGroup;
 	use application::installation::FomodInstaller;
 	use application::installation::FomodOption;
 	use application::installation::IndexedInstaller;
 	use application::installation::InstallArchiveDependencies;
+	use application::installation::InstallModDependencies;
 	use application::installation::InstallationAssessment;
 	use application::installation::InstallationState;
-	use application::nexus::AcquireNexusDependencies;
-	use application::nexus::AcquiredNexusArchive;
-	use application::nexus::NexusProvenance;
-	use application::nexus::NexusRequest;
+	use application::installation::NexusProvenance;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
 	use application::ports::InitializationTargetAssessment;
@@ -784,22 +766,6 @@ mod tests {
 		};
 		let install_archive = unavailable_install_archive_dependencies();
 		Dependencies {
-			acquire_nexus: AcquireNexusDependencies {
-				parse_source: Arc::new(|_, _| {
-					Box::pin(async { Err(report!(ErrorMarker::nexus_source_invalid())) })
-						as PortFuture<_>
-				}),
-				load_key: Arc::new(|| Box::pin(async { Ok(None) }) as PortFuture<_>),
-				read_cache: Arc::new(|_, _| Box::pin(async { Ok(None) }) as PortFuture<_>),
-				resolve_mod: Arc::new(|_, _, _| {
-					Box::pin(async { Err(report!(ErrorMarker::nexus_network_failure())) })
-						as PortFuture<_>
-				}),
-				download: Arc::new(|_, _, _| {
-					Box::pin(async { Err(report!(ErrorMarker::nexus_network_failure())) })
-						as PortFuture<_>
-				}),
-			},
 			execution_force_cancellation: CancellationToken::new(),
 			execute_program: ExecuteProgramDependencies {
 				report_progress: None,
@@ -884,7 +850,13 @@ mod tests {
 					Box::pin(async move { Ok(binding) }) as PortFuture<_>
 				}),
 			},
-			install_archive,
+			install_mod: InstallModDependencies {
+				install_archive,
+				download_mod: Arc::new(|_, _| {
+					Box::pin(async { Err(report!(ErrorMarker::nexus_network_failure())) })
+						as PortFuture<_>
+				}),
+			},
 			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
 			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
 			explain_path: unavailable_explain_path_dependencies(),
@@ -995,29 +967,21 @@ mod tests {
 			(vec!["first=a", "second=b"], false, "failed"),
 		] {
 			let mut dependencies = successful_dependencies(temp.path()).expect("dependency fixture");
-			dependencies.acquire_nexus.parse_source = Arc::new(|source, file| {
-				assert_eq!(source, "https://www.nexusmods.com/newvegas/mods/42");
-				assert_eq!(file, Some(7));
-				Box::pin(async {
-					Ok(NexusRequest {
-						game_domain: "newvegas".into(),
-						mod_id: 42,
-						file_id: Some(7),
-					})
-				}) as PortFuture<_>
-			});
-			dependencies.acquire_nexus.read_cache = Arc::new({
-				let acquired = AcquiredNexusArchive {
+			dependencies.install_mod.download_mod = Arc::new({
+				let downloaded = DownloadedMod {
+					suggested_name: "Selected file".into(),
 					archive: archive.clone(),
-					provenance: provenance.clone(),
+					provenance: Some(provenance.clone()),
 				};
-				move |request, _| {
-					assert_eq!(request.file_id, Some(7));
-					let acquired = acquired.clone();
-					Box::pin(async move { Ok(Some(acquired)) }) as PortFuture<_>
+				move |source, _| {
+					assert_eq!(source.url, "https://www.nexusmods.com/newvegas/mods/42");
+					assert_eq!(source.file_id, Some(7));
+					let downloaded = downloaded.clone();
+					Box::pin(async move { Ok(DownloadModOutput::Downloaded(downloaded)) })
+						as PortFuture<_>
 				}
 			});
-			dependencies.install_archive.load_installation_state = Arc::new({
+			dependencies.install_mod.install_archive.load_installation_state = Arc::new({
 				let game_binding = game_binding.clone();
 				move |_, _| {
 					let game_binding = game_binding.clone();
@@ -1031,7 +995,7 @@ mod tests {
 					}) as PortFuture<_>
 				}
 			});
-			dependencies.install_archive.index_archive = Arc::new({
+			dependencies.install_mod.install_archive.index_archive = Arc::new({
 				let archive = archive.clone();
 				let index = index.clone();
 				move |received, _, _| {
@@ -1040,10 +1004,10 @@ mod tests {
 					Box::pin(async move { Ok(index) }) as PortFuture<_>
 				}
 			});
-			dependencies.install_archive.assess_installation = Arc::new(|_, _| {
+			dependencies.install_mod.install_archive.assess_installation = Arc::new(|_, _| {
 				Box::pin(async { Ok(InstallationAssessment { overlaps: Vec::new() }) }) as PortFuture<_>
 			});
-			dependencies.install_archive.scan_environment_conflicts = Arc::new(|_| {
+			dependencies.install_mod.install_archive.scan_environment_conflicts = Arc::new(|_| {
 				Box::pin(async {
 					Ok(EnvironmentConflictScan {
 						providers: Vec::new(),
@@ -1053,7 +1017,7 @@ mod tests {
 			});
 			let began = Arc::new(AtomicBool::new(false));
 			let published = Arc::new(AtomicBool::new(false));
-			dependencies.install_archive.begin_installation = Arc::new({
+			dependencies.install_mod.install_archive.begin_installation = Arc::new({
 				let began = began.clone();
 				let published = published.clone();
 				let provenance = provenance.clone();
@@ -1087,9 +1051,10 @@ mod tests {
 					}) as PortFuture<_>
 				}
 			});
-			dependencies.install_archive.extract_approved_files = Arc::new(|_, _, _, _, _, _| {
-				Box::pin(async { Err(report!(ErrorMarker::unsafe_archive())) }) as PortFuture<_>
-			});
+			dependencies.install_mod.install_archive.extract_approved_files =
+				Arc::new(|_, _, _, _, _, _| {
+					Box::pin(async { Err(report!(ErrorMarker::unsafe_archive())) }) as PortFuture<_>
+				});
 			let mut arguments = arguments![
 				"mods",
 				"--log-level",

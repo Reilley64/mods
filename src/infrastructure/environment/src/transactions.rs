@@ -614,11 +614,11 @@ mod tests {
 	use application::installation::EffectiveResult;
 	use application::installation::InstallMode;
 	use application::installation::InstallPlan;
+	use application::installation::NexusProvenance;
 	use application::installation::PlanCandidateReference;
 	use application::installation::PlannedCandidate;
 	use application::installation::ProjectedModState;
 	use application::installation::WinnerReason;
-	use application::nexus::NexusProvenance;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
 	use application::ports::InstallationStateAccess;

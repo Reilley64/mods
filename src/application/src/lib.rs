@@ -6,7 +6,6 @@ pub mod environment;
 mod errors;
 pub mod execution;
 pub mod installation;
-pub mod nexus;
 pub mod ports;
 pub mod settings;
 

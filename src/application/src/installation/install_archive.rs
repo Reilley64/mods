@@ -89,19 +89,18 @@ pub async fn install_archive(
 	dry_run: bool,
 	cancellation: CancellationToken,
 ) -> Result<InstallArchiveOutput, InstallArchiveError> {
-	let (archive, nexus) = match source.into() {
-		InstallArchiveSource::Local(archive) => (archive, None),
-		InstallArchiveSource::Nexus(acquired) => (acquired.archive, Some(acquired.provenance)),
+	let (archive, nexus, suggested_name) = match source.into() {
+		InstallArchiveSource::Local(archive) => (archive, None, None),
+		InstallArchiveSource::Downloaded(downloaded) => (
+			downloaded.archive,
+			downloaded.provenance,
+			Some(downloaded.suggested_name),
+		),
 	};
 	let mod_name = if let Some(name) = mod_name {
 		Some(name)
-	} else if let Some(provenance) = &nexus {
-		let name = if provenance.file_name.is_empty() {
-			&provenance.mod_name
-		} else {
-			&provenance.file_name
-		};
-		Some(ModName::new(name.clone())
+	} else if let Some(name) = suggested_name {
+		Some(ModName::new(name)
 			.context(ErrorMarker::invalid_mod_name())
 			.context(InstallArchiveError)?)
 	} else {
@@ -582,6 +581,7 @@ mod tests {
 	use crate::conflicts::ScannedConflictProvider;
 	use crate::installation::ArchiveIndex;
 	use crate::installation::CandidateDecision;
+	use crate::installation::DownloadedMod;
 	use crate::installation::FileDependencyFact;
 	use crate::installation::FileDependencyKind;
 	use crate::installation::FomodFlagWrite;
@@ -594,8 +594,7 @@ mod tests {
 	use crate::installation::InstallWarning;
 	use crate::installation::InstallationAssessment;
 	use crate::installation::InstallationState;
-	use crate::nexus::AcquiredNexusArchive;
-	use crate::nexus::NexusProvenance;
+	use crate::installation::NexusProvenance;
 	use crate::ports::InstallationChange;
 	use crate::ports::InstallationFile;
 	use crate::ports::InstallationStateAccess;
@@ -895,9 +894,10 @@ mod tests {
 			let archive = ArchivePath::new(temp_dir().join("cache/downloads/newvegas-42-7/archive"))
 				.expect("archive");
 			let source = if remote {
-				InstallArchiveSource::Nexus(AcquiredNexusArchive {
+				InstallArchiveSource::Downloaded(DownloadedMod {
+					suggested_name: "Selected file".into(),
 					archive,
-					provenance: provenance.clone(),
+					provenance: Some(provenance.clone()),
 				})
 			} else {
 				InstallArchiveSource::Local(archive)
@@ -929,9 +929,10 @@ mod tests {
 			mod_name: "Fallback page".into(),
 			file_name: String::new(),
 		};
-		let source = InstallArchiveSource::Nexus(AcquiredNexusArchive {
+		let source = InstallArchiveSource::Downloaded(DownloadedMod {
+			suggested_name: "Fallback page".into(),
 			archive: ArchivePath::new(temp_dir().join("archive")).expect("archive"),
-			provenance,
+			provenance: Some(provenance),
 		});
 		let result = install_archive(deps, source, None, false, vec![], true, CancellationToken::new())
 			.await
