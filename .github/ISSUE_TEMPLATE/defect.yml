@@ -1,0 +1,93 @@
+name: Defect report
+description: Report a problem with mods and include relevant diagnostic evidence.
+title: "[Defect] "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues before opening a report. Describe one defect per issue.
+        Reports and attachments are public. Share only relevant, reviewed evidence.
+        See the [troubleshooting guide](https://github.com/Reilley64/mods/blob/main/skills/mods-cli/references/troubleshooting.md#report-a-defect) for log collection and redaction.
+  - type: input
+    id: version
+    attributes:
+      label: CLI version
+      description: Paste `mods --version`. If the CLI cannot start, give the installed package version and say that it cannot start.
+      placeholder: mods 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: System and installation
+      description: Include Windows version and architecture, installation method, and whether both x86 and x64 VC++ redistributables are installed. For execution defects, include the game or tool version.
+      placeholder: |
+        Windows version and architecture:
+        Installation method: WinGet, release ZIP, or source build
+        VC++ redistributables:
+        Game or tool version, if relevant:
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and command
+      description: Give the smallest reproduction and exact command with private values redacted. State whether you used the default Environment Root or --environment. Do not rerun a destructive operation just to complete this form.
+      placeholder: |
+        Environment Root selection:
+        Steps:
+        Command:
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Describe what you expected and what happened. For installation, distinguish additional selections required, preview, and completed installation. For conflicts, include resolution_status and relevant problems.
+      placeholder: |
+        Expected:
+        Actual:
+    validations:
+      required: true
+  - type: textarea
+    id: command-output
+    attributes:
+      label: Exit status and command output
+      description: Include the exit status, stdout, and stderr separately. Capture $LASTEXITCODE immediately after mods in PowerShell. Preserve error codes, warnings, and any diagnostic session ID. If output or status is unavailable, say why.
+      render: text
+      placeholder: |
+        Exit status:
+        stdout:
+        stderr:
+    validations:
+      required: true
+  - type: input
+    id: diagnostic-session
+    attributes:
+      label: Diagnostic Session ID
+      description: >-
+        Copy the UUID from `diagnostic session: UUID` in stderr or the matching log filename. Leave blank if no session was created.
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostic-evidence
+    attributes:
+      label: Diagnostic logs or reason they are unavailable
+      description: |
+        Use the failing command's <Environment Root>\logs\<UUID>.jsonl file, not an unrelated command's session.
+        Paste a redacted excerpt in a fenced code block, or attach a reviewed copy as .txt if GitHub rejects .jsonl.
+        Preserve timestamps, event names, error codes, and the session UUID where present. Redact personal paths, usernames, credentials, and private arguments consistently.
+        Include relevant session boundary records and records around the failure. State if the excerpt is incomplete.
+        If logs are unavailable, say why, such as --log-level off, logging setup failure, or failure before session creation.
+        Do not attach the entire logs directory, saves, mod archives, or an unreviewed support bundle. Logs are not required to report a defect.
+      placeholder: Paste relevant redacted records, attach a reviewed file, or explain why logs are unavailable.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy-review
+    attributes:
+      label: Evidence review
+      options:
+        - label: I reviewed the report and attachments and removed secrets and personal information I do not want to publish.
+          required: true
