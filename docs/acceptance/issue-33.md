@@ -1,6 +1,6 @@
 # Issue 33 acceptance evidence ledger
 
-Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. CLI-only `v0.1.0` is published; public bytes, bounded package/source audit and existing-host portable install/help/version/removal passed. Winget remains pending.** Earlier game and synthetic runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. The owner also confirmed selected-Mod-Environment save-view isolation and return from prior runs. No additional game run is required for this aspect; Winget validation/install/alias/uninstall and human-controlled submission remain pending. Older chronological checkpoints below are historical and revision-bound.
+Status (2026-09-28): **CLI-only MVP candidate built; bounded synthetic scenarios, human same-Mod-Environment save/reload, and representative weather-mod save/reload passed. The owner confirmed visible changes and acceptable qualitative performance. CLI-only `v0.1.0` is published; public bytes, bounded package/source audit and existing-host portable install/help/version/removal passed. Winget validation and the configured-`tar` install/alias/uninstall check passed; default Shell extraction failed and submission remains pending.** Earlier game and synthetic runtime evidence remains pinned to source `96f0c91800d2cb6f2a9a8bef8668eceb60a86665`, ZIP SHA-256 `8a092ca62d3001c85b67cfa42635d8457b759364d604680bca884a6aab75906c`. Recorded game quits returned `0xC0000005`; the anomaly remains unattributed, not a clean-exit pass or proof of a manager defect. The owner also confirmed selected-Mod-Environment save-view isolation and return from prior runs. No additional game run is required for this aspect. Human-controlled Winget submission remains pending; the local result does not establish default Shell extraction or pristine-host dependency installation. Older chronological checkpoints below are historical and revision-bound.
 
 ## Current closeout checklist — 2026-09-28
 
@@ -36,15 +36,19 @@ historical; their pending statements do not reopen completed checks.
   and installed x86/x64 VC runtimes. All 24 package files and nine protected
   snapshots matched; only the fresh extracted installation was removed.
   This is existing-host evidence, not a pristine OS or undeclared-dependency
-  absence claim. It does not replace the remaining Winget install/alias checks.
+  absence claim. It is separate from the configured-`tar` Winget check recorded below.
 - [x] Record explicit owner approval for CLI-only `v0.1.0` stable publication,
   stable workflow enablement and release PR #36 merge. Preview and Winget remain
   false-gated; this approval does not authorize Winget submission.
 - [x] Publish and independently verify the real `v0.1.0` ZIP/checksum bytes.
   The actual stable URL/hash are recorded below, separate from the old candidate.
   No Winget manifest validation or submission is implied.
-- [ ] Validate the initial `Reilley64.Mods` Winget manifest and clean-target
-  install/alias/uninstall, then obtain the human-controlled initial submission.
+- [x] Validate the hand-authored `Reilley64.Mods` manifest and complete the
+  owner-approved existing-host Winget install/alias/uninstall check with the
+  supported `tar` extractor. Restore original settings; preserve the failed
+  default Shell attempt. This is not pristine-host or default-extractor proof.
+- [ ] Obtain the human-controlled initial Winget submission. Submission and
+  automated updates remain unapproved; do not close #33 from local testing alone.
 
 Publication/public-delivery/Winget proof necessarily follows the owner's
 publication decision; it is not silently claimed as prepublication evidence.
@@ -55,8 +59,9 @@ CLI-only `v0.1.0` approval now authorizes release PR #36 merge and stable workfl
 enablement, but not Winget submission. This current status supersedes historical
 pending-approval and disabled-stable notes below. PRs #103, #107 and #36 are
 merged. Stable publication and bounded portable lifecycle are now verified;
-issue #33 remains open for Winget validation/install/alias/uninstall and the
-human-controlled initial submission. Winget submission is not yet authorized.
+issue #33 remains open for the human-controlled initial Winget submission.
+The configured-`tar` local result does not erase the default Shell failure.
+Winget submission is not yet authorized.
 CLI Ctrl+C and disconnected rebuilding remain owner-waived/unverified, MCP is
 post-MVP #105, and AV diagnosis remains optional for the approved functional
 credit. No numeric performance threshold or new upstream filesystem harness is
@@ -64,6 +69,58 @@ required. Historical main CI did not execute Rust/native/x86 steps in
 [run 36358188085](https://github.com/Reilley64/mods/actions/runs/36358188085);
 retain the separate passing exact-head issue-branch runs rather than transferring
 coverage. No credentials blocker has been established.
+
+## Local Winget validation and configured-tar lifecycle — 2026-09-28
+
+The owner approved local testing without submission, then explicitly selected
+`officepc\reill` / SID1003. SSH identity, actual Documents/Local Known Folders
+and elevated context were measured. This is the existing Windows 11 host with
+WinGet `1.29.380`, not a pristine installation. Earlier Prime/SID1005 setup and
+catalog failures remain preserved; they do not describe this successful run.
+
+- The three **hand-authored** manifest files use the verified public `v0.1.0`
+  URL/hash above, x64 ZIP/nested portable `mods.exe`, alias `mods`, Windows 11
+  minimum and both VC runtime dependencies. Native validation exited 0. This
+  is not WingetCreate output; validation explicitly did not validate dependencies.
+- Both exact VC package IDs were then recognized through the `winget` source
+  at `14.51.36247.0`. Normal dependency processing used `--dependency-source winget`,
+  not a dependency bypass. Existing runtime snapshots remained unchanged; no
+  missing-runtime installation or exhaustive dependency-absence claim follows.
+- Default Shell attempt `C:/Users/reill/r3winget-v0.1.0-lifecycle-01` failed at
+  archive extraction: WinGet `0x8a15005c`, underlying Windows Shell
+  `IFileOperation::PerformOperations` `0x8000FFFF`. Hash verification and archive
+  malware scan passed. No successful install, alias or uninstall is credited.
+  No root cause or general default-extractor compatibility conclusion is claimed.
+- The owner approved one fresh retry, root
+  `C:/Users/reill/r3winget-v0.1.0-lifecycle-02`, with temporary
+  `installBehavior.archiveExtractionMethod: tar`. The native log confirms
+  `C:/Windows/System32/tar.exe`; measured bsdtar/libarchive version was `3.8.8`.
+  **Configured-tar install, alias help/version and native uninstall all exited 0.**
+  Version stdout was exactly `mods 0.1.0` plus LF.
+- All 24 published payload files and four directories matched the public ledger.
+  WinGet's separate hidden `Reilley64.Mods__DefaultSource.db` was recorded and
+  retained until native uninstall; it is generated metadata, not a release file.
+  The verified new user registration and registered-PATH alias belonged to this
+  test. After uninstall, the package, registration and alias were absent.
+- All 11 protected snapshots matched SHA-256
+  `b14604a9c36bb9c85bcc3a93adae768951a1a4ba7f3f810c8cd0565fd916b5f1`.
+  They cover the Game Installation/Steam Data, Steam manifest and reill's actual
+  FalloutNV Documents/Local state. Existing runtime, registration and PATH state
+  was checked separately. No game or runtime-hook integration was exercised.
+- Inner and outer receipts report success. `LocalManifestFiles` was restored to
+  false, all other admin settings matched, and the exclusively created temporary
+  user-settings file was removed only after its exact hash matched. A separate
+  current-state check confirmed original settings-file absence, package/alias
+  absence and no named product/tool process. The failed Shell root, safe test
+  fixtures, logs and a hash-verified copy of its native download remain retained.
+
+Evidence and reviews: `/tmp/mods33-winget-local/`, including `FAILURE-AUDIT.md`
+and `tar-retry/`; original Windows receipts remain under both lifecycle roots
+and `C:/Users/reill/mods33-winget-v0.1.0-artifacts-01/`. The archive and manifest
+bytes were not changed to make the retry pass. This result is **configured-tar
+only**, not a default Shell or pristine-host pass. No manifest was submitted and
+no automated Winget update gate was enabled. Human-controlled bootstrap remains
+outstanding; no further game test is required.
 
 ## Published stable package and portable lifecycle — 2026-09-28
 
@@ -510,7 +567,7 @@ for its recorded fixture.
 | Real game/profile/save | Human same-environment and weather save/reload passed with stable owned seed/new save, source snapshots and explicit normal-Quit confirmation. | Selected-Mod-Environment save-view isolation/return is also passed by explicit owner confirmation of prior runs; no new instrumented A/B/A receipt is claimed. AV statuses remain unattributed, not clean exits. |
 | Performance | Owner confirmed visible change and performance fine after the baseline/modded comparison. | Qualitative credit only; no measured startup time, general-scale benchmark or numeric threshold claim. |
 | Diagnostics/cancellation | CLI automated checks remain recorded; Ctrl+C owner-waived/unverified. | MCP checks are deferred to #105; no new native fault-injection harness. |
-| Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency is resolved and CLI-only `v0.1.0` publication is owner-approved. Actual public bytes and existing-host portable lifecycle now passed; Winget validation/install/alias/uninstall and human bootstrap remain open. |
+| Distribution/release | Pinned package/source/connected rebuild, owned extraction/help/version/removal and exact-head issue-branch CI passed within their limits. | Release PR version consistency is resolved and CLI-only `v0.1.0` publication is owner-approved. Actual public bytes, existing-host portable lifecycle and configured-tar Winget validation/install/alias/uninstall passed. Default Shell extraction failed; human-controlled Winget submission remains open and unapproved. |
 
 The detailed requirements, current CI caveats and authorization boundaries are in
 the current closeout checklist above. Historical non-game checkpoints are not
