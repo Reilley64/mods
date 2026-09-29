@@ -33,7 +33,6 @@ pub use environment::ScanEnvironmentConflicts;
 pub use environment::WriteInstallationChunk;
 pub use execution::AdapterState;
 pub use execution::CheckProfileState;
-pub use execution::CloseVirtualFileSystem;
 pub use execution::CreateVirtualFileSystem;
 pub use execution::ExecutionProfile;
 pub use execution::ExecutionProfileProjection;

@@ -117,9 +117,6 @@ impl ExecutionAdapter {
 					))
 				},
 			),
-			close_virtual_file_system: Arc::new(|file_system| {
-				completed(close_virtual_file_system(file_system))
-			}),
 			launch_program: Arc::new({
 				let adapter = adapter.clone();
 				move |file_system, target| completed(adapter.launch_program(file_system, target))
@@ -373,12 +370,6 @@ fn create_virtual_file_system(
 		.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
 
 	Ok(VirtualFileSystem(AdapterState::new(view)))
-}
-
-fn close_virtual_file_system(file_system: VirtualFileSystem) -> Result<(), ErrorMarker> {
-	let view: VirtualGameView = file_system.0.downcast().ok_or_else(foreign_handle)?;
-
-	view.close().context(ErrorMarker::vfs_failed().with_phase("cleanup"))
 }
 
 async fn supervise_program(

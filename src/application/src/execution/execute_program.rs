@@ -2,7 +2,6 @@ use crate::ErrorMarker;
 use crate::execution::ExecutionWarning;
 use crate::execution::RetainedExecutionInis;
 use crate::ports::CheckProfileState;
-use crate::ports::CloseVirtualFileSystem;
 use crate::ports::CreateVirtualFileSystem;
 use crate::ports::FinishProgramOutput;
 use crate::ports::LaunchProgram;
@@ -35,7 +34,6 @@ pub struct ExecuteProgramDependencies {
 	pub project_execution_profile: ProjectExecutionProfile,
 	pub stage_execution_profile: StageExecutionProfile,
 	pub create_virtual_file_system: CreateVirtualFileSystem,
-	pub close_virtual_file_system: CloseVirtualFileSystem,
 	pub launch_program: LaunchProgram,
 	pub supervise_program: SuperviseProgram,
 	pub preserve_execution_profile: PreserveExecutionProfile,
@@ -154,7 +152,7 @@ pub async fn execute_program(
 			.await?;
 
 		if cancellation.is_cancelled() {
-			dependencies.close_virtual_file_system.call((file_system,)).await?;
+			drop(file_system);
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
@@ -286,6 +284,14 @@ mod tests {
 
 	type Steps = Arc<Mutex<Vec<String>>>;
 
+	/// Records when the use case drops an unlaunched file system.
+	struct ClosedOnDrop(Steps);
+	impl Drop for ClosedOnDrop {
+		fn drop(&mut self) {
+			record(&self.0, "close");
+		}
+	}
+
 	fn default_scenario() -> Result<Scenario, ErrorMarker> {
 		Ok(Scenario {
 			providers: vec![
@@ -342,7 +348,6 @@ mod tests {
 		let prepared = record_step("prepare");
 		let projected = record_step("project");
 		let staged = record_step("stage");
-		let closed = record_step("close");
 		let launched = record_step("launch");
 		let supervised = record_step("supervise");
 		let preserved = record_step("preserve");
@@ -396,15 +401,12 @@ mod tests {
 					record(&created, format!("create:{output}"));
 					if scenario.cancel_after_file_system {
 						cancellation.cancel();
+						let file_system = ClosedOnDrop(created.clone());
+						return complete(Ok(VirtualFileSystem(AdapterState::new(file_system))));
 					}
 					complete(Ok(VirtualFileSystem(AdapterState::new("file system"))))
 				},
 			),
-			close_virtual_file_system: Arc::new(move |file_system: VirtualFileSystem| {
-				assert_eq!(file_system.0.downcast::<&str>(), Some("file system"));
-				closed();
-				complete(Ok(()))
-			}),
 			launch_program: Arc::new(move |file_system: VirtualFileSystem, target: LaunchTarget| {
 				assert_eq!(file_system.0.downcast::<&str>(), Some("file system"));
 				assert_eq!(target.0.downcast::<&str>(), Some("target"));

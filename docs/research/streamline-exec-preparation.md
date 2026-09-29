@@ -52,12 +52,13 @@ The application `execute_program` use case now composes these ports. All ports h
 3. `ProjectExecutionProfile`: platform profile directories, `build_profile_configuration`, and advisory plugin logging.
 4. `StageExecutionProfile`: temporary INIs.
 5. `CreateVirtualFileSystem`: view configuration and usvfs setup. It keeps the existing cancellation checkpoint between validation and native setup.
-6. `CloseVirtualFileSystem`: closes an unlaunched view after cancellation.
-7. `LaunchProgram`: private stream setup, hooked launch, and native error mapping.
-8. `SuperviseProgram`: supervision, the Job drain query, and release of the process.
-9. `PreserveExecutionProfile`: INI preservation.
-10. `FinishProgramOutput`: joins private output drains.
-11. `CheckProfileState`: the post-run check.
+6. `LaunchProgram`: private stream setup, hooked launch, and native error mapping.
+7. `SuperviseProgram`: supervision, the Job drain query, and release of the process.
+8. `PreserveExecutionProfile`: INI preservation.
+9. `FinishProgramOutput`: joins private output drains.
+10. `CheckProfileState`: the post-run check.
+
+A later change removed the `CloseVirtualFileSystem` port. When cancellation arrives after the file system is created, the use case drops the handle and returns `operation_cancelled` as before. `VirtualGameView` closes its session in `Drop`. The one accepted behavior change: a native teardown failure on this path is no longer reported as `vfs_failed` with phase `cleanup`. As before, a failed teardown keeps the session gate set and the native code loaded.
 
 `RunManagedProgram` is removed. The use case owns the step order, the output-target rule (the Data mod must exist and be enabled), the mapping from `ProfileWarning` to `ExecutionWarning`, progress events, cancellation checks between steps, retention of the staged profile on failure, and forced-cancellation mapping. `ProfileWarning` moved from `infrastructure-execution` into application ports, so infrastructure builds the application type and the use case maps it. Native error-to-marker mapping stays in the adapters.
 
@@ -89,7 +90,7 @@ None of this code compiles on macOS. It was checked by reading only.
 
 ### Validation
 
-- The application use-case tests use fake ports. They cover step order and progress events, warning mapping, Overwrite and Data mod output targets, missing and disabled output targets, cancellation before start and after VFS creation (close, no launch, retained INIs), an undrained Job, an unknown drain state, and a failed undrained supervision (all retained). They also cover a drained supervision failure (preserved first, not retained), failed preservation (retained), forced cancellation (after preserve, finish, and an uncancelled post-run check), and cause preservation. 9 tests.
+- The application use-case tests use fake ports. They cover step order and progress events, warning mapping, Overwrite and Data mod output targets, missing and disabled output targets, cancellation before start and after VFS creation (handle dropped, no launch, retained INIs), an undrained Job, an unknown drain state, and a failed undrained supervision (all retained). They also cover a drained supervision failure (preserved first, not retained), failed preservation (retained), forced cancellation (after preserve, finish, and an uncancelled post-run check), and cause preservation. 9 tests.
 - CLI runner tests use the new entry point.
 - Focused run (use case and CLI exec tests): 16 passed, `/tmp/exec-ports-focused.log`. Full `bun run check` passed with 451 Rust tests, 2 release-version tests, and 119 tool tests, `/tmp/exec-ports-check.log`. `git diff --check` passed. Windows compilation and the new Windows test remain unverified here.
 
@@ -99,7 +100,7 @@ The gate remains non-clean. The CLI crate now enables `fn_traits`, so `runner.rs
 
 | File | Rule | Disposition |
 | --- | --- | --- |
-| `src/application/src/execution/execute_program.rs` | Cancellation state preservation | Accepted. The frozen contract keeps existing behavior: an unlaunched view is closed on cancellation, and forced cancellation reports `cleanup` after preservation and the post-run check. The staged profile is retained, not removed. |
+| `src/application/src/execution/execute_program.rs` | Cancellation state preservation | Accepted. An unlaunched view is dropped on cancellation, which releases the native session the same way the old explicit close did; the user approved not reporting its teardown error. Forced cancellation reports `cleanup` after preservation and the post-run check. The staged profile is retained, not removed. |
 | `src/application/src/execution/execute_program.rs` | Cancellation propagation and checkpoints | Accepted. The parent contract assigns checks between steps to the use case. Each is an inline `is_cancelled()` guard. The original token reaches every port. |
 | `src/application/src/execution/execute_program.rs` | Test public behavior | Accepted. Tests call the public use case with fake ports. They assert project-owned order, retention, and warning policy, not dependency internals. |
 | `src/application/src/execution/execute_program.rs` | Phase spacing; Narrow custom implementations; Use-case declaration order | Phase spacing fixed between resolve, prepare, projection, and warning mapping. The rest is accepted: the file declares Dependencies, Output, Error, then the instrumented function, and it adds no general-purpose facility. |
@@ -115,6 +116,8 @@ The gate remains non-clean. The CLI crate now enables `fn_traits`, so `runner.rs
 | `src/presentation/cli/src/main.rs` | Callable port invocation | Accepted as a false positive. `resources.execute_program(...)` is an inherent composition factory, not an application port call. |
 | `src/presentation/cli/src/runner.rs`, `main.rs` | Use-case parameters; Use-case declaration order; Narrow custom implementations | Accepted as inapplicable. The runner holds a presentation-owned entry-point type and passes cancellation last. |
 | `src/infrastructure/environment/src/execution_preparation.rs`, `export.rs` | Phase spacing; Use-case parameters | Already recorded for the INI fix in commit `1e37225`. Unchanged here. |
+| `src/application/src/execution/execute_program.rs` | Cancellation propagation and checkpoints; Test public behavior; Use-case parameters | Close-port removal: accepted. The checkpoint after file-system creation is still an inline guard owned by the use case, as the parent contract requires. The test fixture's drop recorder shows that the use case drops the handle; it does not inspect adapter internals. Dependencies stay first and cancellation stays last. |
+| `src/application/src/ports/execution.rs`, `native.rs` | Use-case parameters | Close-port removal: accepted as inapplicable. Only a port type and its adapter were removed. |
 
 ## INI text lines without an assignment
 

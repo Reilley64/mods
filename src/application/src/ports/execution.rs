@@ -80,6 +80,7 @@ pub struct StagedExecutionProfile {
 	pub state: AdapterState,
 }
 
+/// A configured virtual file system. Dropping it before launch closes it.
 pub struct VirtualFileSystem(pub AdapterState);
 
 /// A launched program that has not been resumed yet.
@@ -123,7 +124,6 @@ pub type CreateVirtualFileSystem = Arc<
 		+ Send
 		+ Sync,
 >;
-pub type CloseVirtualFileSystem = Arc<dyn Fn(VirtualFileSystem) -> PortFuture<()> + Send + Sync>;
 pub type LaunchProgram = Arc<dyn Fn(VirtualFileSystem, LaunchTarget) -> PortFuture<RunningProgram> + Send + Sync>;
 /// Fails only for a handle from another adapter. Supervision and drain failures
 /// are reported inside [`ProgramSupervision`] after the program handle is released.
