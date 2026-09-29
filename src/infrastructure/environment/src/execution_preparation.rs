@@ -1,4 +1,5 @@
 use crate::EnvironmentAdapter;
+use crate::ExecutionInis;
 use crate::active_code_page::decode as decode_active_code_page;
 use crate::profile::MAX_PROFILE_BYTES;
 use crate::profile::PROFILE_FILES;
@@ -251,6 +252,47 @@ impl EnvironmentAdapter {
 			consumed_bytes,
 			file_lengths,
 		})
+	}
+
+	/// # Errors
+	/// Retains partial INI derivation on failure. Caller owns the files through Job drain.
+	pub fn derive_execution_inis(
+		&self,
+		root: &EnvironmentRoot,
+		prepared: &PreparedExecution,
+		cancellation: &CancellationToken,
+	) -> Result<ExecutionInis, ErrorMarker> {
+		ExecutionInis::create(
+			&prepared.profile_directory,
+			prepared.game_binding.game_directory().as_path(),
+			&root.as_path().join("temp"),
+			cancellation,
+		)
+	}
+
+	/// # Errors
+	/// Rejects changed execution inputs while admitting only this live INI owner.
+	pub fn revalidate_execution_with_inis(
+		&self,
+		root: &EnvironmentRoot,
+		prepared: &PreparedExecution,
+		inis: &ExecutionInis,
+		cancellation: &CancellationToken,
+	) -> Result<(), ErrorMarker> {
+		inis.revalidate(prepared.game_binding.game_directory().as_path(), cancellation)?;
+
+		let current = self.prepare_execution_with_spool(
+			root,
+			&prepared.game_binding,
+			inis.directory(),
+			cancellation,
+		)?;
+		if current != *prepared {
+			return Err(report!(ErrorMarker::environment_invalid(Some(
+				"execution_state_changed"
+			))));
+		}
+		Ok(())
 	}
 
 	/// Refuses changed inputs immediately before process creation.

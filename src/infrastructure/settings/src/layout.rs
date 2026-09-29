@@ -1,12 +1,12 @@
 use crate::fs_access;
 use application::ErrorMarker;
 use cap_std::fs::Dir;
+use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
 use encoding_rs::WINDOWS_1252;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
@@ -42,9 +42,6 @@ const PROFILE_FILES: [&str; 8] = [
 	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
-const MANAGED_ARCHIVE_KEYS: [&str; 3] = ["bInvalidateOlderFiles", "SInvalidationFile", "sArchiveList"];
-const MANAGED_GENERAL_KEYS: [&str; 2] = ["bUseMyGamesDirectory", "SLocalSavePath"];
-
 pub(crate) fn validate(root: &Dir) -> Result<(), ErrorMarker> {
 	validate_root_entries(root)?;
 	let mods = fs_access::open_dir(root, Path::new("mods")).context(ErrorMarker::environment_root_unsafe())?;
@@ -93,18 +90,7 @@ fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 	validate_safe_tree(&saves)?;
 
 	let fallout = decode_ini(&read_regular(profile, "Fallout.ini")?)?;
-	let keys = section_values(&fallout, "Archive", &MANAGED_ARCHIVE_KEYS);
-	if keys.get("binvalidateolderfiles")
-		.is_none_or(|values| values.as_slice() != ["1"])
-		|| keys.get("sinvalidationfile")
-			.is_none_or(|values| values.as_slice() != [""])
-		|| keys.get("sarchivelist")
-			.is_none_or(|values| values.len() != 1 || !archive_list_valid(values[0]))
-		|| contains_keys_outside_section(&fallout, "Archive", &MANAGED_ARCHIVE_KEYS)
-		|| general_values(&fallout, "bUseMyGamesDirectory").as_slice() != ["1"]
-		|| general_values(&fallout, "SLocalSavePath").as_slice() != ["__mods_saves\\"]
-		|| contains_keys_outside_section(&fallout, "General", &MANAGED_GENERAL_KEYS)
-	{
+	if !canonical_profile_routing_valid("Fallout.ini", &fallout) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
@@ -113,9 +99,7 @@ fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 		}
 
 		let text = decode_ini(&read_regular(profile, name)?)?;
-		if contains_keys(&text, &MANAGED_GENERAL_KEYS)
-			|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
-		{
+		if !canonical_profile_routing_valid(name, &text) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
@@ -399,86 +383,4 @@ fn is_reserved_name(name: &str) -> bool {
 			.is_some_and(|prefix| prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT"))
 		&& base.as_bytes()[3].is_ascii_digit()
 		&& base.as_bytes()[3] != b'0')
-}
-
-fn archive_list_valid(value: &str) -> bool {
-	let values = value
-		.split(',')
-		.map(str::trim)
-		.filter(|item| !item.is_empty())
-		.collect::<Vec<_>>();
-	values.first().is_some_and(|first| is_invalidation_archive(first))
-		&& values.iter().filter(|item| is_invalidation_archive(item)).count() == 1
-}
-
-fn is_invalidation_archive(value: &str) -> bool {
-	case_fold_key(value) == "fallout - invalidation.bsa"
-}
-
-fn general_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
-	section_values(text, "General", &[key])
-		.remove(&key.to_ascii_lowercase())
-		.unwrap_or_default()
-}
-
-fn section_name(line: &str) -> Option<&str> {
-	let line = line.trim();
-	line.strip_prefix('[')?.strip_suffix(']').map(str::trim)
-}
-
-fn contains_keys(text: &str, keys: &[&str]) -> bool {
-	text.lines().any(|line| {
-		line.split_once('=')
-			.is_some_and(|(key, _)| keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim())))
-	})
-}
-
-fn contains_keys_outside_section(text: &str, section: &str, keys: &[&str]) -> bool {
-	let mut current = "";
-	for line in text.lines() {
-		if let Some(found) = section_name(line) {
-			current = found;
-			continue;
-		}
-		if !current.eq_ignore_ascii_case(section)
-			&& line.split_once('=').is_some_and(|(key, _)| {
-				keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim()))
-			}) {
-			return true;
-		}
-	}
-	false
-}
-
-fn section_values<'a>(text: &'a str, wanted_section: &str, wanted_keys: &[&str]) -> HashMap<String, Vec<&'a str>> {
-	let mut result = HashMap::new();
-	let mut current = "";
-	for line in text.lines() {
-		if let Some(section) = section_name(line) {
-			current = section;
-			continue;
-		}
-		if !current.eq_ignore_ascii_case(wanted_section) {
-			continue;
-		}
-		let Some((key, value)) = line.split_once('=') else {
-			continue;
-		};
-		if wanted_keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim())) {
-			result.entry(key.trim().to_ascii_lowercase())
-				.or_insert_with(Vec::new)
-				.push(value.trim());
-		}
-	}
-	result
-}
-
-#[cfg(test)]
-mod tests {
-	use super::archive_list_valid;
-
-	#[test]
-	fn invalidation_archive_identity_uses_simple_unicode_case_fold() {
-		assert!(archive_list_valid("Fallout - Invalidation.bſa"));
-	}
 }

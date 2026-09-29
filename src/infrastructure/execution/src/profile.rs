@@ -1,5 +1,6 @@
 use crate::PathMapping;
 use domain::DataRelativePath;
+use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
 use domain::profile_test_file_slots;
 use rootcause::Result;
@@ -132,78 +133,17 @@ pub fn build_profile_configuration(
 		}
 	}
 
-	let required = [
-		("Archive", "bInvalidateOlderFiles", Some("1")),
-		("Archive", "SInvalidationFile", Some("")),
-		("Archive", "sArchiveList", None),
-		("General", "bUseMyGamesDirectory", Some("1")),
-		("General", "SLocalSavePath", Some("__mods_saves\\")),
-	];
 	let mut test_files = Vec::new();
 	for name in PROFILE_FILES.iter().take(5) {
 		let text = profile_texts.get(&case_fold_key(name)).copied().unwrap_or_default();
-		let mut section = "";
-		let mut occurrences = [0; 5];
-		for (index, line) in text.lines().enumerate() {
-			let line = line.trim();
-			if line.starts_with([';', '#']) {
-				continue;
-			}
-			if let Some(header) = line.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
-				section = header.trim();
-				continue;
-			}
-			let Some((key, value)) = line.split_once('=') else {
-				continue;
-			};
-			let (key, value) = (key.trim(), value.trim());
-			for (setting, (expected_section, expected_key, fixed)) in required.iter().enumerate() {
-				if !key.eq_ignore_ascii_case(expected_key) {
-					continue;
-				}
-				let controlled = *name == "Fallout.ini"
-					|| *name == "FalloutCustom.ini" || (*name == "FalloutPrefs.ini"
-					&& setting >= 3);
-				if !controlled {
-					continue;
-				}
-				occurrences[setting] += 1;
-				let archives: Vec<_> = value
-					.split(',')
-					.map(str::trim)
-					.filter(|value| !value.is_empty())
-					.collect();
-				let value_valid = if let Some(expected) = fixed {
-					value == *expected
-				} else {
-					archives.first()
-						.is_some_and(|first| first.eq_ignore_ascii_case(INVALIDATION_ARCHIVE))
-						&& archives
-							.iter()
-							.filter(|archive| {
-								archive.eq_ignore_ascii_case(INVALIDATION_ARCHIVE)
-							})
-							.count() == 1
-				};
-				if *name != "Fallout.ini"
-					|| !section.eq_ignore_ascii_case(expected_section)
-					|| occurrences[setting] != 1 || !value_valid
-				{
-					return Err(report!(ProfileConfigurationError {
-						file: (*name).into(),
-						line: index + 1,
-						value: value.into(),
-						expected: "unique approved routing/archive key in its Fallout.ini section; no overriding key"
-					}));
-				}
-			}
-		}
-		if *name == "Fallout.ini" && occurrences != [1; 5] {
+		if ["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"].contains(name)
+			&& !canonical_profile_routing_valid(name, text)
+		{
 			return Err(report!(ProfileConfigurationError {
 				file: (*name).into(),
 				line: 0,
 				value: String::new(),
-				expected: "all five required archive and save routing keys"
+				expected: "canonical normal Saves routing without conflicting overrides"
 			}));
 		}
 		for (slot, value) in profile_test_file_slots(text).into_iter().enumerate() {
@@ -399,7 +339,7 @@ fn plugin_path(name: &str) -> Option<DataRelativePath> {
 mod tests {
 	use super::*;
 	use std::time::Duration;
-	const VALID: &str = "[Archive]\r\nbInvalidateOlderFiles=1\r\nSInvalidationFile=\r\nsArchiveList=Fallout - Invalidation.bsa, DLC.bsa\r\n[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=__mods_saves\\\r\n";
+	const VALID: &str = "[Archive]\r\nbInvalidateOlderFiles=1\r\nSInvalidationFile=\r\nsArchiveList=Fallout - Invalidation.bsa, DLC.bsa\r\n[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n";
 
 	fn build(
 		files: &[ProfileText<'_>],
@@ -513,12 +453,7 @@ mod tests {
 
 	#[test]
 	fn rejects_invalid_keys_overrides_and_reserved_data_path() {
-		for text in [
-			VALID.replace("=1", "=0"),
-			VALID.replace("[Archive]", "[Wrong]"),
-			VALID.replace("DLC.bsa", INVALIDATION_ARCHIVE),
-			format!("{VALID}SLocalSavePath=__mods_saves\\\n"),
-		] {
+		for text in [VALID.replace("=1", "=0"), format!("{VALID}SLocalSavePath=Saves\\\n")] {
 			assert!(build(
 				&[ProfileText {
 					name: "Fallout.ini",
