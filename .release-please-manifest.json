@@ -1,5 +1,5 @@
 {
-  ".": "0.1.0",
+  ".": "0.1.1",
   "src/domain": "0.1.0",
   "src/application": "0.1.0",
   "src/infrastructure/environment": "0.1.0",

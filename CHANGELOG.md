@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/Reilley64/mods/compare/v0.1.0...v0.1.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* publish Windows-compatible runtime and source packages ([#125](https://github.com/Reilley64/mods/issues/125)) ([4d503df](https://github.com/Reilley64/mods/commit/4d503df4b8cecf85173e37bbfb2bd6a780105d2b)), closes [#33](https://github.com/Reilley64/mods/issues/33)
+* sync CLI skill version with product releases ([#127](https://github.com/Reilley64/mods/issues/127)) ([2911fea](https://github.com/Reilley64/mods/commit/2911fea9de902e83bce28291e39c0a843a942e88)), closes [#114](https://github.com/Reilley64/mods/issues/114)
+
 ## 0.1.0 (2026-09-28)
 
 
