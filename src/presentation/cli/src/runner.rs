@@ -22,14 +22,15 @@ use application::conflicts::inspect_mod_conflicts;
 use application::conflicts::list_effective_conflicts;
 use application::environment::InitializeEnvironmentDependencies;
 use application::environment::initialize_environment;
-use application::execution::ExecuteProgramDependencies;
+use application::execution::ExecuteProgramError;
+use application::execution::ExecuteProgramOutput;
 use application::execution::ExecutionWarning;
-use application::execution::execute_program;
 use application::export::ExportEnvironmentDependencies;
 use application::export::export_environment;
 use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
 use application::installation::install_archive;
+use application::ports::PortFuture;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
 use application::settings::SetGameDirectoryDependencies;
@@ -59,6 +60,19 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
+/// Runs the composed exec use case. Composition owns the dedicated thread that
+/// keeps native execution calls from overlapping.
+pub(crate) type ExecuteProgram = Box<
+	dyn FnOnce(
+			OutputTarget,
+			Option<WorkingDirectory>,
+			Program,
+			Vec<ProgramArgument>,
+			CancellationToken,
+		) -> PortFuture<ExecuteProgramOutput, ExecuteProgramError>
+		+ Send,
+>;
+
 pub(crate) enum CommandDependencies {
 	Initialize(InitializeEnvironmentDependencies),
 	Existing(Box<Dependencies>),
@@ -67,7 +81,7 @@ pub(crate) enum CommandDependencies {
 pub(crate) struct Dependencies {
 	pub(crate) settings: Vec<SettingRecord>,
 	pub(crate) execution_force_cancellation: CancellationToken,
-	pub(crate) execute_program: ExecuteProgramDependencies,
+	pub(crate) execute_program: ExecuteProgram,
 	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
 	pub(crate) list_settings: ListSettingsDependencies,
 	pub(crate) get_setting: GetSettingDependencies,
@@ -477,15 +491,16 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			};
 
 			let signals = operation::ExecutionSignals::new(dependencies.execution_force_cancellation);
-			match execute_program(
-				dependencies.execute_program,
-				output_target,
-				working_directory,
-				program,
-				arguments,
-				signals.cancellation.clone(),
-			)
-			.await
+			match dependencies
+				.execute_program
+				.call_once((
+					output_target,
+					working_directory,
+					program,
+					arguments,
+					signals.cancellation.clone(),
+				))
+				.await
 			{
 				Ok(output) => {
 					let mut stderr = String::new();
@@ -608,7 +623,7 @@ mod tests {
 	use application::conflicts::ListEffectiveConflictsDependencies;
 	use application::conflicts::ScannedConflictProvider;
 	use application::environment::InitializeEnvironmentDependencies;
-	use application::execution::ExecuteProgramDependencies;
+	use application::execution::ExecuteProgramError;
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
 	use application::execution::RetainedExecutionInis;
@@ -775,12 +790,10 @@ mod tests {
 		Dependencies {
 			settings: Vec::new(),
 			execution_force_cancellation: CancellationToken::new(),
-			execute_program: ExecuteProgramDependencies {
-				report_progress: None,
-				run_managed_program: Arc::new(|_, _, _, _, _, _| {
-					Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
-				}),
-			},
+			execute_program: Box::new(|_, _, _, _, _| {
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
+					as PortFuture<_, _>
+			}),
 			initialize_environment: InitializeEnvironmentDependencies {
 				assess_target: Arc::new(|_, _| {
 					Box::pin(async { Ok(InitializationTargetAssessment::Available) })
@@ -941,7 +954,7 @@ mod tests {
 	-> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-		dependencies.execute_program.run_managed_program = Arc::new(|_, _, _, _, _, _| {
+		dependencies.execute_program = Box::new(|_, _, _, _, _| {
 			let mut failure =
 				report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"));
 			failure.children_mut().push(report!(RetainedExecutionInis {
@@ -949,7 +962,7 @@ mod tests {
 			})
 			.into_dynamic()
 			.into_cloneable());
-			Box::pin(async move { Err(failure) }) as PortFuture<_>
+			Box::pin(async move { Err(failure.context(ExecuteProgramError)) }) as PortFuture<_, _>
 		});
 
 		let outcome = run(
@@ -1034,22 +1047,21 @@ mod tests {
 		let temp = TempDir::new()?;
 		for status in [0, 1, 125, 126, 127, 256, 259, 0xC000_0005] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program.run_managed_program =
-				Arc::new(move |target, cwd, program, arguments, _, _| {
-					assert_eq!(target, OutputTarget::Overwrite);
-					assert!(cwd.is_none());
-					assert_eq!(program.as_os_str(), "tool.exe");
-					assert_eq!(
-						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
-						["", "--", "雪"]
-					);
-					Box::pin(async move {
-						Ok(ExecuteProgramOutput {
-							status: ProcessStatus::new(status),
-							warnings: Vec::new(),
-						})
-					}) as PortFuture<_>
-				});
+			dependencies.execute_program = Box::new(move |target, cwd, program, arguments, _| {
+				assert_eq!(target, OutputTarget::Overwrite);
+				assert!(cwd.is_none());
+				assert_eq!(program.as_os_str(), "tool.exe");
+				assert_eq!(
+					arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
+					["", "--", "雪"]
+				);
+				Box::pin(async move {
+					Ok(ExecuteProgramOutput {
+						status: ProcessStatus::new(status),
+						warnings: Vec::new(),
+					})
+				}) as PortFuture<_, _>
+			});
 			let outcome = run(
 				arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe", "", "--", "雪"],
 				temp.path().to_owned(),
@@ -1068,7 +1080,7 @@ mod tests {
 	async fn exec_qualifies_projection_warnings_without_changing_child_output() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-		dependencies.execute_program.run_managed_program = Arc::new(|_, _, _, _, _, _| {
+		dependencies.execute_program = Box::new(|_, _, _, _, _| {
 			Box::pin(async {
 				Ok(ExecuteProgramOutput {
 					status: ProcessStatus::new(259),
@@ -1090,7 +1102,7 @@ mod tests {
 						ExecutionWarning::ProfileStateInvalid,
 					],
 				})
-			}) as PortFuture<_>
+			}) as PortFuture<_, _>
 		});
 
 		let outcome = run(
@@ -1116,9 +1128,10 @@ mod tests {
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let called = Arc::new(AtomicBool::new(false));
 		let observed = called.clone();
-		dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _, _| {
+		dependencies.execute_program = Box::new(move |_, _, _, _, _| {
 			observed.store(true, Ordering::SeqCst);
-			Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
+			Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
+				as PortFuture<_, _>
 		});
 		let outcome = run(
 			arguments![

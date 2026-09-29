@@ -1,3 +1,4 @@
+#![feature(fn_traits)]
 #![forbid(unsafe_code)]
 
 mod commands;
@@ -51,7 +52,7 @@ async fn main() {
 		let execution_force_cancellation = CancellationToken::new();
 		Ok(runner::CommandDependencies::Existing(Box::new(runner::Dependencies {
 			settings: loaded.resolved.settings.clone(),
-			execute_program: resources.execute_program_dependencies(
+			execute_program: resources.execute_program(
 				binding.clone(),
 				startup.to_owned(),
 				execution_force_cancellation.clone(),

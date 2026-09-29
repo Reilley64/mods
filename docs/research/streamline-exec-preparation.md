@@ -41,6 +41,81 @@ The user later approved ignoring unrelated root, cache, and profile entries and 
 
 An intermediate version mistakenly routed export through the lightweight inventory. Export fault-injection tests exposed changed source ordering. The final design restores the original strict preparation and DTO for export. Export tests were not changed to accept that regression.
 
+## Application composes exec through ports
+
+The user chose option A in the [exec discussion](../exec-performance-discussion.md#proposed-redesign-application-composes-exec-through-ports). The user then asked to keep the existing port shape. This is a behavior-preserving refactor. CLI syntax, output, warnings, progress events, error markers, phases, exit codes, cancellation, INI retention, the post-run warning, export, and settings loading do not change.
+
+The application `execute_program` use case now composes these ports. All ports have the usual `Arc<dyn Fn(...) -> PortFuture<T> + Send + Sync>` shape and are invoked with `.call(...)`:
+
+1. `ResolveLaunchTarget`: caller PATH/cwd lookup and argument encoding. It also duplicates the inherited standard streams when output is not captured.
+2. `PrepareLaunchPlan`: modlist, providers, and streaming winner resolution. Conflict resolution stays inside this port.
+3. `ProjectExecutionProfile`: platform profile directories, `build_profile_configuration`, and advisory plugin logging.
+4. `StageExecutionProfile`: temporary INIs.
+5. `CreateVirtualFileSystem`: view configuration and usvfs setup. It keeps the existing cancellation checkpoint between validation and native setup.
+6. `CloseVirtualFileSystem`: closes an unlaunched view after cancellation.
+7. `LaunchProgram`: private stream setup, hooked launch, and native error mapping.
+8. `SuperviseProgram`: supervision, the Job drain query, and release of the process.
+9. `PreserveExecutionProfile`: INI preservation.
+10. `FinishProgramOutput`: joins private output drains.
+11. `CheckProfileState`: the post-run check.
+
+`RunManagedProgram` is removed. The use case owns the step order, the output-target rule (the Data mod must exist and be enabled), the mapping from `ProfileWarning` to `ExecutionWarning`, progress events, cancellation checks between steps, retention of the staged profile on failure, and forced-cancellation mapping. `ProfileWarning` moved from `infrastructure-execution` into application ports, so infrastructure builds the application type and the use case maps it. Native error-to-marker mapping stays in the adapters.
+
+Handles that the application passes between steps (`LaunchTarget`, `LaunchPlan`, `ExecutionProfile`, `StagedExecutionProfile`, `VirtualFileSystem`, `RunningProgram`, `ProgramOutput`) are opaque. Each wraps `AdapterState`, a `Box<dyn Any + Send>`. Handles are `Send` but not `Sync`. Each port consumes or borrows a handle for one step, so native state is never used concurrently. A handle from another adapter fails with `execution_supervision_failed`.
+
+### Execution thread and usvfs `Send`
+
+Composition runs the whole use case on one `spawn_blocking` thread with a current-thread Tokio runtime. `ExecutionAdapter::into_execute_program` builds the ports and calls the use case on that thread. It keeps the tracing dispatcher and span handoff that the old adapter wrapper used. A cancelled request returns `operation_cancelled` before the thread starts. Non-Windows builds return `program_unsupported` at the same point as before. The CLI holds this entry point as a `Send` boxed `FnOnce`.
+
+`VirtualGameView` is now `Send` but not `Sync` (`unsafe impl Send` in `usvfs/mod.rs`). As a result, `HookedProcess` is also `Send`. Evidence from the pinned `usvfs-rs@c23705c` source:
+
+- `usvfsConnectVFS` and `usvfsDisconnectVFS` store and delete the process-global static `context` and `manager` (`src/usvfs_dll/usvfs.cpp`).
+- Every API call locks `HookContext` through `readAccess` or `writeAccess`, and its scoped pointer unlocks before the call returns (`src/usvfs_dll/hookcontext.cpp:131-146`).
+- The RecursiveBenaphore records a thread owner only while one call holds it (`src/usvfs_dll/semaphore.cpp`).
+- The controller path and the shim (`rust/usvfs-sys/native/barrier.cpp`) have no thread-local state and start no threads. The hook manager exists only inside injected children.
+
+So upstream needs calls that never overlap, not a fixed thread. Overlap is prevented by `SESSION_ACTIVE` (one session per process), by the view staying `!Sync`, by every native call taking `&mut self` or `self`, and by the single execution thread.
+
+Residual risk: this conclusion comes from reading source, not from running on Windows. The Windows-only test `session_moves_between_threads_for_configure_launch_and_close` covers it. It configures a real view on one thread, launches a hooked `cmd.exe` on a second thread that reads a mapped file, and finishes the process and closes the session on a third thread. It runs three cycles, then closes an unlaunched view on another thread. The test was not compiled or run on macOS. The parent will run `cargo test --package infrastructure-execution` on Windows for i686 and x86_64. The test and the existing session test share a lock, because `SESSION_ACTIVE` is process-global.
+
+### Windows-only code touched
+
+None of this code compiles on macOS. It was checked by reading only.
+
+- `src/infrastructure/dependencies/src/execution_adapter/native.rs`: rewritten. `ExecutionAdapter::dependencies(&self) -> ExecuteProgramDependencies` replaces `ExecutionAdapter::execute`. New private step functions, plus `NativeLaunchTarget`, `ProgramStreams`, and `NativeProgram`.
+- `src/infrastructure/dependencies/src/execution_adapter.rs`: the `#[cfg(windows)]` branch of `into_execute_program` (replaces `run_port`).
+- `src/infrastructure/execution/src/usvfs/mod.rs`: `unsafe impl Send for VirtualGameView`. The `_thread: PhantomData<Rc<()>>` field is removed. New cross-thread test and a shared session test lock.
+- `src/infrastructure/execution/src/launch_inputs.rs` and `lib.rs`: `ResolvedLaunch` is re-exported under `cfg(windows)`.
+
+### Validation
+
+- The application use-case tests use fake ports. They cover step order and progress events, warning mapping, Overwrite and Data mod output targets, missing and disabled output targets, cancellation before start and after VFS creation (close, no launch, retained INIs), an undrained Job, an unknown drain state, and a failed undrained supervision (all retained). They also cover a drained supervision failure (preserved first, not retained), failed preservation (retained), forced cancellation (after preserve, finish, and an uncancelled post-run check), and cause preservation. 9 tests.
+- CLI runner tests use the new entry point.
+- Focused run (use case and CLI exec tests): 16 passed, `/tmp/exec-ports-focused.log`. Full `bun run check` passed with 451 Rust tests, 2 release-version tests, and 119 tool tests, `/tmp/exec-ports-check.log`. `git diff --check` passed. Windows compilation and the new Windows test remain unverified here.
+
+### Coding-style gate dispositions
+
+The gate remains non-clean. The CLI crate now enables `fn_traits`, so `runner.rs` calls the exec entry point with `.call_once(...)`.
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `src/application/src/execution/execute_program.rs` | Cancellation state preservation | Accepted. The frozen contract keeps existing behavior: an unlaunched view is closed on cancellation, and forced cancellation reports `cleanup` after preservation and the post-run check. The staged profile is retained, not removed. |
+| `src/application/src/execution/execute_program.rs` | Cancellation propagation and checkpoints | Accepted. The parent contract assigns checks between steps to the use case. Each is an inline `is_cancelled()` guard. The original token reaches every port. |
+| `src/application/src/execution/execute_program.rs` | Test public behavior | Accepted. Tests call the public use case with fake ports. They assert project-owned order, retention, and warning policy, not dependency internals. |
+| `src/application/src/execution/execute_program.rs` | Phase spacing; Narrow custom implementations; Use-case declaration order | Phase spacing fixed between resolve, prepare, projection, and warning mapping. The rest is accepted: the file declares Dependencies, Output, Error, then the instrumented function, and it adds no general-purpose facility. |
+| `src/application/src/ports/execution.rs` | Capability modules and public APIs | Accepted. The ports module is the existing capability interface. The handle types are opaque on purpose; their state is private to adapters. |
+| `src/application/src/ports/execution.rs` | Narrow custom implementations | Accepted. `AdapterState` only wraps `Box<dyn Any + Send>` so application signatures carry no infrastructure types. It is not a runtime primitive. |
+| `src/application/src/ports/execution.rs`, `ports/mod.rs` | Use-case parameters | Accepted as inapplicable. These are port type declarations. Every port that takes cancellation takes it last. |
+| `src/infrastructure/dependencies/src/execution_adapter/native.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure adapter functions. Cancellation is last where present. |
+| `src/infrastructure/dependencies/src/execution_adapter/native.rs` | Cancellation propagation and checkpoints | Accepted. The checkpoint between view validation and native setup is the existing infrastructure checkpoint, moved unchanged. |
+| `src/infrastructure/dependencies/src/execution_adapter/native.rs` | Phase spacing; Narrow custom implementations | Phase spacing fixed around projection input, view configuration, and the drain query. The rest is accepted: the code moved from the old adapter and adds no new facility. |
+| `src/infrastructure/dependencies/src/execution_adapter.rs`, `execute_program.rs` | Use-case parameters; Use-case declaration order; Phase spacing | Accepted as inapplicable. These are composition methods, not application use cases. The thread entry keeps the old wrapper's order. |
+| `src/infrastructure/execution/src/usvfs/mod.rs` | Rustdoc format | Accepted as a false positive. The `// SAFETY:` comment before `unsafe impl Send` is the proof format that CODING_STYLE requires, not item documentation. |
+| `src/infrastructure/execution/src/usvfs/mod.rs` | Test public behavior; Phase spacing | Accepted. The Windows test exercises the native session's thread contract, which is a project boundary. Setup, each thread step, and the assertions are separate blocks. |
+| `src/presentation/cli/src/main.rs` | Callable port invocation | Accepted as a false positive. `resources.execute_program(...)` is an inherent composition factory, not an application port call. |
+| `src/presentation/cli/src/runner.rs`, `main.rs` | Use-case parameters; Use-case declaration order; Narrow custom implementations | Accepted as inapplicable. The runner holds a presentation-owned entry-point type and passes cancellation last. |
+| `src/infrastructure/environment/src/execution_preparation.rs`, `export.rs` | Phase spacing; Use-case parameters | Already recorded for the INI fix in commit `1e37225`. Unchanged here. |
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

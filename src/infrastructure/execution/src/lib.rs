@@ -40,6 +40,8 @@ pub use launch_inputs::InheritedStreams;
 #[cfg(any(windows, test))]
 pub use launch_inputs::LaunchInputError;
 #[cfg(windows)]
+pub use launch_inputs::ResolvedLaunch;
+#[cfg(windows)]
 pub use managed::ManagedProcess;
 #[cfg(windows)]
 pub use managed::SupervisedExit;
@@ -57,8 +59,6 @@ pub use profile::ProfileConfigurationError;
 pub use profile::ProfileConfigurationInput;
 #[cfg(any(windows, test))]
 pub use profile::ProfileText;
-#[cfg(any(windows, test))]
-pub use profile::ProfileWarning;
 #[cfg(any(windows, test))]
 pub use profile::VisibleProfileFile;
 #[cfg(any(windows, test))]

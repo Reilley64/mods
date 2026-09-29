@@ -290,11 +290,27 @@ Key constraint: the usvfs session is thread-affine. `usvfs/mod.rs` marks it `Pha
 
 Decision: the user chose A. Implement it on this branch after `211ad59` as a behavior-preserving refactor. Winner resolution stays behind the launch-plan port for now; moving it into a domain accumulator remains a separate open question.
 
+Port shape: the user asked to keep exec ports the same shape as the other application ports (`Arc<dyn Fn + Send + Sync>` returning the Send `PortFuture`) if feasible, rather than `Rc` with a local future. Handles visible to the application become Send opaque tokens. The !Send native state stays in infrastructure on the dedicated execution thread. Thread affinity is then checked at run time rather than by the compiler.
+
+usvfs thread requirement: the pinned usvfs-rs source (c23705c) keeps controller state process-global. Each API call takes its own mutex for the duration of that call only, and the controller path has no thread-local state or creating-thread requirement. The requirement is therefore "no concurrent access", not "same thread". Decision: make `VirtualGameView` Send but not Sync. This needs a documented `unsafe impl Send` in the usvfs FFI module, relying on the existing one-session-per-process guard. The token registry is dropped, and exec ports keep the normal Arc/Send shape. The whole use case still runs on one dedicated blocking thread. Residual risk: this Windows-only FFI change is verified only by the Windows build, not by a test run.
+
 Recommendation was A. Also open: whether winner resolution itself should become domain logic. Infrastructure would stream entries into a domain accumulator, which keeps the approved single-traversal behavior. Status: proposal only, awaiting user choice before implementation.
 
 ### Bug: vanilla multi-line INI text rejected
 
 On the user's Windows profile, exec failed before launch with environment_invalid. `profile_ini_valid` rejects lines that are neither comments, section headers, nor `key=value`. The vanilla Fallout.ini and FalloutPrefs.ini contain the game's multi-line `SMasterMismatchWarning` text: two continuation lines without `=` (Fallout.ini lines 696–697, FalloutPrefs.ini lines 764–765). The game's reader ignores such lines. The user approved fixing this on this branch: accept non-assignment text lines and preserve them unchanged. The fix is committed separately, before the port-composition refactor continues.
+
+### Crash diagnosis and default working directory
+
+At 23:44 the game crashed before the menu: an access violation at `FalloutNV.exe+0x6087E5`. The Windows Error Reporting module list shows `usvfs_x86.dll` was injected, but NVSE (`nvse_1_4.dll`) and none of the 52 NVSE plugins loaded, and the NVSE logs were not updated. Masters were all present and correctly ordered, so load order was not the cause. The user identified the missing working directory: without `--cwd`, the child runs in the caller's directory, and New Vegas resolves `Data\` and its loaders relative to the working directory. A 23:47 launch through `nvse_loader.exe` loaded NVSE and its plugins through the VFS, and the game kept running.
+
+Approved change: when `mods exec` has no `--cwd`, default the child's working directory to the bound game install directory. Program lookup keeps its current rules (caller directory plus PATH). An explicit `--cwd` is unchanged. This is committed separately, after the port-composition refactor.
+
+### Modlist priority order: match MO2
+
+The user copied `modlist.txt` from a working MO2 instance and saw Vanilla UI Plus and UIO warn about conflicts. MO2 writes `modlist.txt` from highest to lowest priority: the first line is the highest-priority mod. mods read it from lowest to highest, as `CONTEXT.md` defines. The copied file starts with "High Priority Trees/Core" and LOD outputs and ends with YUPTTW and Tale of Two Wastelands. mods therefore inverted every conflict: base mods and late UI or framework mods overrode Vanilla UI Plus. Plugin masters and load order were unaffected.
+
+Decision (user chose the product change): read `modlist.txt` in MO2 order. The first listed mod has the highest Mod Priority and the last has the lowest. Overwrite stays implicitly highest and game Data lowest. This applies to every reader (exec inventory, snapshot/export, conflict scan and explain, and installation). New installs must still receive the highest priority, so the writer inserts new entries at the top, after any leading comment lines, instead of appending. Update `CONTEXT.md` and the CLI skill references. No migration: environments written with the old order must be reversed by hand. This is committed separately, after the port-composition refactor and the working-directory default.
 
 ## Execution cost map and optimization candidates
 

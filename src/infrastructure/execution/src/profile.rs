@@ -1,4 +1,5 @@
 use crate::PathMapping;
+use application::ports::ProfileWarning;
 use domain::DataRelativePath;
 use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
@@ -60,23 +61,6 @@ pub enum ActivationSource {
 pub struct EffectivePlugin {
 	pub path: DataRelativePath,
 	pub activation_sources: Vec<ActivationSource>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProfileWarning {
-	Unavailable {
-		file: String,
-		plugin: String,
-	},
-	Duplicate {
-		file: String,
-		plugin: String,
-	},
-	Unlisted {
-		plugin: String,
-	},
-	/// The analytical projection is advisory; virtual timestamps do not enforce its order.
-	LoadOrderNotEnforced,
 }
 
 #[derive(Debug)]

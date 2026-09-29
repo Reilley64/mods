@@ -1,5 +1,8 @@
+use crate::ExecuteProgram;
 use application::ErrorMarker;
-use application::ports::RunManagedProgram;
+use application::execution::ExecuteProgramError;
+#[cfg(windows)]
+use application::execution::execute_program;
 use domain::EnvironmentRoot;
 use domain::GameBinding;
 #[cfg(windows)]
@@ -63,31 +66,28 @@ impl ExecutionAdapter {
 		self
 	}
 
-	pub fn run_port(&self) -> RunManagedProgram {
-		let adapter = self.clone();
-		Arc::new(
-			move |output_target, working_directory, program, arguments, progress, cancellation| {
-				let adapter = adapter.clone();
+	/// Runs the exec use case on one dedicated blocking thread.
+	///
+	/// The upstream session and hooked process must never be used concurrently.
+	/// Ports are built and the whole use case runs on this thread with its own
+	/// current-thread runtime; only the owned result crosses back to Tokio.
+	pub fn into_execute_program(self) -> ExecuteProgram {
+		Box::new(
+			move |output_target, working_directory, program, arguments, cancellation| {
 				Box::pin(async move {
 					if cancellation.is_cancelled() {
-						return Err(report!(ErrorMarker::operation_cancelled()));
+						return Err(report!(ErrorMarker::operation_cancelled())
+							.context(ExecuteProgramError));
 					}
+
 					#[cfg(not(windows))]
 					{
-						let _ = (
-							adapter,
-							output_target,
-							working_directory,
-							program,
-							arguments,
-							progress,
-						);
-						Err(report!(ErrorMarker::program_unsupported()))
+						let _ = (self, output_target, working_directory, program, arguments);
+						Err(report!(ErrorMarker::program_unsupported())
+							.context(ExecuteProgramError))
 					}
 					#[cfg(windows)]
 					{
-						// The upstream session is thread-affine. Its complete lifetime stays on
-						// this blocking worker; only the owned result crosses back to Tokio.
 						let dispatcher = get_default(Clone::clone);
 						let span = Span::current();
 						spawn_blocking(move || {
@@ -96,19 +96,21 @@ impl ExecutionAdapter {
 								let runtime = Builder::new_current_thread()
 								.enable_time()
 								.build()
-								.context(ErrorMarker::execution_supervision_failed())?;
-								runtime.block_on(adapter.execute(
+								.context(ErrorMarker::execution_supervision_failed())
+								.context(ExecuteProgramError)?;
+								runtime.block_on(execute_program(
+									self.dependencies(),
 									output_target,
 									working_directory,
 									program,
 									arguments,
-									progress,
 									cancellation,
 								))
 							})
 						})
 						.await
-						.context(ErrorMarker::execution_supervision_failed())?
+						.context(ErrorMarker::execution_supervision_failed())
+						.context(ExecuteProgramError)?
 					}
 				})
 			},
