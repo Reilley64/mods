@@ -18,8 +18,6 @@ New installs append to the mod list at the next Mod Priority and are **initially
 
 ## Nexus URL input
 
-The Nexus acquisition implementation is not yet approved for public distribution. Nexus application registration and authorized live acceptance remain external requirements. Premium membership does not replace application registration. The commands below describe the implementation, not completed live acceptance.
-
 `install` also accepts a New Vegas Nexus mod-page URL or a file-specific URL. Local archive inputs still work without Nexus credentials.
 
 ```powershell
