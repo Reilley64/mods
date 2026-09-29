@@ -3,9 +3,9 @@
 ## Read-only conflict analysis
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' conflicts list
-mods --environment 'D:\Mod Environments\Mojave' conflicts inspect 'Mojave Textures' --compare-content
-mods --environment 'D:\Mod Environments\Mojave' conflicts explain 'textures\weapons\rifle.dds' --compare-content
+mods --json --environment 'D:\Mod Environments\Mojave' conflicts list
+mods --json --environment 'D:\Mod Environments\Mojave' conflicts inspect 'Mojave Textures' --compare-content
+mods --json --environment 'D:\Mod Environments\Mojave' conflicts explain 'textures\weapons\rifle.dds' --compare-content
 ```
 
 - `list` reports effective File Conflicts among active providers, not every override of Steam Data.
@@ -24,9 +24,9 @@ Read `resolution_status` and scoped `problems`, not just status zero or row coun
 A **Virtual Game View** merges a Game Installation, enabled Data Mods, and Mod Environment-owned files for a game or tool. `exec` starts a program with managed mappings; it is not a security sandbox. Approve the program, arguments, working directory, and write intent before running it.
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' exec --cwd 'D:\SteamLibrary\steamapps\common\Fallout New Vegas' -- 'D:\SteamLibrary\steamapps\common\Fallout New Vegas\FalloutNV.exe'
+mods --json --environment 'D:\Mod Environments\Mojave' exec --cwd 'D:\SteamLibrary\steamapps\common\Fallout New Vegas' -- 'D:\SteamLibrary\steamapps\common\Fallout New Vegas\FalloutNV.exe'
 # Named target must already be installed AND enabled:
-mods --environment 'D:\Mod Environments\Mojave' exec --output-target 'Tool Output' --cwd 'D:\Tools' -- 'D:\Tools\Tool.exe' '--example-argument'
+mods --json --environment 'D:\Mod Environments\Mojave' exec --output-target 'Tool Output' --cwd 'D:\Tools' -- 'D:\Tools\Tool.exe' '--example-argument'
 ```
 
 The tool and `--example-argument` above are placeholders: use the actual tool's supported arguments. `--` before PROGRAM is required; everything after it belongs to the child, even tokens resembling mods options.
@@ -35,7 +35,7 @@ The tool and `--example-argument` above are placeholders: use the actual tool's 
 - An **Output Target** receives new Data files and new copy/file-move destinations for this execution. It does not change Mod Priority or relocate an existing destination from its provider. Do not promise that every write goes to the Output Target.
 - `--cwd PATH` defaults to the caller's startup directory, not the Game Installation or Environment Root. Relative paths resolve against that startup directory. It does not change executable lookup.
 - Path-like PROGRAM values resolve from the caller's startup directory. Bare names search inherited PATH, not an implicit current directory. If no extension is supplied, `.exe` fallback is supported. Prefer an absolute `.exe` path. Scripts and shell syntax are not implicitly interpreted; unsupported targets fail. Command-line size and NUL validation also apply.
-- Child standard streams are inherited. The CLI returns the child's exit status after managed supervision; read [statuses](troubleshooting.md) to distinguish launch/management errors from child failures.
+- Child stdout and stderr are forwarded live and byte-for-byte in both modes; stdin remains inherited. `--json` applies to pre-launch CLI failures, but a launched child has no JSON success wrapper. The CLI returns the child's exit status after managed supervision; read [statuses](troubleshooting.md) to distinguish launch/management errors from child failures.
 
 ## Runtime limits
 

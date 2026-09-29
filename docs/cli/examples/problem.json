@@ -1,0 +1,11 @@
+{
+  "type": "https://github.com/Reilley64/mods/blob/main/docs/cli/problems.md#invalid_selection",
+  "title": "Invalid selection",
+  "detail": "FOMOD selection is invalid",
+  "exit_code": 2,
+  "code": "invalid_selection",
+  "details": {
+    "field": "choices",
+    "sequence": 0
+  }
+}

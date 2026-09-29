@@ -1,0 +1,29 @@
+{
+  "outcome": "preview",
+  "plan": {
+    "archive_identity": {
+      "kind": "data_archive",
+      "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "package_root": ""
+    },
+    "mod_name": "Visuals",
+    "replacement": false,
+    "accepted_choices": [],
+    "warnings": [],
+    "candidates": [],
+    "projected_state": {
+      "mode": "new_install",
+      "mod_name": "Visuals",
+      "priority": 0,
+      "list_position": 0,
+      "enabled": false,
+      "overlaps": []
+    }
+  },
+  "hypothetical_enabled_conflicts": {
+    "resolution_status": "exact",
+    "rows": [],
+    "problems": []
+  },
+  "warnings": []
+}

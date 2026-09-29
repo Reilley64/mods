@@ -69,6 +69,7 @@ mod tests {
 
 	fn required_output() -> RunOutcome {
 		RunOutcome {
+			presentation: None,
 			status: 0,
 			stdout: "outcome = \"additional_selections_required\"\n".to_owned(),
 			stderr: "warning: review required\n".to_owned(),
