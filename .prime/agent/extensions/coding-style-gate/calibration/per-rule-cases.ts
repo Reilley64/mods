@@ -17,6 +17,60 @@ export interface PerRuleCase {
 
 export const perRuleCases: PerRuleCase[] = [
   {
+    "name": "let-else-only-returns-error",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/infrastructure/execution/src/usvfs/session.rs",
+    "before": "",
+    "after": "fn native(&self) -> Result<NonNull<Session>, ExecutionError> {\n\tlet Some(native) = self.native else {\n\t\treturn Err(report!(ExecutionError));\n\t};\n\tOk(native)\n}"
+  },
+  {
+    "name": "match-only-defaults-option",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/infrastructure/settings/src/limits.rs",
+    "before": "",
+    "after": "fn scan_limit(configured: Option<usize>) -> usize {\n\tmatch configured {\n\t\tSome(limit) => limit,\n\t\tNone => DEFAULT_SCAN_LIMIT,\n\t}\n}"
+  },
+  {
+    "name": "ok-or-else-conversion",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/infrastructure/execution/src/usvfs/session.rs",
+    "before": "",
+    "after": "fn native(&self) -> Result<NonNull<Session>, ExecutionError> {\n\tlet native = self.native.ok_or_else(|| report!(ExecutionError))?;\n\tOk(native)\n}"
+  },
+  {
+    "name": "let-else-with-cleanup-work",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/infrastructure/environment/src/staging.rs",
+    "before": "",
+    "after": "async fn first_entry(entries: &mut Entries, staging: &Staging) -> Result<Summary, ErrorMarker> {\n\tlet Some(entry) = entries.next() else {\n\t\ttracing::warn!(\"no staged entries\");\n\t\tstaging.remove().await?;\n\t\treturn Ok(Summary::empty());\n\t};\n\tOk(Summary::from(entry))\n}"
+  },
+  {
+    "name": "match-only-wraps-parse-error",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "validation",
+    "expectedViolation": true,
+    "path": "src/infrastructure/environment/src/manifest.rs",
+    "before": "",
+    "after": "fn parse_manifest(text: &str) -> Result<Manifest, ErrorMarker> {\n\tlet manifest = match toml::from_str::<Manifest>(text) {\n\t\tOk(manifest) => manifest,\n\t\tErr(error) => return Err(report!(error).context(ErrorMarker::manifest_invalid())),\n\t};\n\tOk(manifest)\n}"
+  },
+  {
+    "name": "context-chain-for-parse-error",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "validation",
+    "expectedViolation": false,
+    "path": "src/infrastructure/environment/src/manifest.rs",
+    "before": "",
+    "after": "fn parse_manifest(text: &str) -> Result<Manifest, ErrorMarker> {\n\tlet manifest = toml::from_str::<Manifest>(text).context(ErrorMarker::manifest_invalid())?;\n\tOk(manifest)\n}"
+  },
+  {
     "name": "required-archive-option",
     "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
     "split": "train",
