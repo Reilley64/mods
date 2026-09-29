@@ -21,6 +21,19 @@ describe("coding style gate configuration", () => {
 		await expect(loadConfig(root)).rejects.toThrow("within the project");
 	});
 
+	test("defaults and confines the dispositions file", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(root);
+		await mkdir(join(root, ".prime", "agent"), { recursive: true });
+		const path = join(root, ".prime", "agent", "coding-style-gate.json");
+
+		expect((await loadConfig(root)).dispositionsFile).toBe(".prime/agent/coding-style-dispositions.json");
+		for (const dispositionsFile of ["../dispositions.json", join(root, "dispositions.json"), ""]) {
+			await writeFile(path, JSON.stringify({ dispositionsFile }));
+			await expect(loadConfig(root)).rejects.toThrow("dispositionsFile must stay within the project");
+		}
+	});
+
 	test("rejects relative additional roots", async () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
