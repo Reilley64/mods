@@ -1,8 +1,5 @@
-use crate::safe_fs::READ_CHUNK_BYTES;
-use crate::safe_fs::SafeFile;
 use application::ErrorMarker;
 use application::conflicts::ConflictContentRead;
-use cap_std::time::SystemTime;
 use domain::Sha256Digest;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -10,7 +7,12 @@ use rootcause::report;
 use sha2::Digest;
 use sha2::Sha256;
 use std::io::Error;
+use std::time::SystemTime;
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
+
+const READ_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ContentFingerprint {
@@ -18,12 +20,15 @@ struct ContentFingerprint {
 	modified: Option<SystemTime>,
 }
 
-pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Result<ConflictContentRead, ErrorMarker> {
+pub(crate) async fn sha256(
+	mut file: File,
+	cancellation: &CancellationToken,
+) -> Result<ConflictContentRead, ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let Ok(before) = fingerprint(&file) else {
+	let Ok(before) = fingerprint(&file).await else {
 		return Ok(ConflictContentRead::Unavailable);
 	};
 
@@ -34,7 +39,7 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let Ok(read) = file.read_chunk(&mut buffer) else {
+		let Ok(read) = file.read(&mut buffer).await else {
 			return Ok(ConflictContentRead::Unavailable);
 		};
 		if read == 0 {
@@ -47,7 +52,7 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let Ok(after) = fingerprint(&file) else {
+	let Ok(after) = fingerprint(&file).await else {
 		return Ok(ConflictContentRead::Unavailable);
 	};
 	if before != after {
@@ -59,8 +64,8 @@ pub(crate) fn sha256(mut file: SafeFile, cancellation: &CancellationToken) -> Re
 	Ok(ConflictContentRead::Sha256(digest))
 }
 
-fn fingerprint(file: &SafeFile) -> Result<ContentFingerprint, Error> {
-	let metadata = file.metadata()?;
+async fn fingerprint(file: &File) -> Result<ContentFingerprint, Error> {
+	let metadata = file.metadata().await?;
 	Ok(ContentFingerprint {
 		length: metadata.len(),
 		modified: metadata.modified().ok(),
@@ -74,21 +79,23 @@ fn fingerprint(file: &SafeFile) -> Result<ContentFingerprint, Error> {
 )]
 mod tests {
 	use super::sha256;
-	use crate::safe_fs::SafeDir;
 	use application::conflicts::ConflictContentRead;
 	use std::env::current_dir;
 	use std::error::Error;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn hashes_the_complete_file_with_sha256() -> Result<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn hashes_the_complete_file_with_sha256() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new_in(current_dir().expect("current directory")).expect("temporary directory");
-		let root = SafeDir::open_absolute(temp.path()).expect("temporary directory must open");
-		root.write_new("content", b"abc").expect("content must write");
-		let file = root.open_regular("content").expect("content must open");
+		std::fs::write(temp.path().join("content"), b"abc").expect("content must write");
+		let file = tokio::fs::File::open(temp.path().join("content"))
+			.await
+			.expect("content must open");
 
-		let result = sha256(file, &CancellationToken::new()).expect("content must hash");
+		let result = sha256(file, &CancellationToken::new())
+			.await
+			.expect("content must hash");
 
 		let ConflictContentRead::Sha256(digest) = result else {
 			return Err("stable content must produce a digest".into());

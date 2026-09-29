@@ -1,8 +1,3 @@
-use crate::safe_fs::EntryBudget;
-use crate::safe_fs::MAX_TRAVERSAL_DEPTH;
-use crate::safe_fs::SafeDir;
-use crate::snapshot::MAX_MODS;
-use crate::snapshot::MAX_PROVIDER_ENTRIES;
 use crate::snapshot::parse_metadata;
 use crate::snapshot::parse_modlist;
 use application::ErrorMarker;
@@ -19,9 +14,13 @@ use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fs;
 use std::io;
 use std::path::Path;
+use tokio::fs::OpenOptions;
+use tokio::fs::metadata;
+use tokio::fs::read;
+use tokio::fs::read_dir;
+use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
@@ -33,12 +32,18 @@ pub(super) struct ExecutionInventory {
 }
 
 impl ExecutionInventory {
-	pub(super) fn read(root: &Path, data: &Path, cancellation: &CancellationToken) -> Result<Self, ErrorMarker> {
+	pub(super) async fn read(
+		root: &Path,
+		data: &Path,
+		cancellation: &CancellationToken,
+	) -> Result<Self, ErrorMarker> {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		let bytes =
-			fs::read(root.join("profile/modlist.txt")).context(ErrorMarker::environment_invalid(None))?;
+
+		let bytes = read(root.join("profile/modlist.txt"))
+			.await
+			.context(ErrorMarker::environment_invalid(None))?;
 		let installed = parse_modlist(&bytes)?;
 		let enabled: HashSet<_> = installed
 			.iter()
@@ -63,9 +68,9 @@ impl ExecutionInventory {
 			installed,
 			..Self::default()
 		};
-		match fs::metadata(data) {
+		match metadata(data).await {
 			Ok(metadata) if metadata.is_dir() => {
-				result.provider(data, ProviderIdentity::SteamData, cancellation)?
+				result.provider(data, ProviderIdentity::SteamData, cancellation).await?
 			}
 			Ok(_) => return Err(report!(ErrorMarker::environment_invalid(None))),
 			Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -74,43 +79,55 @@ impl ExecutionInventory {
 
 		let mut discovered = HashSet::new();
 		let mut folded = HashSet::new();
-		for entry in fs::read_dir(root.join("mods")).context(ErrorMarker::environment_invalid(None))? {
+		let mut entries = read_dir(root.join("mods"))
+			.await
+			.context(ErrorMarker::environment_invalid(None))?;
+		while let Some(entry) = entries
+			.next_entry()
+			.await
+			.context(ErrorMarker::environment_invalid(None))?
+		{
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			let entry = entry.context(ErrorMarker::environment_invalid(None))?;
+
 			let spelling = entry
 				.file_name()
 				.into_string()
 				.map_err(|_| report!(ErrorMarker::environment_invalid(None)))?;
 			let name = ModName::new(spelling.clone()).context(ErrorMarker::environment_invalid(None))?;
-			if discovered.len() >= MAX_MODS || !folded.insert(name.comparison_key().to_owned()) {
+			if !folded.insert(name.comparison_key().to_owned()) {
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
-			if !fs::metadata(entry.path())
+			if !metadata(entry.path())
+				.await
 				.context(ErrorMarker::environment_invalid(None))?
 				.is_dir()
 			{
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
+
 			discovered.insert(spelling.clone());
 			if !enabled.contains(&spelling) {
 				continue;
 			}
+
 			let identity = identities
 				.get(&spelling)
 				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-			result.provider(&entry.path(), identity.clone(), cancellation)?;
+			result.provider(&entry.path(), identity.clone(), cancellation).await?;
 		}
 
 		if discovered != listed {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
-		result.provider(&root.join("overwrite"), ProviderIdentity::Overwrite, cancellation)?;
+
+		result.provider(&root.join("overwrite"), ProviderIdentity::Overwrite, cancellation)
+			.await?;
 		Ok(result)
 	}
 
-	fn provider(
+	async fn provider(
 		&mut self,
 		root: &Path,
 		identity: ProviderIdentity,
@@ -119,28 +136,22 @@ impl ExecutionInventory {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		let metadata_path = root.join("meta.toml");
-		let bytes = match fs::read(&metadata_path) {
+		let bytes = match read(&metadata_path).await {
 			Ok(bytes) => Some(bytes),
 			Err(error)
 				if error.kind() == io::ErrorKind::NotFound
 					&& matches!(identity, ProviderIdentity::DataMod { .. }) =>
 			{
-				let directory = SafeDir::open_absolute(
-					&root.canonicalize().context(ErrorMarker::environment_invalid(None))?,
-				)
-				.context(ErrorMarker::environment_invalid(None))?;
 				#[cfg(test)]
 				super::tests::before_metadata_creation(root)
 					.context(ErrorMarker::environment_invalid(None))?;
 
-				match directory.write_new("meta.toml", b"schema_version = 1\n") {
-					Ok(()) => {}
-					Err(error)
-						if error.current_context().kind() == io::ErrorKind::AlreadyExists => {}
-					Err(error) => return Err(error.context(ErrorMarker::environment_invalid(None))),
-				}
-				Some(fs::read(&metadata_path).context(ErrorMarker::environment_invalid(None))?)
+				create_default_metadata(&metadata_path).await?;
+				Some(read(&metadata_path)
+					.await
+					.context(ErrorMarker::environment_invalid(None))?)
 			}
 			Err(error) if error.kind() == io::ErrorKind::NotFound => None,
 			Err(error) => return Err(report!(error).context(ErrorMarker::environment_invalid(None))),
@@ -168,23 +179,16 @@ impl ExecutionInventory {
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
 		}
+
 		let mut paths = HashSet::new();
-		let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
-		self.directory(
-			root,
-			"",
-			&identity,
-			&own,
-			&mut paths,
-			&mut budget,
-			MAX_TRAVERSAL_DEPTH,
-			cancellation,
-		)?;
+		self.directory(root, "", &identity, &own, &mut paths, cancellation)
+			.await?;
 
 		for (path, directory) in tombstones {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
+
 			let key = path.comparison_key().to_owned();
 			let rank = identity.rank();
 			self.winners.retain(|candidate, winner| {
@@ -204,40 +208,36 @@ impl ExecutionInventory {
 		Ok(())
 	}
 
-	#[expect(
-		clippy::too_many_arguments,
-		reason = "recursive traversal keeps provider identity and finite budgets explicit"
-	)]
-	fn directory(
+	async fn directory(
 		&mut self,
 		directory: &Path,
 		prefix: &str,
 		identity: &ProviderIdentity,
 		own: &HashMap<String, bool>,
 		paths: &mut HashSet<String>,
-		budget: &mut EntryBudget,
-		depth: usize,
 		cancellation: &CancellationToken,
 	) -> Result<(), ErrorMarker> {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		#[cfg(test)]
 		crate::snapshot::INVENTORY_IO.with(|count| {
 			let (walks, reads) = count.get();
 			count.set((walks + 1, reads));
 		});
-		let mut count = 0;
-		for entry in fs::read_dir(directory).context(ErrorMarker::environment_invalid(None))? {
+		let mut entries = read_dir(directory)
+			.await
+			.context(ErrorMarker::environment_invalid(None))?;
+		while let Some(entry) = entries
+			.next_entry()
+			.await
+			.context(ErrorMarker::environment_invalid(None))?
+		{
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			let entry = entry.context(ErrorMarker::environment_invalid(None))?;
-			budget.consume(&mut count)
-				.context(ErrorMarker::environment_invalid(None))?;
-			if depth == 0 {
-				return Err(report!(ErrorMarker::environment_invalid(None)));
-			}
+
 			let name = entry
 				.file_name()
 				.into_string()
@@ -257,9 +257,14 @@ impl ExecutionInventory {
 			{
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
-			let file_type = entry.file_type().context(ErrorMarker::environment_invalid(None))?;
+
+			let file_type = entry
+				.file_type()
+				.await
+				.context(ErrorMarker::environment_invalid(None))?;
 			let file_type = if file_type.is_symlink() {
-				fs::metadata(entry.path())
+				metadata(entry.path())
+					.await
 					.context(ErrorMarker::environment_invalid(None))?
 					.file_type()
 			} else {
@@ -288,20 +293,14 @@ impl ExecutionInventory {
 			{
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
+
 			self.namespace.insert(key.clone(), file_type.is_dir());
 			if file_type.is_dir() {
-				self.directory(
-					&entry.path(),
-					&relative,
-					identity,
-					own,
-					paths,
-					budget,
-					depth - 1,
-					cancellation,
-				)?;
+				Box::pin(self.directory(&entry.path(), &relative, identity, own, paths, cancellation))
+					.await?;
 				continue;
 			}
+
 			let suppressed =
 				self.tombstones.get(&key).is_some_and(|scopes| {
 					scopes.iter().flatten().any(|rank| *rank >= identity.rank())
@@ -317,6 +316,7 @@ impl ExecutionInventory {
 			{
 				continue;
 			}
+
 			let winner = match identity {
 				ProviderIdentity::SteamData => ProviderReference::SteamData { original_path: path },
 				ProviderIdentity::DataMod { mod_name, priority } => ProviderReference::DataMod {
@@ -331,4 +331,18 @@ impl ExecutionInventory {
 		}
 		Ok(())
 	}
+}
+
+/// Creates the default provider metadata without replacing a file that a concurrent writer created first.
+async fn create_default_metadata(path: &Path) -> Result<(), ErrorMarker> {
+	let mut file = match OpenOptions::new().write(true).create_new(true).open(path).await {
+		Ok(file) => file,
+		Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+		Err(error) => return Err(report!(error).context(ErrorMarker::environment_invalid(None))),
+	};
+	file.write_all(b"schema_version = 1\n")
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
+	// Tokio completes file writes in the background; the flush makes the bytes visible to the next read.
+	file.flush().await.context(ErrorMarker::environment_invalid(None))
 }

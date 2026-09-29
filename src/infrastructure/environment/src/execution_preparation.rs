@@ -4,12 +4,10 @@ use self::inventory::ExecutionInventory;
 use crate::EnvironmentAdapter;
 use crate::ExecutionInis;
 use crate::active_code_page::decode as decode_active_code_page;
-use crate::profile::MAX_PROFILE_BYTES;
+use crate::files::read_optional;
 use crate::profile::PROFILE_FILES;
 use crate::profile::decode;
 use crate::profile::validate_plugin_text;
-use crate::safe_fs::SafeDir;
-use crate::safe_fs::read_bounded;
 use crate::snapshot::load_execution;
 use application::ErrorMarker;
 use application::installation::InstallationState;
@@ -24,10 +22,14 @@ use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::str::from_utf8;
 use std::time::SystemTime;
 use tempfile::TempDir;
+use tokio::fs::metadata;
+use tokio::fs::read;
+use tokio::fs::read_dir;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,23 +98,24 @@ impl EnvironmentAdapter {
 	/// # Errors
 	///
 	/// Refuses pending work, invalid state, unsafe paths, and cancellation.
-	pub fn prepare_execution(
+	pub async fn prepare_execution(
 		&self,
 		root: &EnvironmentRoot,
 		effective_binding: &GameBinding,
 		cancellation: &CancellationToken,
 	) -> Result<PreparedExecution, ErrorMarker> {
 		self.prepare_execution_with_spool(root, effective_binding, None, cancellation)
+			.await
 	}
 
-	fn prepare_execution_with_spool(
+	async fn prepare_execution_with_spool(
 		&self,
 		root: &EnvironmentRoot,
 		effective_binding: &GameBinding,
 		owned_spool: Option<&TempDir>,
 		cancellation: &CancellationToken,
 	) -> Result<PreparedExecution, ErrorMarker> {
-		let snapshot = load_execution(root.as_path(), effective_binding, owned_spool, cancellation)?;
+		let snapshot = load_execution(root.as_path(), effective_binding, owned_spool, cancellation).await?;
 		let data_directory = effective_binding.game_directory().as_path().join("Data");
 		let mut providers = vec![ExecutionProvider {
 			identity: ProviderIdentity::SteamData,
@@ -174,11 +177,6 @@ impl EnvironmentAdapter {
 			});
 		}
 
-		let root_directory =
-			SafeDir::open_absolute(root.as_path()).context(ErrorMarker::environment_invalid(None))?;
-		let profile = root_directory
-			.open_dir("profile")
-			.context(ErrorMarker::environment_invalid(None))?;
 		let profile_directory = root.as_path().join("profile");
 		let mut consumed_bytes = Vec::new();
 		let mut profile_files = Vec::new();
@@ -186,16 +184,13 @@ impl EnvironmentAdapter {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			if !profile.exists(name).context(ErrorMarker::environment_invalid(None))? {
+
+			let Some(bytes) = read_optional(&profile_directory.join(name))
+				.await
+				.context(ErrorMarker::environment_invalid(None))?
+			else {
 				continue;
-			}
-			let bytes = read_bounded(
-				&profile,
-				name,
-				MAX_PROFILE_BYTES,
-				ErrorMarker::environment_invalid(None),
-				cancellation,
-			)?;
+			};
 			if name != "modlist.txt" {
 				let text = match name {
 					"plugins.txt" => decode_active_code_page(&bytes)?,
@@ -209,13 +204,9 @@ impl EnvironmentAdapter {
 			consumed_bytes.push((profile_directory.join(name), bytes));
 		}
 
-		let manifest = read_bounded(
-			&root_directory,
-			"mods.toml",
-			MAX_PROFILE_BYTES,
-			ErrorMarker::environment_invalid(None),
-			cancellation,
-		)?;
+		let manifest = read(root.as_path().join("mods.toml"))
+			.await
+			.context(ErrorMarker::environment_invalid(None))?;
 		consumed_bytes.push((root.as_path().join("mods.toml"), manifest));
 
 		consumed_bytes.extend(snapshot.provider_metadata);
@@ -245,21 +236,22 @@ impl EnvironmentAdapter {
 
 	/// Reads execution inputs and creates missing enabled-mod metadata.
 	/// The binding is retained without verifying its Steam installation or build.
-	/// Cancellation is cooperative between operations; a synchronous whole-file read cannot be interrupted.
+	/// Cancellation is cooperative between operations; a whole-file read cannot be interrupted.
 	///
 	/// # Errors
 	///
 	/// Refuses pending work, invalid state, unsafe paths, and cancellation.
-	pub fn prepare_launch(
+	pub async fn prepare_launch(
 		&self,
 		root: &EnvironmentRoot,
 		effective_binding: &GameBinding,
 		cancellation: &CancellationToken,
 	) -> Result<PreparedLaunch, ErrorMarker> {
 		self.prepare_launch_with_spool(root, effective_binding, None, cancellation)
+			.await
 	}
 
-	fn prepare_launch_with_spool(
+	async fn prepare_launch_with_spool(
 		&self,
 		root: &EnvironmentRoot,
 		effective_binding: &GameBinding,
@@ -270,44 +262,51 @@ impl EnvironmentAdapter {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let root_directory =
-			SafeDir::open_absolute(root.as_path()).context(ErrorMarker::environment_invalid(None))?;
-		if root_directory
-			.exists("temp")
-			.context(ErrorMarker::environment_invalid(None))?
+		let temp = root.as_path().join("temp");
+		let mut entries = match read_dir(&temp).await {
+			Ok(entries) => Some(entries),
+			Err(error) if error.kind() == ErrorKind::NotFound => None,
+			Err(error) => return Err(report!(error).context(ErrorMarker::environment_invalid(None))),
+		};
+		while let Some(entries) = &mut entries
+			&& let Some(entry) = entries
+				.next_entry()
+				.await
+				.context(ErrorMarker::environment_invalid(None))?
 		{
-			let temp = root_directory
-				.open_dir("temp")
-				.context(ErrorMarker::environment_invalid(None))?;
-			for entry in temp.entries().context(ErrorMarker::environment_invalid(None))? {
-				let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
-				if owned_spool.is_some_and(|spool| {
-					spool.path().parent() == Some(root.as_path().join("temp").as_path())
-						&& spool.path().file_name() == Some(entry.file_name().as_os_str())
-				}) {
-					continue;
-				}
-				return Err(report!(ErrorMarker::manual_cleanup_required()));
+			if owned_spool.is_some_and(|spool| {
+				spool.path().parent() == Some(temp.as_path())
+					&& spool.path().file_name() == Some(entry.file_name().as_os_str())
+			}) {
+				continue;
 			}
+			return Err(report!(ErrorMarker::manual_cleanup_required()));
 		}
 
-		let profile = root_directory
-			.open_dir("profile")
-			.context(ErrorMarker::environment_invalid(None))?;
-		profile.open_dir("saves")
-			.context(ErrorMarker::environment_invalid(None))?;
 		let profile_directory = root.as_path().join("profile");
+		if !metadata(profile_directory.join("saves"))
+			.await
+			.context(ErrorMarker::environment_invalid(None))?
+			.is_dir()
+		{
+			return Err(report!(ErrorMarker::environment_invalid(None)));
+		}
+
 		let mut profile_files = Vec::new();
 		for name in PROFILE_FILES {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			if name != "Fallout.ini"
-				&& !profile.exists(name).context(ErrorMarker::environment_invalid(None))?
-			{
+
+			let Some(bytes) = read_optional(&profile_directory.join(name))
+				.await
+				.context(ErrorMarker::environment_invalid(None))?
+			else {
+				if name == "Fallout.ini" {
+					return Err(report!(ErrorMarker::environment_invalid(None)));
+				}
 				continue;
-			}
-			let bytes = profile.read(name).context(ErrorMarker::environment_invalid(None))?;
+			};
 			let text = match name {
 				"plugins.txt" => decode_active_code_page(&bytes)?,
 				"loadorder.txt" => from_utf8(&bytes)
@@ -328,7 +327,7 @@ impl EnvironmentAdapter {
 		}
 
 		let data_directory = effective_binding.game_directory().as_path().join("Data");
-		let inventory = ExecutionInventory::read(root.as_path(), &data_directory, cancellation)?;
+		let inventory = ExecutionInventory::read(root.as_path(), &data_directory, cancellation).await?;
 		let mut providers = vec![ExecutionProvider {
 			identity: ProviderIdentity::SteamData,
 			root: data_directory.clone(),
@@ -383,7 +382,7 @@ impl EnvironmentAdapter {
 
 	/// # Errors
 	/// Retains partial INI derivation on failure. Caller owns the files through Job drain.
-	pub fn derive_execution_inis(
+	pub async fn derive_execution_inis(
 		&self,
 		root: &EnvironmentRoot,
 		prepared: &PreparedLaunch,
@@ -395,6 +394,7 @@ impl EnvironmentAdapter {
 			&root.as_path().join("temp"),
 			cancellation,
 		)
+		.await
 	}
 
 	/// Accepts only the currently owned capture directory, not arbitrary pending work.
@@ -402,14 +402,15 @@ impl EnvironmentAdapter {
 	/// # Errors
 	///
 	/// Refuses other temporary entries and invalid retained environment state.
-	pub fn check_launch_with_spool(
+	pub async fn check_launch_with_spool(
 		&self,
 		root: &EnvironmentRoot,
 		effective_binding: &GameBinding,
 		owned_spool: Option<&TempDir>,
 		cancellation: &CancellationToken,
 	) -> Result<(), ErrorMarker> {
-		self.prepare_launch_with_spool(root, effective_binding, owned_spool, cancellation)?;
+		self.prepare_launch_with_spool(root, effective_binding, owned_spool, cancellation)
+			.await?;
 
 		Ok(())
 	}
@@ -419,13 +420,13 @@ impl EnvironmentAdapter {
 	/// # Errors
 	///
 	/// Reports invalid retained state. Call after Job drain with an uncancelled token.
-	pub fn check_launch(
+	pub async fn check_launch(
 		&self,
 		root: &EnvironmentRoot,
 		effective_binding: &GameBinding,
 		cancellation: &CancellationToken,
 	) -> Result<(), ErrorMarker> {
-		self.prepare_launch(root, effective_binding, cancellation)?;
+		self.prepare_launch(root, effective_binding, cancellation).await?;
 		Ok(())
 	}
 }
@@ -458,71 +459,22 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn preservation_rejects_hard_linked_inis_and_retains_child_edits() -> Result<(), ErrorMarker> {
-		for linked_copy in ["canonical", "child"] {
-			let (temp, root, binding) = fixture()?;
-			let canonical = root.as_path().join("profile/Fallout.ini");
-			let original = fs::read(&canonical).context(ErrorMarker::io_failure())?;
-			let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
-			let inis = EnvironmentAdapter.derive_execution_inis(
-				&root,
-				&prepared,
-				&CancellationToken::new(),
-			)?;
-			let retained = inis.path().to_owned();
-			let child = retained.join("Fallout.ini");
-			let mut edited = fs::read(&child).context(ErrorMarker::io_failure())?;
-			edited.extend_from_slice(b"\r\n[Display]\r\nreview_child_edit=1\r\n");
-			fs::write(&child, &edited).context(ErrorMarker::io_failure())?;
-			let linked = if linked_copy == "canonical" { &canonical } else { &child };
-			fs::hard_link(linked, temp.path().join("linked-ini")).context(ErrorMarker::io_failure())?;
-
-			let error = inis
-				.preserve()
-				.err()
-				.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
-
-			assert!(retained.exists());
-			assert_eq!(fs::read(&child).context(ErrorMarker::io_failure())?, edited);
-			assert_eq!(fs::read(&canonical).context(ErrorMarker::io_failure())?, original);
-			assert!(error
-				.iter_reports()
-				.any(|cause| cause.downcast_current_context::<io::Error>().is_some()));
-			assert!(error.iter_reports().any(|cause| cause
-				.downcast_current_context::<application::execution::RetainedExecutionInis>()
-				.is_some_and(|state| state.path == retained)));
-		}
-		Ok(())
-	}
-
-	#[cfg(unix)]
-	#[test]
-	fn launch_rejects_a_symlinked_required_fallout_ini() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
-		let profile = root.as_path().join("profile");
-		fs::rename(profile.join("Fallout.ini"), profile.join("linked-fallout.ini"))
-			.context(ErrorMarker::io_failure())?;
-		symlink("linked-fallout.ini", profile.join("Fallout.ini")).context(ErrorMarker::io_failure())?;
-
-		assert!(EnvironmentAdapter
-			.prepare_launch(&root, &binding, &CancellationToken::new())
-			.is_err());
-		Ok(())
-	}
-
-	#[test]
-	fn metadata_creation_is_enabled_only_and_never_overwrites_concurrent_files() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn metadata_creation_is_enabled_only_and_never_overwrites_concurrent_files() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		for name in ["Enabled", "Disabled"] {
 			fs::create_dir(root.as_path().join("mods").join(name)).context(ErrorMarker::io_failure())?;
 		}
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Enabled\r\n-Disabled\r\n")
 			.context(ErrorMarker::io_failure())?;
-		EnvironmentAdapter.prepare_execution(&root, &binding, &CancellationToken::new())?;
+		EnvironmentAdapter
+			.prepare_execution(&root, &binding, &CancellationToken::new())
+			.await?;
 		assert!(!root.as_path().join("mods/Enabled/meta.toml").exists());
 
-		EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		let metadata = root.as_path().join("mods/Enabled/meta.toml");
 		assert_eq!(
 			fs::read(&metadata).context(ErrorMarker::io_failure())?,
@@ -534,7 +486,9 @@ mod tests {
 
 		fs::remove_file(&metadata).context(ErrorMarker::io_failure())?;
 		CREATE_CONCURRENT_METADATA.with(|flag| flag.set(true));
-		EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		assert_eq!(
 			fs::read(&metadata).context(ErrorMarker::io_failure())?,
 			b"schema_version = 1\n# concurrent\n"
@@ -542,23 +496,29 @@ mod tests {
 		fs::write(&metadata, b"invalid").context(ErrorMarker::io_failure())?;
 		assert!(EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await
 			.is_err());
 		assert_eq!(fs::read(&metadata).context(ErrorMarker::io_failure())?, b"invalid");
 		Ok(())
 	}
 
-	#[test]
-	fn launch_ignores_extra_entries_and_does_not_validate_generated_bsa() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn launch_ignores_extra_entries_and_does_not_validate_generated_bsa() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		for path in ["unrelated", "cache/unrelated", "profile/unrelated"] {
 			fs::create_dir(root.as_path().join(path)).context(ErrorMarker::io_failure())?;
 		}
 		let archive = root.as_path().join("cache/Fallout - Invalidation.bsa");
 		fs::write(&archive, b"corrupt fixture").context(ErrorMarker::io_failure())?;
-		EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
-		EnvironmentAdapter.check_launch(&root, &binding, &CancellationToken::new())?;
+		EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
+		EnvironmentAdapter
+			.check_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		assert!(EnvironmentAdapter
 			.prepare_execution(&root, &binding, &CancellationToken::new())
+			.await
 			.is_err());
 		assert_eq!(
 			fs::read(&archive).context(ErrorMarker::io_failure())?,
@@ -567,27 +527,30 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn exec_has_no_steam_prerequisites_or_configuration_size_limit() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn exec_has_no_steam_prerequisites_or_configuration_size_limit() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		let data = binding.game_directory().as_path().join("Data");
 		fs::write(data.join("Fallout - Invalidation.bsa"), b"existing").context(ErrorMarker::io_failure())?;
 		let mut contents =
 			fs::read(root.as_path().join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?;
-		contents.extend_from_slice(format!(";{}\n", "x".repeat(crate::profile::MAX_PROFILE_BYTES)).as_bytes());
+		contents.extend_from_slice(format!(";{}\n", "x".repeat(16 * 1024 * 1024)).as_bytes());
 		fs::write(root.as_path().join("profile/Fallout.ini"), &contents).context(ErrorMarker::io_failure())?;
 		let mut manifest = fs::read(root.as_path().join("mods.toml")).context(ErrorMarker::io_failure())?;
-		manifest.extend_from_slice(
-			format!("#{}\n", "x".repeat(crate::manifest::MAX_MANIFEST_BYTES)).as_bytes(),
-		);
+		manifest.extend_from_slice(format!("#{}\n", "x".repeat(64 * 1024)).as_bytes());
 		fs::write(root.as_path().join("mods.toml"), manifest).context(ErrorMarker::io_failure())?;
 		assert!(EnvironmentAdapter
 			.prepare_execution(&root, &binding, &CancellationToken::new())
+			.await
 			.is_err());
-		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		assert_eq!(prepared.winners.len(), 2);
-		let inis = EnvironmentAdapter.derive_execution_inis(&root, &prepared, &CancellationToken::new())?;
-		inis.preserve()?;
+		let inis = EnvironmentAdapter
+			.derive_execution_inis(&root, &prepared, &CancellationToken::new())
+			.await?;
+		inis.preserve().await?;
 		assert_eq!(
 			fs::read(root.as_path().join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?,
 			contents
@@ -596,9 +559,10 @@ mod tests {
 	}
 
 	#[cfg(unix)]
-	#[test]
-	fn links_are_followed_but_cycles_remain_bounded_and_disabled_cycles_are_skipped() -> Result<(), ErrorMarker> {
-		let (temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn links_are_followed_but_cycles_remain_bounded_and_disabled_cycles_are_skipped()
+	-> Result<(), ErrorMarker> {
+		let (temp, root, binding) = fixture().await?;
 		let external = temp.path().join("external");
 		fs::create_dir(&external).context(ErrorMarker::io_failure())?;
 		fs::write(external.join("linked.txt"), b"target").context(ErrorMarker::io_failure())?;
@@ -611,20 +575,23 @@ mod tests {
 			.context(ErrorMarker::io_failure())?;
 		fs::hard_link(external.join("linked.txt"), external.join("hard.txt"))
 			.context(ErrorMarker::io_failure())?;
-		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		assert_eq!(prepared.winners.len(), 3);
 		symlink(".", external.join("cycle")).context(ErrorMarker::io_failure())?;
 		assert!(EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await
 			.is_err());
 		Ok(())
 	}
 
-	#[test]
-	fn priority_and_subtree_reinstatement_do_not_depend_on_mod_directory_creation_order() -> Result<(), ErrorMarker>
-	{
+	#[tokio::test]
+	async fn priority_and_subtree_reinstatement_do_not_depend_on_mod_directory_creation_order()
+	-> Result<(), ErrorMarker> {
 		for names in [["Low", "High", "Middle"], ["Middle", "High", "Low"]] {
-			let (_temp, root, binding) = fixture()?;
+			let (_temp, root, binding) = fixture().await?;
 			for name in names {
 				fs::create_dir(root.as_path().join("mods").join(name))
 					.context(ErrorMarker::io_failure())?;
@@ -647,7 +614,9 @@ mod tests {
 				b"+High\r\n+Middle\r\n+Low\r\n",
 			)
 			.context(ErrorMarker::io_failure())?;
-			let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+			let prepared = EnvironmentAdapter
+				.prepare_launch(&root, &binding, &CancellationToken::new())
+				.await?;
 			assert!(prepared
 				.winners
 				.iter()
@@ -660,9 +629,50 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn first_listed_mod_wins_in_an_mo2_ordered_modlist() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test(flavor = "multi_thread")]
+	#[ignore = "timing measurement; run in release with --run-ignored"]
+	async fn measure_launch_inventory_walk_on_twenty_thousand_files() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
+		let mut modlist = String::new();
+		for provider in 0..4 {
+			let name = format!("Mod {provider}");
+			for directory in 0..50 {
+				let path = root
+					.as_path()
+					.join("mods")
+					.join(&name)
+					.join(format!("textures/set{directory}"));
+				fs::create_dir_all(&path).context(ErrorMarker::io_failure())?;
+				for file in 0..100 {
+					fs::write(path.join(format!("file{file}.dds")), b"x")
+						.context(ErrorMarker::io_failure())?;
+				}
+			}
+			modlist.push_str(&format!("+{name}\r\n"));
+		}
+		fs::write(root.as_path().join("profile/modlist.txt"), modlist).context(ErrorMarker::io_failure())?;
+
+		let mut elapsed = Vec::new();
+		for _ in 0..5 {
+			let started = Instant::now();
+			let prepared = EnvironmentAdapter
+				.prepare_launch(&root, &binding, &CancellationToken::new())
+				.await?;
+			elapsed.push(started.elapsed());
+			assert_eq!(prepared.winners.len(), 5_001);
+		}
+
+		elapsed.sort();
+		eprintln!(
+			"launch preparation over 20000 mod files: runs {elapsed:?}, median {:?}",
+			elapsed[2]
+		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn first_listed_mod_wins_in_an_mo2_ordered_modlist() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		for (name, contents) in [("High", "high"), ("Base", "base")] {
 			let directory = root.as_path().join("mods").join(name);
 			fs::create_dir(&directory).context(ErrorMarker::io_failure())?;
@@ -674,8 +684,12 @@ mod tests {
 		)
 		.context(ErrorMarker::io_failure())?;
 
-		let launch = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
-		let strict = EnvironmentAdapter.prepare_execution(&root, &binding, &CancellationToken::new())?;
+		let launch = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
+		let strict = EnvironmentAdapter
+			.prepare_execution(&root, &binding, &CancellationToken::new())
+			.await?;
 
 		for winners in [&launch.winners, &strict.winners] {
 			let shared = winners
@@ -691,7 +705,7 @@ mod tests {
 		Ok(())
 	}
 
-	fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding), ErrorMarker> {
+	async fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding), ErrorMarker> {
 		let temp = TempDir::new_in(current_dir().context(ErrorMarker::io_failure())?)
 			.context(ErrorMarker::io_failure())?;
 		let root = EnvironmentRoot::new(temp.path().join("environment"))
@@ -701,27 +715,29 @@ mod tests {
 		fs::write(game.join("Data/FalloutNV.esm"), b"fixture").context(ErrorMarker::io_failure())?;
 		let binding =
 			GameBinding::new(GameInstallationPath::new(game).context(ErrorMarker::game_install_invalid())?);
-		EnvironmentAdapter.publish(
-			&root,
-			InitializationPlan {
-				game_binding: binding.clone(),
-				profile_sources: InitializationProfileSources {
-					files: PROFILE_FILES
-						.into_iter()
-						.map(|name| ProfileSource { name, contents: None })
-						.collect(),
-					fallout_default_ini: b"[Archive]\r\nsArchiveList=Fallout - Meshes.bsa\r\n"
-						.to_vec(),
+		EnvironmentAdapter
+			.publish(
+				&root,
+				InitializationPlan {
+					game_binding: binding.clone(),
+					profile_sources: InitializationProfileSources {
+						files: PROFILE_FILES
+							.into_iter()
+							.map(|name| ProfileSource { name, contents: None })
+							.collect(),
+						fallout_default_ini:
+							b"[Archive]\r\nsArchiveList=Fallout - Meshes.bsa\r\n".to_vec(),
+					},
 				},
-			},
-			&CancellationToken::new(),
-		)?;
+				&CancellationToken::new(),
+			)
+			.await?;
 		Ok((temp, root, binding))
 	}
 
-	#[test]
-	fn launch_keeps_the_game_multi_line_warning_in_derived_and_preserved_inis() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn launch_keeps_the_game_multi_line_warning_in_derived_and_preserved_inis() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		let warning = concat!(
 			"SMasterMismatchWarning=One of the files that \"%s\" is dependent on has changed since the last save.\r\n",
 			"This may result in errors. Saving again will clear this message\r\n",
@@ -735,8 +751,12 @@ mod tests {
 		fs::write(profile.join("Fallout.ini"), &fallout).context(ErrorMarker::io_failure())?;
 		fs::write(profile.join("FalloutPrefs.ini"), &prefs).context(ErrorMarker::io_failure())?;
 
-		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
-		let inis = EnvironmentAdapter.derive_execution_inis(&root, &prepared, &CancellationToken::new())?;
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
+		let inis = EnvironmentAdapter
+			.derive_execution_inis(&root, &prepared, &CancellationToken::new())
+			.await?;
 		for (name, canonical) in [("Fallout.ini", &fallout), ("FalloutPrefs.ini", &prefs)] {
 			let child = inis.path().join(name);
 			let derived = fs::read_to_string(&child).context(ErrorMarker::io_failure())?;
@@ -745,7 +765,7 @@ mod tests {
 			fs::write(&child, canonical.replace("value=original", "value=child"))
 				.context(ErrorMarker::io_failure())?;
 		}
-		inis.preserve()?;
+		inis.preserve().await?;
 
 		for (name, canonical) in [("Fallout.ini", &fallout), ("FalloutPrefs.ini", &prefs)] {
 			assert_eq!(
@@ -754,13 +774,15 @@ mod tests {
 			);
 		}
 
-		EnvironmentAdapter.check_launch(&root, &binding, &CancellationToken::new())?;
+		EnvironmentAdapter
+			.check_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		Ok(())
 	}
 
-	#[test]
-	fn execution_collects_each_provider_once() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn execution_collects_each_provider_once() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		for name in ["Enabled", "Disabled"] {
 			let directory = root.as_path().join("mods").join(name);
 			fs::create_dir(&directory).context(ErrorMarker::io_failure())?;
@@ -772,7 +794,9 @@ mod tests {
 			.context(ErrorMarker::io_failure())?;
 		crate::snapshot::INVENTORY_IO.with(|count| count.set((0, 0)));
 		let started = Instant::now();
-		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		let counts = crate::snapshot::INVENTORY_IO.with(|count| count.get());
 		eprintln!("provider inventory: {counts:?}, elapsed {:?}", started.elapsed());
 		assert_eq!(prepared.winners.len(), 2);
@@ -781,9 +805,9 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn inventories_preserve_priority_tombstones_and_skip_disabled_metadata() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn inventories_preserve_priority_tombstones_and_skip_disabled_metadata() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		let data = binding.game_directory().as_path().join("Data");
 		fs::create_dir(data.join("Textures")).context(ErrorMarker::io_failure())?;
 		fs::write(data.join("Textures/hidden.txt"), b"base").context(ErrorMarker::io_failure())?;
@@ -812,7 +836,9 @@ mod tests {
 		.context(ErrorMarker::io_failure())?;
 
 		let cancellation = CancellationToken::new();
-		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &cancellation)?;
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &cancellation)
+			.await?;
 		let mut visible: Vec<_> = prepared.visible_files.iter().map(|file| file.path.as_str()).collect();
 		visible.sort();
 		assert_eq!(visible, ["FalloutNV.esm", "TEXTURES/RESTORED.txt", "WINNER.txt"]);
@@ -826,13 +852,15 @@ mod tests {
 			.any(|winner| matches!(winner, ProviderReference::Overwrite { .. })));
 		fs::write(root.as_path().join("mods/Disabled/meta.toml"), b"schema_version = 2\n")
 			.context(ErrorMarker::io_failure())?;
-		EnvironmentAdapter.prepare_launch(&root, &binding, &cancellation)?;
+		EnvironmentAdapter
+			.prepare_launch(&root, &binding, &cancellation)
+			.await?;
 		Ok(())
 	}
 
-	#[test]
-	fn folder_sets_reject_mismatches_duplicates_and_spelling_changes() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn folder_sets_reject_mismatches_duplicates_and_spelling_changes() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		fs::create_dir(root.as_path().join("mods/Present")).context(ErrorMarker::io_failure())?;
 		for modlist in [
 			"+Missing\n",
@@ -846,51 +874,58 @@ mod tests {
 			assert!(
 				EnvironmentAdapter
 					.prepare_launch(&root, &binding, &CancellationToken::new())
+					.await
 					.is_err(),
 				"{modlist:?}"
 			);
 		}
 		fs::write(root.as_path().join("profile/modlist.txt"), b"-Present\n")
 			.context(ErrorMarker::io_failure())?;
-		EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		Ok(())
 	}
 
-	#[test]
-	fn inventory_rejects_cross_provider_file_directory_collision() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn inventory_rejects_cross_provider_file_directory_collision() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		fs::create_dir(root.as_path().join("overwrite/FalloutNV.esm")).context(ErrorMarker::io_failure())?;
 		assert!(EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await
 			.is_err());
 		Ok(())
 	}
 
-	#[test]
-	fn live_owned_spool_is_not_pending_mutation_but_other_entries_are() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn live_owned_spool_is_not_pending_mutation_but_other_entries_are() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		let adapter = EnvironmentAdapter;
 		let cancellation = CancellationToken::new();
-		adapter.prepare_launch(&root, &binding, &cancellation)?;
+		adapter.prepare_launch(&root, &binding, &cancellation).await?;
 		let spool = TempDir::new_in(root.as_path().join("temp")).context(ErrorMarker::io_failure())?;
 
-		adapter.check_launch_with_spool(&root, &binding, Some(&spool), &cancellation)?;
-		assert!(adapter.check_launch(&root, &binding, &cancellation).is_err());
+		adapter.check_launch_with_spool(&root, &binding, Some(&spool), &cancellation)
+			.await?;
+		assert!(adapter.check_launch(&root, &binding, &cancellation).await.is_err());
 		let other = TempDir::new_in(root.as_path().join("temp")).context(ErrorMarker::io_failure())?;
 		assert!(adapter
 			.check_launch_with_spool(&root, &binding, Some(&spool), &cancellation)
+			.await
 			.is_err());
 		drop(other);
-		adapter.check_launch_with_spool(&root, &binding, Some(&spool), &cancellation)?;
+		adapter.check_launch_with_spool(&root, &binding, Some(&spool), &cancellation)
+			.await?;
 		drop(spool);
 
-		adapter.check_launch(&root, &binding, &cancellation)?;
+		adapter.check_launch(&root, &binding, &cancellation).await?;
 		Ok(())
 	}
 
-	#[test]
-	fn missing_plugin_lists_and_opaque_save_contents_are_allowed() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn missing_plugin_lists_and_opaque_save_contents_are_allowed() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		for name in ["plugins.txt", "loadorder.txt"] {
 			fs::remove_file(root.as_path().join("profile").join(name)).context(ErrorMarker::io_failure())?;
 		}
@@ -901,7 +936,9 @@ mod tests {
 			b"opaque",
 		)
 		.context(ErrorMarker::io_failure())?;
-		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		assert_eq!(prepared.winners.len(), 1);
 		let archive = fs::read(prepared.cache_directory.join("Fallout - Invalidation.bsa"))
 			.context(ErrorMarker::io_failure())?;
@@ -912,13 +949,14 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn invalid_postrun_plugin_entries_are_reported_without_repair() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn invalid_postrun_plugin_entries_are_reported_without_repair() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		let plugins = root.as_path().join("profile/plugins.txt");
 		fs::write(&plugins, b"Unsupported.esl\r\n").context(ErrorMarker::io_failure())?;
 		assert!(EnvironmentAdapter
 			.check_launch(&root, &binding, &CancellationToken::new())
+			.await
 			.is_err());
 		assert_eq!(
 			fs::read(&plugins).context(ErrorMarker::io_failure())?,
@@ -927,12 +965,14 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn pending_work_is_refused_without_cleanup() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn pending_work_is_refused_without_cleanup() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
 		let pending = root.as_path().join("temp/unfinished");
 		fs::create_dir(&pending).context(ErrorMarker::io_failure())?;
-		let result = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new());
+		let result = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await;
 		assert!(
 			matches!(result, Err(error) if error.current_context() == &ErrorMarker::manual_cleanup_required())
 		);
@@ -940,17 +980,21 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn valid_postrun_edits_persist_without_prelaunch_revalidation() -> Result<(), ErrorMarker> {
-		let (_temp, root, binding) = fixture()?;
-		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+	#[tokio::test]
+	async fn valid_postrun_edits_persist_without_prelaunch_revalidation() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		let plugins = root.as_path().join("profile/plugins.txt");
 		fs::write(&plugins, b"# retained edit\r\nMissing.esp\r\n").context(ErrorMarker::io_failure())?;
 		assert!(prepared
 			.profile_files
 			.iter()
 			.any(|file| file.name == "plugins.txt" && file.text.is_empty()));
-		EnvironmentAdapter.check_launch(&root, &binding, &CancellationToken::new())?;
+		EnvironmentAdapter
+			.check_launch(&root, &binding, &CancellationToken::new())
+			.await?;
 		assert_eq!(
 			fs::read(&plugins).context(ErrorMarker::io_failure())?,
 			b"# retained edit\r\nMissing.esp\r\n"

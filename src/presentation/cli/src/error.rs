@@ -68,11 +68,8 @@ pub(crate) fn export_error<C>(report: &Report<C>, output: &Path) -> String {
 				Some("Choose a new output folder; even an empty existing folder is refused.")
 			}
 			ErrorCode::EnvironmentRootUnsafe => Some(
-				"Check that the destination is outside the Environment Root and Game Installation and that source paths are ordinary files.",
+				"Check that the destination is outside the Environment Root and that source paths are ordinary files.",
 			),
-			ErrorCode::EnvironmentInvalid if marker.phase() == Some("export_source_changed") => {
-				Some("Stop source writers, inspect changes, then start a new export.")
-			}
 			ErrorCode::InvalidDataPath => {
 				Some("Choose a safe output folder name and inspect the source paths.")
 			}

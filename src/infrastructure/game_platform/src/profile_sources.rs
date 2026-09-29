@@ -70,9 +70,10 @@ impl GamePlatformAdapter {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
 
-			let contents = match directory {
-				Some(directory) => read_optional_file(&directory.join(name)).await?,
-				None => None,
+			let contents = if let Some(directory) = directory {
+				read_optional_file(&directory.join(name)).await?
+			} else {
+				None
 			};
 			files.push(ProfileSource { name, contents });
 		}

@@ -1,20 +1,10 @@
 use crate::hashing::sha256;
-use crate::profile::MAX_PROFILE_BYTES;
-use crate::safe_fs::EntryBudget;
-use crate::safe_fs::MAX_TRAVERSAL_DEPTH;
-use crate::safe_fs::SafeDir;
-use crate::safe_fs::is_reparse;
-use crate::safe_fs::read_bounded;
-use crate::snapshot::MAX_MODS;
-use crate::snapshot::MAX_PROVIDER_ENTRIES;
-use crate::snapshot::MAX_PROVIDER_METADATA_BYTES;
 use application::ErrorMarker;
 use application::conflicts::ConflictContentRead;
 use application::conflicts::EnvironmentConflictScan;
 use application::conflicts::IndexedConflictFile;
 use application::conflicts::IndexedConflictFileId;
 use application::conflicts::ScannedConflictProvider;
-use cap_fs_ext::MetadataExt;
 use domain::ConflictProblem;
 use domain::ConflictProblemKind;
 use domain::DataRelativePath;
@@ -38,7 +28,13 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str::from_utf8;
+use tokio::fs::File;
+use tokio::fs::metadata;
+use tokio::fs::read;
+use tokio::fs::read_dir;
+use tokio::fs::try_exists;
 use tokio_util::sync::CancellationToken;
 use toml::Value;
 use toml::from_str;
@@ -49,7 +45,7 @@ const WINDOWS_ERROR_SHARING_VIOLATION: i32 = 32;
 #[cfg(windows)]
 const WINDOWS_ERROR_LOCK_VIOLATION: i32 = 33;
 
-pub(crate) fn scan(
+pub(crate) async fn scan(
 	root_path: &Path,
 	binding: &GameBinding,
 	cancellation: &CancellationToken,
@@ -58,46 +54,35 @@ pub(crate) fn scan(
 		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
-	let root = SafeDir::open_absolute(root_path).map_err(|error| {
-		if error.current_context().kind() == io::ErrorKind::NotFound {
-			error.context(ErrorMarker::environment_not_initialized())
-		} else {
-			error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
-		}
-	})?;
-	if !root.exists("mods.toml")
+	if !try_exists(root_path.join("mods.toml"))
+		.await
 		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
 	{
 		return Err(report!(ErrorMarker::environment_not_initialized()));
 	}
-	let profile = open_required_directory(&root, "profile")?;
-	let mods = open_required_directory(&root, "mods")?;
-	let overwrite = open_required_directory(&root, "overwrite")?;
-	let _cache = open_required_directory(&root, "cache")?;
-	let temp = open_required_directory(&root, "temp")?;
-	if directory_has_entries(&temp, cancellation)? {
+	let profile = required_directory(root_path, "profile").await?;
+	let mods = required_directory(root_path, "mods").await?;
+	let overwrite = required_directory(root_path, "overwrite").await?;
+	required_directory(root_path, "cache").await?;
+	let temp = required_directory(root_path, "temp").await?;
+	if directory_has_entries(&temp, cancellation).await? {
 		return Err(report!(ErrorMarker::environment_invalid(Some("pending_operation"))));
 	}
 
-	let modlist = read_bounded(
-		&profile,
-		"modlist.txt",
-		MAX_PROFILE_BYTES,
-		ErrorMarker::io_failure().with_phase("conflict_scan"),
-		cancellation,
-	)?;
+	let modlist = read(profile.join("modlist.txt"))
+		.await
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let (installed_mods, mut problems) = parse_modlist(&modlist);
-	let mut mod_directories = enumerate_mod_directories(&mods, cancellation, &mut problems)?;
-	if mod_directories.len() > MAX_MODS {
-		return Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan")));
-	}
+	let mut mod_directories = enumerate_mod_directories(&mods, cancellation, &mut problems).await?;
 
 	let mut providers = Vec::new();
-	let game = SafeDir::open_absolute(binding.game_directory().as_path())
-		.context(ErrorMarker::environment_invalid(Some("game_binding")))?;
-	match game.open_dir("Data") {
-		Ok(data) => providers.push(scan_provider(&data, ProviderIdentity::SteamData, true, cancellation)?),
-		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {
+	let data = binding.game_directory().as_path().join("Data");
+	match metadata(&data).await {
+		Ok(metadata) if metadata.is_dir() => {
+			providers.push(scan_provider(&data, ProviderIdentity::SteamData, true, cancellation).await?);
+		}
+		Ok(_) => return Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan"))),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {
 			let mut provider = empty_provider(ProviderIdentity::SteamData, true);
 			provider.problems.push(ConflictProblem {
 				kind: ConflictProblemKind::ProviderMissing,
@@ -105,7 +90,7 @@ pub(crate) fn scan(
 			});
 			providers.push(provider);
 		}
-		Err(error) => return Err(error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))),
+		Err(error) => return Err(report!(error).context(ErrorMarker::io_failure().with_phase("conflict_scan"))),
 	}
 
 	for installed in installed_mods {
@@ -127,14 +112,14 @@ pub(crate) fn scan(
 			providers.push(provider);
 			continue;
 		};
+
 		let identity = ProviderIdentity::DataMod {
 			mod_name: canonical_name,
 			priority: installed.priority,
 		};
-		let directory = mods
-			.open_dir(&directory_name)
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-		providers.push(scan_provider(&directory, identity, installed.enabled, cancellation)?);
+		providers.push(
+			scan_provider(&mods.join(directory_name), identity, installed.enabled, cancellation).await?,
+		);
 	}
 	if !mod_directories.is_empty() {
 		problems.push(ConflictProblem {
@@ -143,17 +128,12 @@ pub(crate) fn scan(
 		});
 	}
 
-	providers.push(scan_provider(
-		&overwrite,
-		ProviderIdentity::Overwrite,
-		true,
-		cancellation,
-	)?);
+	providers.push(scan_provider(&overwrite, ProviderIdentity::Overwrite, true, cancellation).await?);
 
 	Ok(EnvironmentConflictScan { providers, problems })
 }
 
-pub(crate) fn read_content(
+pub(crate) async fn read_content(
 	root_path: &Path,
 	binding: &GameBinding,
 	id: &IndexedConflictFileId,
@@ -163,66 +143,30 @@ pub(crate) fn read_content(
 		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
-	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let provider = match id.identity() {
-		ProviderIdentity::SteamData => {
-			let game = SafeDir::open_absolute(binding.game_directory().as_path())
-				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-			game.open_dir("Data")
-				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
-		}
-		ProviderIdentity::DataMod { mod_name, .. } => {
-			let mods = root
-				.open_dir("mods")
-				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-			mods.open_dir(mod_name.as_str())
-				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
-		}
-		ProviderIdentity::Overwrite => root
-			.open_dir("overwrite")
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?,
+		ProviderIdentity::SteamData => binding.game_directory().as_path().join("Data"),
+		ProviderIdentity::DataMod { mod_name, .. } => root_path.join("mods").join(mod_name.as_str()),
+		ProviderIdentity::Overwrite => root_path.join("overwrite"),
 	};
-
-	let mut current = provider;
-	let mut components = id.path().components().peekable();
-	while let Some(component) = components.next() {
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
-		}
-
-		if components.peek().is_none() {
-			let metadata = match current.symlink_metadata(component) {
-				Ok(metadata) => metadata,
-				Err(error) if content_access_is_unavailable(error.current_context()) => {
-					return Ok(ConflictContentRead::Unavailable);
-				}
-				Err(error) => {
-					return Err(
-						error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
-					);
-				}
-			};
-			if !metadata.is_file() || metadata.nlink() != 1 {
-				return Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan")));
-			}
-			let file = match current.open_regular(component) {
-				Ok(file) => file,
-				Err(error) if content_access_is_unavailable(error.current_context()) => {
-					return Ok(ConflictContentRead::Unavailable);
-				}
-				Err(error) => {
-					return Err(
-						error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
-					);
-				}
-			};
-			return sha256(file, cancellation);
-		}
-		current = current
-			.open_dir(component)
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+	let path = id
+		.path()
+		.components()
+		.fold(provider, |path, component| path.join(component));
+	let metadata = match metadata(&path).await {
+		Ok(metadata) => metadata,
+		Err(error) if content_access_is_unavailable(&error) => return Ok(ConflictContentRead::Unavailable),
+		Err(error) => return Err(report!(error).context(ErrorMarker::io_failure().with_phase("conflict_scan"))),
+	};
+	if !metadata.is_file() {
+		return Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan")));
 	}
-	Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan")))
+
+	let file = match File::open(&path).await {
+		Ok(file) => file,
+		Err(error) if content_access_is_unavailable(&error) => return Ok(ConflictContentRead::Unavailable),
+		Err(error) => return Err(report!(error).context(ErrorMarker::io_failure().with_phase("conflict_scan"))),
+	};
+	sha256(file, cancellation).await
 }
 
 fn content_access_is_unavailable(error: &io::Error) -> bool {
@@ -254,34 +198,29 @@ fn empty_provider(identity: ProviderIdentity, enabled: bool) -> ScannedConflictP
 	}
 }
 
-fn open_required_directory(root: &SafeDir, name: &str) -> Result<SafeDir, ErrorMarker> {
-	root.open_dir(name).map_err(|error| {
-		if error.current_context().kind() == io::ErrorKind::NotFound {
-			error.context(ErrorMarker::environment_not_initialized())
-		} else {
-			error.context(ErrorMarker::io_failure().with_phase("conflict_scan"))
+async fn required_directory(root: &Path, name: &str) -> Result<PathBuf, ErrorMarker> {
+	let path = root.join(name);
+	match metadata(&path).await {
+		Ok(metadata) if metadata.is_dir() => Ok(path),
+		Ok(_) => Err(report!(ErrorMarker::io_failure().with_phase("conflict_scan"))),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {
+			Err(report!(error).context(ErrorMarker::environment_not_initialized()))
 		}
-	})
+		Err(error) => Err(report!(error).context(ErrorMarker::io_failure().with_phase("conflict_scan"))),
+	}
 }
 
-fn directory_has_entries(directory: &SafeDir, cancellation: &CancellationToken) -> Result<bool, ErrorMarker> {
-	let opened = directory.entries();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
-	}
-
-	let mut entries = opened.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-	let next = entries.next();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
-	}
-
-	let Some(entry) = next else {
-		return Ok(false);
-	};
-	entry.into_report()
+async fn directory_has_entries(directory: &Path, cancellation: &CancellationToken) -> Result<bool, ErrorMarker> {
+	let mut entries = read_dir(directory)
+		.await
 		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-	Ok(true)
+	let next = entries.next_entry().await;
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
+	}
+
+	Ok(next.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+		.is_some())
 }
 
 fn parse_modlist(bytes: &[u8]) -> (Vec<InstalledMod>, Vec<ConflictProblem>) {
@@ -353,29 +292,24 @@ fn modlist_problem() -> ConflictProblem {
 	}
 }
 
-fn enumerate_mod_directories(
-	mods: &SafeDir,
+async fn enumerate_mod_directories(
+	mods: &Path,
 	cancellation: &CancellationToken,
 	problems: &mut Vec<ConflictProblem>,
 ) -> Result<HashMap<String, (OsString, ModName)>, ErrorMarker> {
-	let opened = mods.entries();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
-	}
-
-	let mut entries = opened.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+	let mut entries = read_dir(mods)
+		.await
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let mut result = HashMap::new();
-	loop {
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+	{
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
-		let Some(entry) = entries.next() else {
-			break;
-		};
-		let entry = entry
-			.into_report()
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 		let os_name = entry.file_name();
 		let Some(spelling) = os_name.to_str() else {
 			problems.push(ConflictProblem {
@@ -388,20 +322,18 @@ fn enumerate_mod_directories(
 			problems.push(modlist_problem());
 			continue;
 		};
-		let metadata = mods
-			.entry_metadata(&os_name)
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-		if is_reparse(&metadata) || !metadata.is_dir() {
+		if !metadata(entry.path())
+			.await
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+			.is_dir()
+		{
 			problems.push(ConflictProblem {
-				kind: if is_reparse(&metadata) {
-					ConflictProblemKind::ReparsePoint
-				} else {
-					ConflictProblemKind::ProviderMissing
-				},
+				kind: ConflictProblemKind::ProviderMissing,
 				scope: ProblemScope::Global,
 			});
 			continue;
 		}
+
 		let key = name.comparison_key().to_owned();
 		if result.insert(key, (os_name, name)).is_some() {
 			problems.push(modlist_problem());
@@ -410,8 +342,8 @@ fn enumerate_mod_directories(
 	Ok(result)
 }
 
-fn scan_provider(
-	directory: &SafeDir,
+async fn scan_provider(
+	directory: &Path,
 	identity: ProviderIdentity,
 	enabled: bool,
 	cancellation: &CancellationToken,
@@ -419,9 +351,7 @@ fn scan_provider(
 	let mut provider = empty_provider(identity.clone(), enabled);
 	let mut problems = Vec::new();
 	let mut keys = HashMap::new();
-	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
 	scan_provider_directory(
-		directory,
 		directory,
 		&identity,
 		enabled,
@@ -430,15 +360,18 @@ fn scan_provider(
 		&mut keys,
 		&mut problems,
 		cancellation,
-		&mut budget,
-		MAX_TRAVERSAL_DEPTH,
-	)?;
+	)
+	.await?;
 
-	let metadata_exists = directory
-		.exists("meta.toml")
-		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-	if metadata_exists {
-		provider.tombstones = read_tombstones(directory, &identity, enabled, &mut problems, cancellation)?;
+	let metadata_path = directory.join("meta.toml");
+	if try_exists(&metadata_path)
+		.await
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+	{
+		let bytes = read(&metadata_path)
+			.await
+			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+		provider.tombstones = read_tombstones(&bytes, &identity, enabled, &mut problems);
 	}
 	validate_provider_tombstones(&provider, &keys, &mut problems);
 	provider.problems = problems;
@@ -447,11 +380,10 @@ fn scan_provider(
 
 #[expect(
 	clippy::too_many_arguments,
-	reason = "bounded recursive enumeration keeps safety state explicit at the adapter boundary"
+	reason = "recursive enumeration keeps provider state explicit at the adapter boundary"
 )]
-fn scan_provider_directory(
-	root: &SafeDir,
-	directory: &SafeDir,
+async fn scan_provider_directory(
+	directory: &Path,
 	identity: &ProviderIdentity,
 	enabled: bool,
 	prefix: &str,
@@ -459,39 +391,23 @@ fn scan_provider_directory(
 	keys: &mut HashMap<String, bool>,
 	problems: &mut Vec<ConflictProblem>,
 	cancellation: &CancellationToken,
-	budget: &mut EntryBudget,
-	remaining_depth: usize,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
 
-	let opened = directory.entries();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
-	}
-
-	let mut entries = opened.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-	let mut directory_entries = 0_usize;
-	loop {
+	let mut entries = read_dir(directory)
+		.await
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+	{
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
-		let Some(entry) = entries.next() else {
-			break;
-		};
-		let entry = entry
-			.into_report()
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-		budget.consume(&mut directory_entries)
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-		if remaining_depth == 0 {
-			return Err(
-				report!(io::Error::other("provider traversal depth changed during scan"))
-					.context(ErrorMarker::io_failure().with_phase("conflict_scan")),
-			);
-		}
 		let os_name = entry.file_name();
 		let Some(spelling) = os_name.to_str() else {
 			problems.push(ConflictProblem {
@@ -512,6 +428,7 @@ fn scan_provider_directory(
 			}
 			continue;
 		}
+
 		let relative = if prefix.is_empty() {
 			spelling.to_owned()
 		} else {
@@ -530,13 +447,10 @@ fn scan_provider_directory(
 			problems.push(path_problem(ConflictProblemKind::ReservedPath, &path));
 			continue;
 		}
-		let metadata = directory
-			.entry_metadata(&os_name)
+
+		let metadata = metadata(entry.path())
+			.await
 			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-		if is_reparse(&metadata) {
-			problems.push(path_problem(ConflictProblemKind::ReparsePoint, &path));
-			continue;
-		}
 		let is_directory = metadata.is_dir();
 		if keys.insert(path.comparison_key().to_owned(), is_directory).is_some() {
 			problems.push(path_problem(ConflictProblemKind::InternalKeyCollision, &path));
@@ -545,18 +459,8 @@ fn scan_provider_directory(
 		if is_directory {
 			let reference = provider_reference(identity, path.clone(), enabled);
 			provider.directories.push(reference);
-			let child = directory
-				.open_dir(&os_name)
-				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-			if !root.is_ancestor_of(&child)
-				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
-			{
-				problems.push(path_problem(ConflictProblemKind::ContainmentEscape, &path));
-				continue;
-			}
-			scan_provider_directory(
-				root,
-				&child,
+			Box::pin(scan_provider_directory(
+				&entry.path(),
 				identity,
 				enabled,
 				&relative,
@@ -564,22 +468,15 @@ fn scan_provider_directory(
 				keys,
 				problems,
 				cancellation,
-				budget,
-				remaining_depth - 1,
-			)?;
+			))
+			.await?;
 			continue;
 		}
 		if !metadata.is_file() {
 			problems.push(path_problem(ConflictProblemKind::UnsupportedEntryType, &path));
 			continue;
 		}
-		if metadata.nlink() != 1 {
-			problems.push(path_problem(ConflictProblemKind::HardLink, &path));
-			continue;
-		}
-		directory
-			.open_regular(&os_name)
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+
 		let reference = provider_reference(identity, path.clone(), enabled);
 		provider.files.push(IndexedConflictFile {
 			id: IndexedConflictFileId::new(identity.clone(), path),
@@ -607,54 +504,46 @@ fn provider_reference(identity: &ProviderIdentity, path: DataRelativePath, enabl
 }
 
 fn read_tombstones(
-	directory: &SafeDir,
+	bytes: &[u8],
 	identity: &ProviderIdentity,
 	enabled: bool,
 	problems: &mut Vec<ConflictProblem>,
-	cancellation: &CancellationToken,
-) -> Result<Vec<Tombstone>, ErrorMarker> {
-	let bytes = read_bounded(
-		directory,
-		"meta.toml",
-		MAX_PROVIDER_METADATA_BYTES,
-		ErrorMarker::io_failure().with_phase("conflict_scan"),
-		cancellation,
-	)?;
-	let Ok(text) = from_utf8(&bytes) else {
+) -> Vec<Tombstone> {
+	let Ok(text) = from_utf8(bytes) else {
 		problems.push(ConflictProblem {
 			kind: ConflictProblemKind::InvalidTombstoneMetadata,
 			scope: ProblemScope::Provider(identity.clone()),
 		});
-		return Ok(Vec::new());
+		return Vec::new();
 	};
 	let Ok(value) = from_str::<Value>(text) else {
 		problems.push(ConflictProblem {
 			kind: ConflictProblemKind::InvalidTombstoneMetadata,
 			scope: ProblemScope::Provider(identity.clone()),
 		});
-		return Ok(Vec::new());
+		return Vec::new();
 	};
 	let Some(table) = value.as_table() else {
 		problems.push(metadata_problem(identity));
-		return Ok(Vec::new());
+		return Vec::new();
 	};
 	if table.get("schema_version").and_then(Value::as_integer) != Some(1) {
 		problems.push(metadata_problem(identity));
-		return Ok(Vec::new());
+		return Vec::new();
 	}
 	let Some(tombstone_value) = table.get("tombstones") else {
-		return Ok(Vec::new());
+		return Vec::new();
 	};
 	let Some(tombstone_table) = tombstone_value.as_table() else {
 		problems.push(metadata_problem(identity));
-		return Ok(Vec::new());
+		return Vec::new();
 	};
 	if tombstone_table
 		.keys()
 		.any(|key| !matches!(key.as_str(), "files" | "directories"))
 	{
 		problems.push(metadata_problem(identity));
-		return Ok(Vec::new());
+		return Vec::new();
 	}
 
 	let mut result = Vec::new();
@@ -696,7 +585,7 @@ fn read_tombstones(
 			});
 		}
 	}
-	Ok(result)
+	result
 }
 
 fn metadata_problem(identity: &ProviderIdentity) -> ConflictProblem {
@@ -786,13 +675,11 @@ mod tests {
 	#[cfg(windows)]
 	use std::io::Error as IoError;
 	use std::io::ErrorKind;
-	#[cfg(unix)]
-	use std::os::unix::fs::symlink;
 	use std::path::Path;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding), Box<dyn Error>> {
+	async fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding), Box<dyn Error>> {
 		let temp = TempDir::new_in(current_dir()?)?;
 		let root = EnvironmentRoot::new(temp.path().join("environment"))
 			.map_err(|_| "invalid environment root")?;
@@ -813,6 +700,7 @@ mod tests {
 		let binding = plan.game_binding.clone();
 		EnvironmentAdapter
 			.publish(&root, plan, &CancellationToken::new())
+			.await
 			.expect("environment must publish");
 		Ok((temp, root, binding))
 	}
@@ -838,7 +726,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn composed_scan_ports_keep_distinct_supplied_bindings() -> Result<(), Box<dyn Error>> {
-		let (temp, root, first) = fixture()?;
+		let (temp, root, first) = fixture().await?;
 		let second_path = temp.path().join("second-game");
 		fs::create_dir_all(second_path.join("Data"))?;
 		fs::write(first.game_directory().as_path().join("Data/first.txt"), b"first")?;
@@ -868,9 +756,9 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn scan_enumerates_base_mods_disabled_state_overwrite_and_tombstones() -> Result<(), Box<dyn Error>> {
-		let (temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn scan_enumerates_base_mods_disabled_state_overwrite_and_tombstones() -> Result<(), Box<dyn Error>> {
+		let (temp, root, binding) = fixture().await?;
 		fs::write(temp.path().join("game/Data/Textures/Shared.dds"), b"base").or_else(|error| {
 			if error.kind() == ErrorKind::NotFound {
 				fs::create_dir_all(temp.path().join("game/Data/Textures"))?;
@@ -904,7 +792,9 @@ mod tests {
 			b"+High\r\n-Disabled\n+Low\r\n",
 		)?;
 
-		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new())
+			.await
+			.expect("scan must complete");
 
 		assert!(completed.problems.is_empty());
 		assert_eq!(completed.providers.len(), 5);
@@ -930,9 +820,9 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn missing_metadata_has_no_tombstones_or_metadata_problem() -> Result<(), Box<dyn Error>> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn missing_metadata_has_no_tombstones_or_metadata_problem() -> Result<(), Box<dyn Error>> {
+		let (_temp, root, binding) = fixture().await?;
 		write_provider(
 			root.as_path(),
 			"Plain",
@@ -942,7 +832,9 @@ mod tests {
 		fs::remove_file(root.as_path().join("mods/Plain/meta.toml"))?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Plain\n")?;
 
-		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new())
+			.await
+			.expect("scan must complete");
 		let provider = completed
 			.providers
 			.iter()
@@ -955,15 +847,16 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn present_invalid_metadata_is_reported() -> Result<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn present_invalid_metadata_is_reported() -> Result<(), Box<dyn Error>> {
 		for metadata in ["not = [", "schema_version = 2\n"] {
-			let (_temp, root, binding) = fixture()?;
+			let (_temp, root, binding) = fixture().await?;
 			write_provider(root.as_path(), "Broken", &[], metadata)?;
 			fs::write(root.as_path().join("profile/modlist.txt"), b"+Broken\n")?;
 
-			let completed =
-				scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
+			let completed = scan(root.as_path(), &binding, &CancellationToken::new())
+				.await
+				.expect("scan must complete");
 			let provider = completed
 				.providers
 				.iter()
@@ -977,8 +870,8 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn modlist_lists_the_highest_priority_first() {
+	#[tokio::test]
+	async fn modlist_lists_the_highest_priority_first() {
 		let (installed, problems) = parse_modlist(b"# Mod Organizer header\r\n+High\r\n-Disabled\r\n+Base\r\n");
 
 		assert!(problems.is_empty());
@@ -989,8 +882,8 @@ mod tests {
 		assert_eq!(priorities, [("Base", 0), ("Disabled", 1), ("High", 2)]);
 	}
 
-	#[test]
-	fn modlist_rejects_surrounding_name_whitespace() {
+	#[tokio::test]
+	async fn modlist_rejects_surrounding_name_whitespace() {
 		let (installed, problems) = parse_modlist(b"+ Visuals\n-Trailing \n");
 
 		assert!(installed.is_empty());
@@ -1001,8 +894,8 @@ mod tests {
 	}
 
 	#[cfg(windows)]
-	#[test]
-	fn windows_sharing_and_lock_violations_are_content_unavailability() {
+	#[tokio::test]
+	async fn windows_sharing_and_lock_violations_are_content_unavailability() {
 		assert!(content_access_is_unavailable(&IoError::from_raw_os_error(
 			super::WINDOWS_ERROR_SHARING_VIOLATION
 		)));
@@ -1011,9 +904,10 @@ mod tests {
 		)));
 	}
 
-	#[test]
-	fn modlist_matching_is_case_insensitive_and_directory_spelling_is_canonical() -> Result<(), Box<dyn Error>> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn modlist_matching_is_case_insensitive_and_directory_spelling_is_canonical() -> Result<(), Box<dyn Error>>
+	{
+		let (_temp, root, binding) = fixture().await?;
 		write_provider(
 			root.as_path(),
 			"Visuals",
@@ -1022,7 +916,9 @@ mod tests {
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+visuals\n")?;
 
-		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new())
+			.await
+			.expect("scan must complete");
 		let provider = completed
 			.providers
 			.iter()
@@ -1034,9 +930,9 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn completed_semantic_failures_are_typed_invalid_problems() -> Result<(), Box<dyn Error>> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn completed_semantic_failures_are_typed_invalid_problems() -> Result<(), Box<dyn Error>> {
+		let (_temp, root, binding) = fixture().await?;
 		write_provider(
 			root.as_path(),
 			"Broken",
@@ -1045,7 +941,9 @@ mod tests {
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Broken\n+broken\n")?;
 
-		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new())
+			.await
+			.expect("scan must complete");
 		let kinds = completed
 			.problems
 			.iter()
@@ -1059,9 +957,9 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn root_metadata_is_excluded_by_windows_case_insensitive_name() -> Result<(), Box<dyn Error>> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn root_metadata_is_excluded_by_windows_case_insensitive_name() -> Result<(), Box<dyn Error>> {
+		let (_temp, root, binding) = fixture().await?;
 		write_provider(
 			root.as_path(),
 			"Aliased",
@@ -1074,7 +972,9 @@ mod tests {
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Aliased\n")?;
 
-		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new())
+			.await
+			.expect("scan must complete");
 		let provider = completed
 			.providers
 			.iter()
@@ -1092,22 +992,23 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn modlist_access_failure_aborts_the_whole_scan_as_io_failure() -> Result<(), Box<dyn Error>> {
-		let (_temp, root, binding) = fixture()?;
+	#[tokio::test]
+	async fn modlist_access_failure_aborts_the_whole_scan_as_io_failure() -> Result<(), Box<dyn Error>> {
+		let (_temp, root, binding) = fixture().await?;
 		fs::remove_file(root.as_path().join("profile/modlist.txt"))?;
 
 		let error = scan(root.as_path(), &binding, &CancellationToken::new())
+			.await
 			.expect_err("missing modlist must abort the scan");
 
 		assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
 		Ok(())
 	}
 
-	#[test]
-	fn indexed_content_reads_hash_once_opened_and_report_namespace_replacements_as_failures()
+	#[tokio::test]
+	async fn indexed_content_reads_hash_once_opened_and_report_namespace_replacements_as_failures()
 	-> Result<(), Box<dyn Error>> {
-		let (_temp, root, binding) = fixture()?;
+		let (_temp, root, binding) = fixture().await?;
 		write_provider(
 			root.as_path(),
 			"Hashable",
@@ -1115,7 +1016,9 @@ mod tests {
 			"schema_version = 1\n",
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Hashable\n")?;
-		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new())
+			.await
+			.expect("scan must complete");
 		let id = completed
 			.providers
 			.iter()
@@ -1125,6 +1028,7 @@ mod tests {
 			.ok_or("indexed mod file")?;
 
 		let read = read_content(root.as_path(), &binding, id, &CancellationToken::new())
+			.await
 			.expect("content read must complete");
 		let ConflictContentRead::Sha256(digest) = read else {
 			return Err("stable content must hash".into());
@@ -1136,17 +1040,9 @@ mod tests {
 
 		fs::remove_file(root.as_path().join("mods/Hashable/file.txt"))?;
 		let error = read_content(root.as_path(), &binding, id, &CancellationToken::new())
+			.await
 			.expect_err("deleted indexed content must invalidate the complete query");
 		assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
-
-		#[cfg(unix)]
-		{
-			fs::write(root.as_path().join("mods/Hashable/replacement.txt"), b"replacement")?;
-			symlink("replacement.txt", root.as_path().join("mods/Hashable/file.txt"))?;
-			let error = read_content(root.as_path(), &binding, id, &CancellationToken::new())
-				.expect_err("reparse replacement must invalidate the complete query");
-			assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
-		}
 		Ok(())
 	}
 }

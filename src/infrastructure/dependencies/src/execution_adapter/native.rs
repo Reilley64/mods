@@ -85,7 +85,11 @@ impl ExecutionAdapter {
 			}),
 			prepare_launch_plan: Arc::new({
 				let adapter = adapter.clone();
-				move |cancellation| completed(adapter.prepare_launch_plan(cancellation))
+				move |cancellation| {
+					let adapter = adapter.clone();
+					Box::pin(async move { adapter.prepare_launch_plan(cancellation).await })
+						as PortFuture<_>
+				}
 			}),
 			project_execution_profile: Arc::new(|plan: &LaunchPlan| {
 				completed(project_execution_profile(plan))
@@ -93,7 +97,13 @@ impl ExecutionAdapter {
 			stage_execution_profile: Arc::new({
 				let adapter = adapter.clone();
 				move |plan: &LaunchPlan, cancellation| {
-					completed(adapter.stage_execution_profile(plan, cancellation))
+					let adapter = adapter.clone();
+					// The port borrows the plan, so the future owns a copy of the prepared launch.
+					let prepared = plan.state.downcast_ref::<PreparedLaunch>().cloned();
+					Box::pin(async move {
+						let prepared = prepared.ok_or_else(foreign_handle)?;
+						adapter.stage_execution_profile(&prepared, cancellation).await
+					}) as PortFuture<_>
 				}
 			}),
 			create_virtual_file_system: Arc::new(
@@ -123,10 +133,14 @@ impl ExecutionAdapter {
 						as PortFuture<_>
 				}
 			}),
-			preserve_execution_profile: Arc::new(|staged| completed(preserve_execution_profile(staged))),
+			preserve_execution_profile: Arc::new(|staged| {
+				Box::pin(preserve_execution_profile(staged)) as PortFuture<_>
+			}),
 			finish_program_output: Arc::new(|output| completed(finish_program_output(output))),
 			check_profile_state: Arc::new(move |cancellation| {
-				completed(adapter.check_profile_state(cancellation))
+				let adapter = adapter.clone();
+				Box::pin(async move { adapter.check_profile_state(cancellation).await })
+					as PortFuture<_>
 			}),
 		}
 	}
@@ -166,8 +180,10 @@ impl ExecutionAdapter {
 		})))
 	}
 
-	fn prepare_launch_plan(&self, cancellation: CancellationToken) -> Result<LaunchPlan, ErrorMarker> {
-		let prepared = EnvironmentAdapter.prepare_launch(&self.root, &self.binding, &cancellation)?;
+	async fn prepare_launch_plan(&self, cancellation: CancellationToken) -> Result<LaunchPlan, ErrorMarker> {
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&self.root, &self.binding, &cancellation)
+			.await?;
 
 		let providers = prepared
 			.providers
@@ -184,14 +200,14 @@ impl ExecutionAdapter {
 		})
 	}
 
-	fn stage_execution_profile(
+	async fn stage_execution_profile(
 		&self,
-		plan: &LaunchPlan,
+		prepared: &PreparedLaunch,
 		cancellation: CancellationToken,
 	) -> Result<StagedExecutionProfile, ErrorMarker> {
-		let prepared = plan.state.downcast_ref::<PreparedLaunch>().ok_or_else(foreign_handle)?;
-
-		let inis = EnvironmentAdapter.derive_execution_inis(&self.root, prepared, &cancellation)?;
+		let inis = EnvironmentAdapter
+			.derive_execution_inis(&self.root, prepared, &cancellation)
+			.await?;
 
 		Ok(StagedExecutionProfile {
 			directory: inis.path().to_owned(),
@@ -260,13 +276,15 @@ impl ExecutionAdapter {
 		})))
 	}
 
-	fn check_profile_state(&self, cancellation: CancellationToken) -> Result<(), ErrorMarker> {
-		EnvironmentAdapter.check_launch_with_spool(
-			&self.root,
-			&self.binding,
-			self.capture.as_ref().and_then(|capture| capture.directory()),
-			&cancellation,
-		)
+	async fn check_profile_state(&self, cancellation: CancellationToken) -> Result<(), ErrorMarker> {
+		EnvironmentAdapter
+			.check_launch_with_spool(
+				&self.root,
+				&self.binding,
+				self.capture.as_ref().and_then(|capture| capture.directory()),
+				&cancellation,
+			)
+			.await
 	}
 }
 
@@ -389,10 +407,10 @@ async fn supervise_program(
 	})
 }
 
-fn preserve_execution_profile(staged: StagedExecutionProfile) -> Result<(), ErrorMarker> {
+async fn preserve_execution_profile(staged: StagedExecutionProfile) -> Result<(), ErrorMarker> {
 	let inis: ExecutionInis = staged.state.downcast().ok_or_else(foreign_handle)?;
 
-	inis.preserve()
+	inis.preserve().await
 }
 
 fn finish_program_output(output: ProgramOutput) -> Result<(), ErrorMarker> {

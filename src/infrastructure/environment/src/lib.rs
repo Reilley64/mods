@@ -5,27 +5,25 @@ mod conflict_scan;
 mod derived_profile;
 mod execution_preparation;
 mod export;
-mod export_publication;
 pub use derived_profile::ExecutionInis;
+mod files;
 mod hashing;
 mod manifest;
 mod profile;
 mod profile_activation;
 mod publication;
-mod safe_fs;
 mod snapshot;
 mod transactions;
 
 use crate::conflict_scan::read_content as read_conflict_content;
 use crate::conflict_scan::scan as scan_conflicts;
+use crate::files::validate_exact_entries;
 use crate::manifest::validate_manifest_file;
 use crate::manifest::write_manifest;
 use crate::profile::stage_profile;
 use crate::profile::validate_profile;
 use crate::publication::OPERATION_DIRECTORY;
 use crate::publication::publish_initialization;
-use crate::safe_fs::sync_tree;
-use crate::safe_fs::validate_exact_entries;
 use crate::snapshot::assess_installation as assess_installation_snapshot;
 use crate::snapshot::load as load_snapshot;
 use crate::transactions::InstallationTransaction;
@@ -61,12 +59,17 @@ pub use execution_preparation::PreparedLaunch;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
-use safe_fs::SafeDir;
 use std::ffi::OsStr;
-use std::future::ready;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::fs::create_dir;
+use tokio::fs::create_dir_all;
+use tokio::fs::metadata;
+use tokio::fs::read;
+use tokio::fs::read_dir;
+use tokio::fs::write;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -74,7 +77,7 @@ use tokio_util::sync::CancellationToken;
 pub struct EnvironmentAdapter;
 
 impl EnvironmentAdapter {
-	fn assess(
+	async fn assess(
 		&self,
 		root: &EnvironmentRoot,
 		cancellation: &CancellationToken,
@@ -83,19 +86,17 @@ impl EnvironmentAdapter {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let directory = match SafeDir::open_absolute(root.as_path()) {
-			Ok(directory) => directory,
-			Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {
-				return Ok(InitializationTargetAssessment::Available);
+		match metadata(root.as_path()).await {
+			Ok(metadata) if metadata.is_dir() => assess_open(root.as_path(), cancellation).await,
+			Ok(_) => Err(report!(ErrorMarker::environment_root_unsafe())),
+			Err(error) if error.kind() == io::ErrorKind::NotFound => {
+				Ok(InitializationTargetAssessment::Available)
 			}
-			Err(error) => {
-				return Err(error.context(ErrorMarker::environment_root_unsafe()));
-			}
-		};
-		assess_open(&directory, cancellation)
+			Err(error) => Err(report!(error).context(ErrorMarker::environment_root_unsafe())),
+		}
 	}
 
-	fn publish(
+	async fn publish(
 		&self,
 		root: &EnvironmentRoot,
 		plan: InitializationPlan,
@@ -105,90 +106,69 @@ impl EnvironmentAdapter {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let root_dir =
-			SafeDir::create_absolute(root.as_path()).context(ErrorMarker::environment_root_unsafe())?;
-		assess_open(&root_dir, cancellation)?;
-		let temp = root_dir
-			.ensure_dir("temp")
+		let root_dir = root.as_path();
+		create_dir_all(root_dir)
+			.await
 			.context(ErrorMarker::environment_root_unsafe())?;
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
+		assess_open(root_dir, cancellation).await?;
 
-		let operation = match temp.create_dir(OPERATION_DIRECTORY) {
-			Ok(operation) => operation,
-			Err(error) if error.current_context().kind() == io::ErrorKind::AlreadyExists => {
-				return Err(error.context(ErrorMarker::manual_cleanup_required()));
+		let temp = root_dir.join("temp");
+		create_dir_all(&temp)
+			.await
+			.context(ErrorMarker::environment_root_unsafe())?;
+
+		let operation = temp.join(OPERATION_DIRECTORY);
+		match create_dir(&operation).await {
+			Ok(()) => {}
+			Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+				return Err(report!(error).context(ErrorMarker::manual_cleanup_required()));
 			}
-			Err(error) => return Err(error.context(ErrorMarker::environment_root_unsafe())),
-		};
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
+			Err(error) => return Err(report!(error).context(ErrorMarker::environment_root_unsafe())),
 		}
-		let stage = operation
-			.create_dir("stage")
-			.context(ErrorMarker::environment_root_unsafe())?;
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let mods = stage
-			.create_dir("mods")
-			.context(ErrorMarker::environment_root_unsafe())?;
-		let profile = stage
-			.create_dir("profile")
-			.context(ErrorMarker::environment_root_unsafe())?;
-		let overwrite = stage
-			.create_dir("overwrite")
-			.context(ErrorMarker::environment_root_unsafe())?;
-		let cache = stage
-			.create_dir("cache")
-			.context(ErrorMarker::environment_root_unsafe())?;
+		let stage = operation.join("stage");
+		for directory in ["", "mods", "profile", "overwrite", "cache"] {
+			create_dir(stage.join(directory))
+				.await
+				.context(ErrorMarker::environment_root_unsafe())?;
+		}
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let records = stage_profile(&profile, &plan.profile_sources, cancellation)?;
-		cache.write_new("Fallout - Invalidation.bsa", &empty_bsa_bytes())
+		let records = stage_profile(&stage.join("profile"), &plan.profile_sources, cancellation).await?;
+		write(stage.join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes())
+			.await
 			.context(ErrorMarker::environment_root_unsafe())?;
-		write_manifest(&stage, &plan)?;
-		validate_stage(&stage, LayoutLocation::Stage, cancellation).map_err(|report| {
-			if report.current_context().code() == ErrorCode::EnvironmentInvalid {
-				report.context(ErrorMarker::game_install_invalid())
-			} else {
-				report
-			}
-		})?;
-
-		for directory in [&mods, &profile, &overwrite, &cache] {
-			sync_tree(directory, ErrorMarker::environment_root_unsafe(), cancellation)?;
-		}
-		stage.sync().context(ErrorMarker::environment_root_unsafe())?;
-		operation.sync().context(ErrorMarker::environment_root_unsafe())?;
-		temp.sync().context(ErrorMarker::environment_root_unsafe())?;
-		root_dir.sync().context(ErrorMarker::environment_root_unsafe())?;
+		write_manifest(&stage, &plan).await?;
+		validate_stage(&stage, LayoutLocation::Stage, cancellation)
+			.await
+			.map_err(|report| {
+				if report.current_context().code() == ErrorCode::EnvironmentInvalid {
+					report.context(ErrorMarker::game_install_invalid())
+				} else {
+					report
+				}
+			})?;
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		drop(cache);
-		drop(overwrite);
-		drop(profile);
-		drop(mods);
-		drop(stage);
-		drop(operation);
-		publish_initialization(&root_dir, &temp, cancellation)?;
+		publish_initialization(root_dir, &temp, cancellation).await?;
 		Ok(records)
 	}
 
-	fn load_installation_state(
+	async fn load_installation_state(
 		&self,
 		root: &EnvironmentRoot,
 		binding: &GameBinding,
 		access: InstallationStateAccess,
 		cancellation: &CancellationToken,
 	) -> Result<InstallationState, ErrorMarker> {
-		let snapshot = load_snapshot(root.as_path(), binding, access, cancellation)?;
+		let snapshot = load_snapshot(root.as_path(), binding, access, cancellation).await?;
 		Ok(InstallationState {
 			game_binding: snapshot.game_binding,
 			installed_mods: snapshot.installed_mods,
@@ -197,24 +177,25 @@ impl EnvironmentAdapter {
 		})
 	}
 
-	fn assess_installation(
+	async fn assess_installation(
 		&self,
 		root: &EnvironmentRoot,
 		binding: &GameBinding,
 		plan: &InstallPlan,
 		cancellation: &CancellationToken,
 	) -> Result<InstallationAssessment, ErrorMarker> {
-		assess_installation_snapshot(root.as_path(), binding, plan, cancellation)
+		assess_installation_snapshot(root.as_path(), binding, plan, cancellation).await
 	}
 
-	fn begin_installation(
+	async fn begin_installation(
 		&self,
 		root: &EnvironmentRoot,
 		binding: &GameBinding,
 		approved: ApprovedInstallation,
 		cancellation: &CancellationToken,
 	) -> Result<InstallationChange, ErrorMarker> {
-		let transaction = InstallationTransaction::begin(root.as_path(), binding, approved, cancellation)?;
+		let transaction =
+			InstallationTransaction::begin(root.as_path(), binding, approved, cancellation).await?;
 		let transaction = Arc::new(Mutex::new(transaction));
 		let begin_transaction = Arc::clone(&transaction);
 		let begin_file = Arc::new(move |path: DataRelativePath, cancellation: CancellationToken| {
@@ -231,7 +212,7 @@ impl EnvironmentAdapter {
 						ErrorMarker::operation_cancelled().with_phase("extraction")
 					));
 				}
-				let file = transaction.begin_file(&path, &cancellation);
+				let file = transaction.begin_file(&path, &cancellation).await;
 				if cancellation.is_cancelled() {
 					return Err(report!(
 						ErrorMarker::operation_cancelled().with_phase("extraction")
@@ -263,7 +244,7 @@ impl EnvironmentAdapter {
 								)
 								.with_phase("publication")));
 							}
-							let written = file.0.write_chunk(&contents).context(
+							let written = file.0.write_all(&contents).await.context(
 								ErrorMarker::transaction_failure()
 									.with_phase("publication"),
 							);
@@ -295,7 +276,7 @@ impl EnvironmentAdapter {
 							return Err(report!(ErrorMarker::transaction_failure()
 								.with_phase("publication")));
 						}
-						let finished = file.0.finish();
+						let finished = file.0.flush().await;
 						if cancellation.is_cancelled() {
 							return Err(report!(ErrorMarker::operation_cancelled()
 								.with_phase("extraction")));
@@ -332,7 +313,7 @@ impl EnvironmentAdapter {
 						ErrorMarker::operation_cancelled().with_phase("publication")
 					));
 				}
-				transaction.finish(&cancellation)
+				transaction.finish(&cancellation).await
 			}) as PortFuture<_>
 		});
 		Ok(InstallationChange { begin_file, finish })
@@ -344,15 +325,20 @@ impl EnvironmentAdapter {
 		binding: GameBinding,
 	) -> ScanEnvironmentConflicts {
 		Arc::new(move |cancellation| {
-			let result = scan_conflicts(root.as_path(), &binding, &cancellation);
-			Box::pin(ready(result)) as PortFuture<_>
+			let root = root.clone();
+			let binding = binding.clone();
+			Box::pin(async move { scan_conflicts(root.as_path(), &binding, &cancellation).await })
+				as PortFuture<_>
 		})
 	}
 
 	pub fn read_conflict_content_port(&self, root: EnvironmentRoot, binding: GameBinding) -> ReadConflictContent {
 		Arc::new(move |id, cancellation| {
-			let result = read_conflict_content(root.as_path(), &binding, &id, &cancellation);
-			Box::pin(ready(result)) as PortFuture<_>
+			let root = root.clone();
+			let binding = binding.clone();
+			Box::pin(
+				async move { read_conflict_content(root.as_path(), &binding, &id, &cancellation).await },
+			) as PortFuture<_>
 		})
 	}
 
@@ -363,40 +349,54 @@ impl EnvironmentAdapter {
 	) -> LoadInstallationState {
 		let adapter = self.clone();
 		Arc::new(move |access, cancellation| {
-			let result = adapter.load_installation_state(&root, &binding, access, &cancellation);
-			Box::pin(ready(result)) as PortFuture<_>
+			let adapter = adapter.clone();
+			let root = root.clone();
+			let binding = binding.clone();
+			Box::pin(async move {
+				adapter.load_installation_state(&root, &binding, access, &cancellation)
+					.await
+			}) as PortFuture<_>
 		})
 	}
 
 	pub fn assess_installation_port(&self, root: EnvironmentRoot, binding: GameBinding) -> AssessInstallation {
 		let adapter = self.clone();
 		Arc::new(move |plan, cancellation| {
-			let result = adapter.assess_installation(&root, &binding, &plan, &cancellation);
-			Box::pin(ready(result)) as PortFuture<_>
+			let adapter = adapter.clone();
+			let root = root.clone();
+			let binding = binding.clone();
+			Box::pin(
+				async move { adapter.assess_installation(&root, &binding, &plan, &cancellation).await },
+			) as PortFuture<_>
 		})
 	}
 
 	pub fn begin_installation_port(&self, root: EnvironmentRoot, binding: GameBinding) -> BeginInstallation {
 		let adapter = self.clone();
 		Arc::new(move |approved, cancellation| {
-			let result = adapter.begin_installation(&root, &binding, approved, &cancellation);
-			Box::pin(ready(result)) as PortFuture<_>
+			let adapter = adapter.clone();
+			let root = root.clone();
+			let binding = binding.clone();
+			Box::pin(async move {
+				adapter.begin_installation(&root, &binding, approved, &cancellation)
+					.await
+			}) as PortFuture<_>
 		})
 	}
 
 	pub fn assess_port(&self) -> AssessInitializationTarget {
 		let adapter = self.clone();
 		Arc::new(move |root, cancellation| {
-			let result = adapter.assess(&root, &cancellation);
-			Box::pin(ready(result)) as PortFuture<_>
+			let adapter = adapter.clone();
+			Box::pin(async move { adapter.assess(&root, &cancellation).await }) as PortFuture<_>
 		})
 	}
 
 	pub fn publish_port(&self) -> PublishEnvironment {
 		let adapter = self.clone();
 		Arc::new(move |root, plan, cancellation| {
-			let result = adapter.publish(&root, plan, &cancellation);
-			Box::pin(ready(result)) as PortFuture<_>
+			let adapter = adapter.clone();
+			Box::pin(async move { adapter.publish(&root, plan, &cancellation).await }) as PortFuture<_>
 		})
 	}
 }
@@ -407,39 +407,42 @@ pub(crate) enum LayoutLocation {
 	Root,
 }
 
-fn assess_open(
-	root: &SafeDir,
+async fn assess_open(
+	root: &Path,
 	cancellation: &CancellationToken,
 ) -> Result<InitializationTargetAssessment, ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	if root.exists("temp").context(ErrorMarker::environment_root_unsafe())? {
-		let temp = root.open_dir("temp").context(ErrorMarker::environment_root_unsafe())?;
-		let opened = temp.entries();
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let mut pending = opened.context(ErrorMarker::environment_root_unsafe())?;
-		if let Some(entry) = pending.next() {
-			entry.into_report().context(ErrorMarker::environment_root_unsafe())?;
-			return Err(report!(ErrorMarker::manual_cleanup_required()));
-		}
-	}
 
-	let opened = root.entries();
+	match read_dir(root.join("temp")).await {
+		Ok(mut pending) => {
+			if pending
+				.next_entry()
+				.await
+				.context(ErrorMarker::environment_root_unsafe())?
+				.is_some()
+			{
+				return Err(report!(ErrorMarker::manual_cleanup_required()));
+			}
+		}
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+		Err(error) => return Err(report!(error).context(ErrorMarker::environment_root_unsafe())),
+	}
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	let mut entries = opened.context(ErrorMarker::environment_root_unsafe())?;
-	loop {
+
+	let mut entries = read_dir(root).await.context(ErrorMarker::environment_root_unsafe())?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_root_unsafe())?
+	{
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		let Some(entry) = entries.next() else {
-			break;
-		};
-		let entry = entry.into_report().context(ErrorMarker::environment_root_unsafe())?;
+
 		let name = entry.file_name();
 		if name == OsStr::new("mods.toml") {
 			return Err(report!(ErrorMarker::environment_already_initialized()));
@@ -447,14 +450,19 @@ fn assess_open(
 		if name == OsStr::new("temp") {
 			continue;
 		}
-		if name != OsStr::new("logs") {
+		if name != OsStr::new("logs")
+			|| !metadata(entry.path())
+				.await
+				.context(ErrorMarker::environment_root_unsafe())?
+				.is_dir()
+		{
 			return Err(report!(ErrorMarker::environment_root_not_empty()));
 		}
-		root.open_dir("logs").context(ErrorMarker::environment_root_unsafe())?;
 	}
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	Ok(InitializationTargetAssessment::Available)
 }
 
@@ -470,8 +478,8 @@ fn empty_bsa_bytes() -> Vec<u8> {
 	bytes
 }
 
-pub(crate) fn validate_stage(
-	directory: &SafeDir,
+pub(crate) async fn validate_stage(
+	directory: &Path,
 	location: LayoutLocation,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
@@ -480,69 +488,36 @@ pub(crate) fn validate_stage(
 	} else {
 		&["mods", "profile", "overwrite", "cache", "mods.toml", "temp", "logs"][..]
 	};
-	validate_exact_entries(directory, allowed, cancellation)?;
-	let mods = directory
-		.open_dir("mods")
-		.context(ErrorMarker::environment_invalid(None))?;
-	let profile_dir = directory
-		.open_dir("profile")
-		.context(ErrorMarker::environment_invalid(None))?;
-	let overwrite = directory
-		.open_dir("overwrite")
-		.context(ErrorMarker::environment_invalid(None))?;
-	let cache = directory
-		.open_dir("cache")
-		.context(ErrorMarker::environment_invalid(None))?;
-	validate_exact_entries(&mods, &[], cancellation)?;
-	validate_exact_entries(&overwrite, &[], cancellation)?;
-	validate_exact_entries(&cache, &["Fallout - Invalidation.bsa"], cancellation)?;
-	validate_profile(&profile_dir, cancellation)?;
-	let manifest = validate_manifest_file(directory, cancellation)?;
-	let game = SafeDir::open_absolute(Path::new(&manifest.game_dir))
-		.context(ErrorMarker::environment_invalid(None))?;
-	if directory
-		.is_ancestor_of(&game)
+	validate_exact_entries(directory, allowed, cancellation).await?;
+	validate_exact_entries(&directory.join("mods"), &[], cancellation).await?;
+	validate_exact_entries(&directory.join("overwrite"), &[], cancellation).await?;
+	validate_exact_entries(&directory.join("cache"), &["Fallout - Invalidation.bsa"], cancellation).await?;
+	validate_profile(&directory.join("profile"), cancellation).await?;
+	let manifest = validate_manifest_file(directory, cancellation).await?;
+	if !metadata(&manifest.game_dir)
+		.await
 		.context(ErrorMarker::environment_invalid(None))?
-		|| game.is_ancestor_of(directory)
-			.context(ErrorMarker::environment_invalid(None))?
+		.is_dir()
 	{
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
-	validate_bsa_file(&cache, cancellation)
+
+	validate_bsa_file(&directory.join("cache"), cancellation).await
 }
 
-fn validate_bsa_file(cache: &SafeDir, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+async fn validate_bsa_file(cache: &Path, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	let opened = cache.open_regular("Fallout - Invalidation.bsa");
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	let mut bsa = opened.context(ErrorMarker::environment_invalid(None))?;
-	let expected = empty_bsa_bytes();
-	let mut bytes = vec![0_u8; expected.len() + 1];
-	let mut length = 0;
-	while length < bytes.len() {
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let read = bsa.read_chunk(&mut bytes[length..]);
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let read = read.context(ErrorMarker::environment_invalid(None))?;
-		if read == 0 {
-			break;
-		}
-		length += read;
-	}
-	if bytes[..length] != expected {
+
+	let bytes = read(cache.join("Fallout - Invalidation.bsa"))
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
+	if bytes != empty_bsa_bytes() {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	Ok(())
 }
-
 #[cfg(test)]
 #[expect(
 	clippy::expect_used,
@@ -556,7 +531,6 @@ mod tests {
 	use crate::profile::stage_profile;
 	use crate::publication::OPERATION_DIRECTORY;
 	use crate::publication::publish_initialization;
-	use crate::safe_fs::SafeDir;
 	use application::ErrorCode;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
@@ -568,6 +542,7 @@ mod tests {
 	use std::env::current_dir;
 	use std::fs;
 	use std::path::Path;
+	use std::path::PathBuf;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
@@ -596,27 +571,22 @@ mod tests {
 		}
 	}
 
-	fn staged_initialization(parent: &TempDir) -> (EnvironmentRoot, SafeDir, SafeDir, InitializationPlan) {
+	async fn staged_initialization(parent: &TempDir) -> (EnvironmentRoot, PathBuf, PathBuf, InitializationPlan) {
 		let root = environment_root(&parent.path().join("environment"));
 		let game = parent.path().join("game");
 		fs::create_dir(&game).expect("game dir must be created");
 		let plan = plan(&game);
-		let root_dir = SafeDir::create_absolute(root.as_path()).expect("root must be created");
-		let temp = root_dir.create_dir("temp").expect("temp must be created");
-		let operation = temp.create_dir(OPERATION_DIRECTORY).expect("operation must be created");
-		let stage = operation.create_dir("stage").expect("stage must be created");
-		stage.create_dir("mods").expect("mods must be created");
-		let profile = stage.create_dir("profile").expect("profile must be created");
-		stage.create_dir("overwrite").expect("overwrite must be created");
-		let cache = stage.create_dir("cache").expect("cache must be created");
-		stage_profile(&profile, &plan.profile_sources, &CancellationToken::new()).expect("profile must stage");
-		cache.write_new("Fallout - Invalidation.bsa", &empty_bsa_bytes())
-			.expect("BSA must stage");
-		write_manifest(&stage, &plan).expect("manifest must stage");
-		drop(cache);
-		drop(profile);
-		drop(stage);
-		drop(operation);
+		let root_dir = root.as_path().to_path_buf();
+		let temp = root_dir.join("temp");
+		let stage = temp.join(OPERATION_DIRECTORY).join("stage");
+		for directory in ["mods", "profile", "overwrite", "cache"] {
+			fs::create_dir_all(stage.join(directory)).expect("stage directory must be created");
+		}
+		stage_profile(&stage.join("profile"), &plan.profile_sources, &CancellationToken::new())
+			.await
+			.expect("profile must stage");
+		fs::write(stage.join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes()).expect("BSA must stage");
+		write_manifest(&stage, &plan).await.expect("manifest must stage");
 		(root, root_dir, temp, plan)
 	}
 
@@ -626,8 +596,8 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn pending_operation_takes_precedence_and_refuses_initialization() {
+	#[tokio::test]
+	async fn pending_operation_takes_precedence_and_refuses_initialization() {
 		let parent = temp_dir();
 		let root = environment_root(&parent.path().join("environment"));
 		fs::create_dir_all(root.as_path().join("temp/operation")).expect("pending operation must be created");
@@ -636,21 +606,22 @@ mod tests {
 
 		let error = EnvironmentAdapter
 			.assess(&root, &CancellationToken::new())
+			.await
 			.expect_err("pending work must require cleanup");
 		assert_eq!(error.current_context().code(), ErrorCode::ManualCleanupRequired);
 	}
 
-	#[test]
-	fn staged_initialization_has_no_canonical_mutation() {
+	#[tokio::test]
+	async fn staged_initialization_has_no_canonical_mutation() {
 		let parent = temp_dir();
-		let (root, _, _, _) = staged_initialization(&parent);
+		let (root, _, _, _) = staged_initialization(&parent).await;
 
 		assert_no_canonical_state(root.as_path());
 		assert!(root.as_path().join("temp/operation/stage/mods.toml").is_file());
 	}
 
-	#[test]
-	fn initialization_publishes_and_validates_the_canonical_environment() {
+	#[tokio::test]
+	async fn initialization_publishes_and_validates_the_canonical_environment() {
 		let parent = temp_dir();
 		let root = environment_root(&parent.path().join("environment"));
 		let game = parent.path().join("game");
@@ -658,6 +629,7 @@ mod tests {
 
 		let records = EnvironmentAdapter
 			.publish(&root, plan(&game), &CancellationToken::new())
+			.await
 			.expect("initialization must publish");
 
 		assert_eq!(records.len(), PROFILE_FILES.len());
@@ -669,8 +641,8 @@ mod tests {
 			.is_none());
 	}
 
-	#[test]
-	fn logs_only_root_is_available_and_preserved_by_initialization() {
+	#[tokio::test]
+	async fn logs_only_root_is_available_and_preserved_by_initialization() {
 		let parent = temp_dir();
 		let root = environment_root(&parent.path().join("environment"));
 		let game = parent.path().join("game");
@@ -681,10 +653,12 @@ mod tests {
 
 		let assessment = EnvironmentAdapter
 			.assess(&root, &CancellationToken::new())
+			.await
 			.expect("logs-only root must be eligible");
 		assert!(matches!(assessment, InitializationTargetAssessment::Available));
 		EnvironmentAdapter
 			.publish(&root, plan(&game), &CancellationToken::new())
+			.await
 			.expect("logs-only initialization must publish");
 
 		assert!(root.as_path().join("mods.toml").is_file());
@@ -694,16 +668,17 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn publication_failure_before_cache_keeps_manifest_staged_and_refuses_initialization() {
+	#[tokio::test]
+	async fn publication_failure_before_cache_keeps_manifest_staged_and_refuses_initialization() {
 		let parent = temp_dir();
-		let (root, root_dir, temp, _) = staged_initialization(&parent);
+		let (root, root_dir, temp, _) = staged_initialization(&parent).await;
 		fs::write(root.as_path().join("cache"), b"publication obstruction")
 			.expect("cache obstruction must write");
 		let stage = root.as_path().join("temp/operation/stage");
 		let manifest_before = fs::read(stage.join("mods.toml")).expect("staged manifest must read");
 
 		let error = publish_initialization(&root_dir, &temp, &CancellationToken::new())
+			.await
 			.expect_err("cache obstruction must stop publication");
 
 		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentPublicationFailed);
@@ -724,6 +699,7 @@ mod tests {
 
 		let error = EnvironmentAdapter
 			.assess(&root, &CancellationToken::new())
+			.await
 			.expect_err("partial publication must require manual cleanup");
 		assert_eq!(error.current_context().code(), ErrorCode::ManualCleanupRequired);
 		assert_eq!(
@@ -732,14 +708,15 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn cancellation_before_publication_preserves_the_complete_stage() {
+	#[tokio::test]
+	async fn cancellation_before_publication_preserves_the_complete_stage() {
 		let parent = temp_dir();
-		let (root, root_dir, temp, _) = staged_initialization(&parent);
+		let (root, root_dir, temp, _) = staged_initialization(&parent).await;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 
 		let error = publish_initialization(&root_dir, &temp, &cancellation)
+			.await
 			.expect_err("cancellation must stop publication");
 
 		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);

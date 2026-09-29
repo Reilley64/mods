@@ -1,5 +1,3 @@
-use crate::safe_fs::SafeDir;
-use crate::safe_fs::read_bounded;
 use application::ErrorMarker;
 use application::ports::InitializationPlan;
 use domain::EnvironmentName;
@@ -9,12 +7,13 @@ use rootcause::prelude::ResultExt;
 use rootcause::report;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::Path;
 use std::str::from_utf8;
+use tokio::fs::read;
+use tokio::fs::write;
 use tokio_util::sync::CancellationToken;
 use toml::from_str;
 use toml::to_string_pretty;
-
-pub(crate) const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,7 +24,7 @@ pub(crate) struct Manifest {
 	pub(crate) game_dir: String,
 }
 
-pub(crate) fn write_manifest(stage: &SafeDir, plan: &InitializationPlan) -> Result<(), ErrorMarker> {
+pub(crate) async fn write_manifest(stage: &Path, plan: &InitializationPlan) -> Result<(), ErrorMarker> {
 	let game_dir = plan
 		.game_binding
 		.game_directory()
@@ -38,25 +37,26 @@ pub(crate) fn write_manifest(stage: &SafeDir, plan: &InitializationPlan) -> Resu
 		game_dir: game_dir.to_owned(),
 	})
 	.context(ErrorMarker::environment_invalid(None))?;
-	stage.write_new("mods.toml", contents.as_bytes())
+	write(stage.join("mods.toml"), contents)
+		.await
 		.context(ErrorMarker::environment_root_unsafe())
 }
 
-pub(crate) fn validate_manifest(directory: &SafeDir, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
-	validate_manifest_file(directory, cancellation).map(drop)
+pub(crate) async fn validate_manifest(directory: &Path, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+	validate_manifest_file(directory, cancellation).await.map(drop)
 }
 
-pub(crate) fn validate_manifest_file(
-	directory: &SafeDir,
+pub(crate) async fn validate_manifest_file(
+	directory: &Path,
 	cancellation: &CancellationToken,
 ) -> Result<Manifest, ErrorMarker> {
-	let contents = read_bounded(
-		directory,
-		"mods.toml",
-		MAX_MANIFEST_BYTES,
-		ErrorMarker::environment_invalid(None),
-		cancellation,
-	)?;
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+
+	let contents = read(directory.join("mods.toml"))
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
 	parse_manifest(&contents)
 }
 
@@ -81,14 +81,7 @@ pub(crate) fn parse_manifest(contents: &[u8]) -> Result<Manifest, ErrorMarker> {
 	reason = "test fixture failures should report their exact setup step"
 )]
 mod tests {
-	use super::MAX_MANIFEST_BYTES;
-	use super::validate_manifest_file;
-	use crate::safe_fs::SafeDir;
-	use application::ErrorCode;
-	use std::fs;
-	use std::io;
 	use tempfile::TempDir;
-	use tokio_util::sync::CancellationToken;
 
 	#[test]
 	fn manifest_contains_only_current_binding_fields_and_rejects_legacy_ids() {
@@ -102,24 +95,5 @@ mod tests {
 		for field in ["steam_app_id = 22380\n", "observed_build_id = 42\n"] {
 			assert!(super::parse_manifest(format!("{text}{field}").as_bytes()).is_err());
 		}
-	}
-
-	#[test]
-	fn manifest_cap_is_deliberate_and_preserves_limit_cause() {
-		assert_eq!(MAX_MANIFEST_BYTES, 64 * 1024);
-		let temp = TempDir::new().expect("temporary directory must be created");
-		fs::write(temp.path().join("mods.toml"), vec![b'x'; MAX_MANIFEST_BYTES + 1])
-			.expect("oversized manifest must be written");
-		let directory =
-			SafeDir::open_absolute(&temp.path().canonicalize().expect("temporary directory must resolve"))
-				.expect("safe directory must open");
-
-		let error = validate_manifest_file(&directory, &CancellationToken::new())
-			.expect_err("oversized manifest must be rejected");
-		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
-		assert!(error.iter_reports().any(|report| {
-			report.downcast_current_context::<io::Error>()
-				.is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
-		}));
 	}
 }

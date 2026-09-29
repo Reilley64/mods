@@ -11,17 +11,17 @@ workspace = true
 [dependencies]
 application = { workspace = true }
 domain = { workspace = true }
-cap-fs-ext = "4.0.3"
-cap-std = { workspace = true }
 encoding_rs = { workspace = true }
 rootcause = { workspace = true }
-same-file = "1.0.6"
 serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 toml = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
 tokio-util = { workspace = true, features = ["rt"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Storage_FileSystem"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

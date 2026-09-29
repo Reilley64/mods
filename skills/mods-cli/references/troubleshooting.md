@@ -36,7 +36,7 @@ Errors normally begin `error [code]: message`. Optional details include phase, f
 | `program_not_found`, `program_unsupported`, `program_launch_failed`, `invalid_working_directory` | Check actual executable path, PATH lookup, arguments, supported target, and cwd |
 | `vfs_failed`, `execution_supervision_failed` | Check matching native runtime/prerequisites and collect diagnostics; do not retry execution without authorization |
 | Execution failure with `retained_execution_inis` | After all managed processes have stopped, inspect retained INI edits before deciding any manual cleanup; do not discard them blindly |
-| Export failure with `retained_partial_output` | Inspect the named staging folder and destination before manual cleanup or retry; the output was not published |
+| Export failure with `retained_partial_output` | Inspect the named destination folder before manual cleanup or retry; it can hold partial files |
 | `manual_cleanup_required` | Stop and inspect retained state with the user; there is no documented automatic cleanup command |
 
 Cancellation can leave partial filesystem state. Preserve it for inspection rather than automatically cleaning or rolling back. For execution, first Ctrl-C requests cancellation; a second requests force. Managed supervision permits a grace interval (about five seconds) before forced termination. Do not claim immediate rollback or cleanup.

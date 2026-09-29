@@ -18,11 +18,9 @@ license = "GPL-3.0-or-later"
 [workspace.dependencies]
 # Internal crates are unpublished; inherited paths must allow independent releases.
 application = { path = "src/application" }
-cap-std = "4.0.3"
 domain = { path = "src/domain" }
 encoding_rs = "0.8.41"
 infrastructure-dependencies = { path = "src/infrastructure/dependencies" }
-libc = "0.2.189"
 rootcause = "0.13.0"
 serde = "1.0.229"
 sha2 = { version = "0.11.0", default-features = false }

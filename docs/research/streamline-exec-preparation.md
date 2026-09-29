@@ -188,6 +188,65 @@ Part 1 gate dispositions:
 | `dependencies/src/set_game_directory.rs` | Callable port invocation | Accepted as a false positive. It calls inherent adapter factory methods, not an application port. |
 | `settings/src/lib.rs`, `settings/src/layout.rs`, `game_platform/src/steam/validation.rs`, `game_platform/src/profile_sources.rs` | Phase spacing; Narrow custom implementations | Accepted. The checks are direct `tokio::fs` calls grouped per validation step. No general-purpose facility is added. |
 
+### Part 2: environment and callers
+
+Scope: `infrastructure-environment` (all modules), `infrastructure-dependencies` (`execution_adapter/native.rs`, Windows only), `mods` CLI (`error.rs` export advice), workspace `Cargo.toml` and `Cargo.lock`, and the `mods-cli` skill export and troubleshooting references.
+
+- `safe_fs.rs` (`SafeDir`, `SafeFile`, `EntryBudget`, `read_bounded`, `sync_tree`) and `export_publication.rs` (`MoveFileExW` no-replace publication) are deleted. `cap-std`, `cap-fs-ext`, and `same-file` leave the environment crate. `cap-std` and `libc` leave the workspace dependency table. Tokio gets the `fs`, `io-util`, and `rt` features. The environment crate no longer needs the Windows `Win32_Storage_FileSystem` feature.
+- The new `files.rs` has two helpers: `read_optional` (a missing file is `None`) and `validate_exact_entries` (the directory holds only allowed names).
+- Every environment read, walk, and write uses `tokio::fs`. The adapter methods and their ports are async: initialization assessment and publication, installation state, assessment and transactions, conflict scan and content reads, export, `prepare_execution`, `prepare_launch`, `derive_execution_inis`, `ExecutionInis::preserve`, `check_launch`, and `check_launch_with_spool`.
+- Walks follow links like ordinary entries. The no-follow opens, reparse-point and hard-link rejection, containment (ancestry) checks, byte caps, entry budgets, and depth limits are gone. A link cycle now stops only when the operating system reports a path or link-depth error. The conflict scan no longer reports `ReparsePoint`, `HardLink`, or `ContainmentEscape` problems.
+- Directory and file fsyncs are gone everywhere. Initialization and installation keep their stage-and-rename structure and the pending `temp/operation` refusal; only the flushes are removed. Installation still reads the published profile files back after the renames.
+- `meta.toml` default creation is the only `create_new` open (`OpenOptions::create_new`, then write and flush). Installation files are staged with `File::create`; the transaction already refuses a path that repeats.
+- Execution INIs: the compare-before-publish check (`profile_changed`) and the `preserved/` stage are gone. Preservation writes each changed INI directly to the canonical profile. A canonical INI edited while the game runs is overwritten.
+- Export: staging, source fingerprints, the second capture, the per-file hash check, and the Windows no-replace rename are gone. Export creates the new output folder and writes files into it directly, then sets each source modification time. Export now also runs on non-Windows hosts. `validate_destination` keeps two rules: the output must not exist, and its canonical parent must not be inside the canonical Environment Root. The Game Installation rule is gone. On failure the output folder is reported as `retained_partial_output`.
+- `native.rs` (Windows only, checked by reading): `prepare_launch_plan`, `stage_execution_profile`, `check_profile_state`, and `preserve_execution_profile` are async. The stage port borrows `&LaunchPlan`, so it clones the `PreparedLaunch` before the future starts. The other ports are unchanged.
+- Tests removed because they asserted dropped protections:
+  - `safe_fs.rs`: all tests (six cross-platform and four Windows-only)
+  - `export_publication.rs`: `publication_never_replaces_a_racing_destination` (Windows only)
+  - `derived_profile.rs`: `later_publication_failure_keeps_earlier_edit_and_retains_remaining_inis`, and the `concurrent` case of `uncertain_drain_deletion_and_concurrent_edits_retain_temporary_files`
+  - `execution_preparation.rs`: `preservation_rejects_hard_linked_inis_and_retains_child_edits` and `launch_rejects_a_symlinked_required_fallout_ini`
+  - `export.rs`: `mid_copy_write_failure_keeps_partial_bytes_and_typed_retained_path`, `timestamp_failure_keeps_copied_bytes_without_final_publication`, `changed_sources_and_existing_or_overlapping_destinations_fail`, `completed_stage_preserves_bytes_times_and_reports_unsupported_publication`, `cancellation_retains_owned_stage_without_creating_final_output`, and `selected_save_links_are_rejected`
+  - `manifest.rs`: `manifest_cap_is_deliberate_and_preserves_limit_cause`
+  - `profile.rs`: `profile_resource_caps_are_deliberate`, `save_validation_rejects_total_entry_cap`, and `save_validation_rejects_exhausted_depth_with_io_cause`
+  - `snapshot.rs`: `snapshot_resource_caps_are_deliberate`, `canonical_tree_collection_rejects_total_cap_with_io_cause`, and `provider_collection_and_validation_reject_exhausted_depth_with_io_causes`
+  - `conflict_scan.rs`: the Unix symlink-replacement block of `indexed_content_reads_hash_once_opened_and_report_namespace_replacements_as_failures`
+- Tests added: `existing_outputs_and_outputs_inside_the_environment_are_rejected` and `export_writes_bytes_and_times_directly_to_the_output`. The ignored release measurement `measure_launch_inventory_walk_on_twenty_thousand_files` stays and runs on a multi-thread Tokio runtime, as the CLI does.
+
+Code kept on synchronous `std::fs` (sync code outside an async context, or sync by design):
+
+- `infrastructure-archive` readers (`source.rs`): ZIP, 7z, and RAR readers need `Read + Seek` files.
+- `infrastructure-execution/build.rs`: a build script.
+- `child_output.rs`: the capture spool directory, spool files, drain threads, and `read`. The drain threads are OS threads, and the Windows launch port that prepares them is sync.
+- `launch_inputs/windows_inputs.rs`: one `fs::metadata` probe in sync program resolution.
+- `usvfs/mod.rs`: the native artifact read in sync VFS setup.
+- `ExecutionInis::drop`: `TempDir::keep` in a `Drop` impl.
+- `ExecutionInis::create`: `tempfile::Builder::tempdir_in` makes one uniquely named directory synchronously.
+- `export.rs` `set_modified`: `std::fs::File::set_modified` runs on `spawn_blocking`, because `tokio::fs::File` has no way to set times.
+
+Walk timing (ignored release test above; 4 mods × 50 directories × 100 files, 5,001 winners, 5 `prepare_launch` runs per test; host load average 13–18 during the runs). Before and after builds ran in turn, three times each:
+
+| Build | Per-run medians (ms) | Median (ms) |
+| --- | --- | --- |
+| Before (e55617a, sync `std::fs` walk) | 20.9, 23.6, 21.0 | 21.0 |
+| After (`tokio::fs` walk) | 28.5, 27.6, 26.3 | 27.6 |
+
+The first baseline (median 19.9 ms, `/tmp/tokio-fs-walk-before.log`) agrees. `tokio::fs` sends each directory read and metadata call through the blocking pool, so the walk is about 30% (6–7 ms) slower for 20,000 files. Logs: `/tmp/tokio-fs-walk-after*.log` and `/tmp/tokio-fs-walk-interleaved.log`.
+
+Part 2 gate dispositions:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `environment/src/publication.rs`, `derived_profile.rs`, `export.rs`, `manifest.rs`, `conflict_scan.rs` | Language-neutral review priorities | Accepted. Removing flushes, staged INI and export publication, source comparison, link/reparse rejection, and caps is the user's explicit decision. Git rollback covers recovery. It is not a terseness trade. |
+| All changed environment modules, `dependencies/src/execution_adapter/native.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are adapter internals and port bodies, not application use cases. `CancellationToken` stays the last parameter where present. |
+| `environment/src/files.rs`, `lib.rs`, `profile.rs`, `transactions.rs`, `conflict_scan.rs`, `export.rs`, `execution_preparation.rs`, `native.rs` | Narrow custom implementations | Accepted. `files.rs` has two small helpers over `tokio::fs::read` and `read_dir` that replace the larger `safe_fs.rs`. The rest are direct `tokio::fs` calls. |
+| `environment/src/lib.rs`, `execution_preparation.rs`, `transactions.rs` | Choose the narrow conditional form | Accepted. The flagged `match` statements have three arms (found, `NotFound`, other error) with different results; one `if let` cannot express them. |
+| `environment/src/conflict_scan.rs`, `snapshot.rs`, `transactions.rs` | Guard clauses | Accepted. The flagged code keeps the original structure: the `temp` check nests the two access modes, and loops `continue` past unrelated entries before one check that returns. |
+| Environment modules, `native.rs` | Phase spacing | Accepted. Blank lines separate the read, validate, and write phases. Long `.await` chains keep one operation together. |
+| `game_platform/src/profile_sources.rs` | Match only for multi-way logic (Part 1, 0.55) | Fixed. The two-arm `Option` match is now an `if let`. |
+
+The new "Prefer Option and Result combinators" rule was applied to the code written after it arrived: `derived_profile.rs` (deleted child INI) and `transactions.rs` (split of the staged path) use `ok_or_else(...)?`. Three-way `NotFound` matches and `let`-`else` branches that `continue` stay conditionals.
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

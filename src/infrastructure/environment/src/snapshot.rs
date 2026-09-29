@@ -1,16 +1,11 @@
+use crate::files::read_optional;
+use crate::files::validate_exact_entries;
 use crate::manifest::validate_manifest;
-use crate::profile::MAX_PROFILE_BYTES;
 use crate::profile::is_activatable_plugin_name;
 use crate::profile::validate_execution_profile;
 use crate::profile::validate_profile_files;
 use crate::profile_activation::ProfileActivation;
 use crate::publication::OPERATION_DIRECTORY;
-use crate::safe_fs::EntryBudget;
-use crate::safe_fs::MAX_TRAVERSAL_DEPTH;
-use crate::safe_fs::SafeDir;
-use crate::safe_fs::is_reparse;
-use crate::safe_fs::read_bounded;
-use crate::safe_fs::validate_exact_entries;
 use crate::validate_bsa_file;
 use application::ErrorCode;
 use application::ErrorMarker;
@@ -24,7 +19,6 @@ use application::installation::InstallationAssessment;
 use application::installation::TombstoneReference;
 use application::installation::TombstoneScope;
 use application::ports::InstallationStateAccess;
-use cap_fs_ext::MetadataExt;
 use domain::DataRelativePath;
 use domain::FileDependencyState;
 use domain::GameBinding;
@@ -50,6 +44,10 @@ use std::path::PathBuf;
 use std::str::from_utf8;
 use std::time::SystemTime;
 use tempfile::TempDir;
+use tokio::fs::metadata;
+use tokio::fs::read;
+use tokio::fs::read_dir;
+use tokio::fs::try_exists;
 use tokio_util::sync::CancellationToken;
 use toml::Value;
 use toml::from_str;
@@ -61,9 +59,6 @@ thread_local! {
 
 const UTF8_BOM: &[u8] = &[0xef, 0xbb, 0xbf];
 const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
-pub(crate) const MAX_MODS: usize = 4096;
-pub(crate) const MAX_PROVIDER_ENTRIES: usize = 100_000;
-pub(crate) const MAX_PROVIDER_METADATA_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct EnvironmentSnapshotData {
@@ -75,7 +70,7 @@ pub(crate) struct EnvironmentSnapshotData {
 	pub(crate) file_dependencies: HashMap<String, FileDependencyFact>,
 }
 
-pub(crate) fn load(
+pub(crate) async fn load(
 	root_path: &Path,
 	binding: &GameBinding,
 	access: InstallationStateAccess,
@@ -89,17 +84,18 @@ pub(crate) fn load(
 		None,
 		cancellation,
 	)
+	.await
 }
 
-pub(crate) fn load_during_publication(
+pub(crate) async fn load_during_publication(
 	root_path: &Path,
 	binding: &GameBinding,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, binding, SnapshotLoad::Publication, false, None, cancellation)
+	load_inner(root_path, binding, SnapshotLoad::Publication, false, None, cancellation).await
 }
 
-pub(crate) fn load_execution(
+pub(crate) async fn load_execution(
 	root_path: &Path,
 	binding: &GameBinding,
 	owned_spool: Option<&TempDir>,
@@ -113,6 +109,7 @@ pub(crate) fn load_execution(
 		owned_spool,
 		cancellation,
 	)
+	.await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,7 +118,7 @@ enum SnapshotLoad {
 	Publication,
 }
 
-fn load_inner(
+async fn load_inner(
 	root_path: &Path,
 	binding: &GameBinding,
 	load: SnapshotLoad,
@@ -133,14 +130,17 @@ fn load_inner(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let root = SafeDir::open_absolute(root_path).map_err(|error| {
-		if error.current_context().kind() == io::ErrorKind::NotFound {
-			error.context(ErrorMarker::environment_not_initialized())
-		} else {
-			error.context(ErrorMarker::environment_root_unsafe())
+	match metadata(root_path).await {
+		Ok(metadata) if metadata.is_dir() => {}
+		Ok(_) => return Err(report!(ErrorMarker::environment_root_unsafe())),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {
+			return Err(report!(error).context(ErrorMarker::environment_not_initialized()));
 		}
-	})?;
-	let temp_exists = root.exists("temp");
+		Err(error) => return Err(report!(error).context(ErrorMarker::environment_root_unsafe())),
+	}
+
+	let temp = root_path.join("temp");
+	let temp_exists = try_exists(&temp).await;
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
@@ -149,21 +149,15 @@ fn load_inner(
 		return Err(report!(ErrorMarker::manual_cleanup_required()));
 	}
 	if temp_exists {
-		let opened_temp = root.open_dir("temp");
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let temp = opened_temp.context(ErrorMarker::environment_invalid(None))?;
 		if let SnapshotLoad::Installation(access) = load {
-			let opened = temp.entries();
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			let entries = opened.context(ErrorMarker::environment_invalid(None))?;
-			for entry in entries {
-				let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
+			let mut entries = read_dir(&temp).await.context(ErrorMarker::environment_invalid(None))?;
+			while let Some(entry) = entries
+				.next_entry()
+				.await
+				.context(ErrorMarker::environment_invalid(None))?
+			{
 				if owned_spool.is_some_and(|spool| {
-					spool.path().parent() == Some(root_path.join("temp").as_path())
+					spool.path().parent() == Some(temp.as_path())
 						&& spool.path().file_name() == Some(entry.file_name().as_os_str())
 				}) {
 					continue;
@@ -176,7 +170,7 @@ fn load_inner(
 				return Err(report!(marker));
 			}
 		} else {
-			let validation = validate_exact_entries(&temp, &[OPERATION_DIRECTORY], cancellation);
+			let validation = validate_exact_entries(&temp, &[OPERATION_DIRECTORY], cancellation).await;
 			if let Err(error) = validation {
 				if error.current_context().code() == ErrorCode::OperationCancelled {
 					return Err(error);
@@ -186,7 +180,8 @@ fn load_inner(
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			let current_operation_exists = temp.exists(OPERATION_DIRECTORY);
+
+			let current_operation_exists = try_exists(temp.join(OPERATION_DIRECTORY)).await;
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
@@ -197,35 +192,29 @@ fn load_inner(
 	}
 
 	validate_exact_entries(
-		&root,
+		root_path,
 		&["mods", "profile", "overwrite", "cache", "mods.toml", "temp", "logs"],
 		cancellation,
-	)?;
-	validate_manifest(&root, cancellation)?;
-	let cache = root.open_dir("cache").context(ErrorMarker::environment_invalid(None))?;
-	validate_exact_entries(&cache, &[INVALIDATION_ARCHIVE], cancellation)?;
-	validate_bsa_file(&cache, cancellation)?;
-	if root.exists("logs").context(ErrorMarker::environment_invalid(None))? {
-		root.open_dir("logs").context(ErrorMarker::environment_invalid(None))?;
-	}
+	)
+	.await?;
+	validate_manifest(root_path, cancellation).await?;
+	let cache = root_path.join("cache");
+	validate_exact_entries(&cache, &[INVALIDATION_ARCHIVE], cancellation).await?;
+	validate_bsa_file(&cache, cancellation).await?;
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
-	let profile_dir = root
-		.open_dir("profile")
-		.context(ErrorMarker::environment_invalid(None))?;
-	let overwrite = root
-		.open_dir("overwrite")
-		.context(ErrorMarker::environment_invalid(None))?;
+	let mods = root_path.join("mods");
+	let profile_dir = root_path.join("profile");
+	let overwrite = root_path.join("overwrite");
 	if execution {
-		validate_execution_profile(&profile_dir, cancellation)?;
+		validate_execution_profile(&profile_dir, cancellation).await?;
 	} else {
-		validate_profile_files(&profile_dir, false, cancellation)?;
+		validate_profile_files(&profile_dir, false, cancellation).await?;
 	}
 	let mut overwrite_inventory =
-		collect_provider_inventory(&overwrite, ProviderKind::Overwrite, execution, cancellation)?;
+		collect_provider_inventory(&overwrite, ProviderKind::Overwrite, execution, cancellation).await?;
 	let mut provider_metadata = Vec::new();
 	if let Some(bytes) = overwrite_inventory.metadata.take() {
 		provider_metadata.push((root_path.join("overwrite/meta.toml"), bytes));
@@ -233,48 +222,34 @@ fn load_inner(
 
 	let mut directories = HashMap::new();
 	let mut discovered_names = HashSet::new();
-	let opened = mods.entries();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
-	loop {
+	let mut entries = read_dir(&mods).await.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		let Some(entry) = entries.next() else {
-			break;
-		};
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
-		if directories.len() >= MAX_MODS {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		let entry = entry.file_name();
-		let spelling = entry
+
+		let file_name = entry.file_name();
+		let spelling = file_name
 			.to_str()
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 		let name = ModName::new(spelling.to_owned()).context(ErrorMarker::environment_invalid(None))?;
 		let key = name.comparison_key().to_owned();
-		if directories.contains_key(&key) {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		let metadata = mods
-			.symlink_metadata(&entry)
-			.context(ErrorMarker::environment_invalid(None))?;
-		if is_reparse(&metadata) || !metadata.is_dir() {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		let directory = mods.open_dir(&entry).context(ErrorMarker::environment_invalid(None))?;
-		if !mods.is_ancestor_of(&directory)
-			.context(ErrorMarker::environment_invalid(None))?
+		if directories.contains_key(&key)
+			|| !metadata(entry.path())
+				.await
+				.context(ErrorMarker::environment_invalid(None))?
+				.is_dir()
 		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
+
 		let mut inventory =
-			collect_provider_inventory(&directory, ProviderKind::DataMod, execution, cancellation)?;
+			collect_provider_inventory(&entry.path(), ProviderKind::DataMod, execution, cancellation)
+				.await?;
 		if let Some(bytes) = inventory.metadata.take() {
 			provider_metadata.push((root_path.join("mods").join(name.as_str()).join("meta.toml"), bytes));
 		}
@@ -282,13 +257,9 @@ fn load_inner(
 		directories.insert(key, (name, inventory));
 	}
 
-	let modlist = read_bounded(
-		&profile_dir,
-		"modlist.txt",
-		MAX_PROFILE_BYTES,
-		ErrorMarker::environment_invalid(None),
-		cancellation,
-	)?;
+	let modlist = read(profile_dir.join("modlist.txt"))
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
 	let parsed = parse_modlist(&modlist)?;
 	let listed_names: HashSet<_> = parsed.iter().map(|entry| entry.name.as_str().to_owned()).collect();
 	if listed_names != discovered_names {
@@ -326,12 +297,13 @@ fn load_inner(
 		&game_binding,
 		execution,
 		cancellation,
-	)?;
+	)
+	.await?;
 	provider_metadata.sort_by(|left, right| left.0.cmp(&right.0));
 	let file_dependencies = if execution {
 		HashMap::new()
 	} else {
-		file_dependencies(&profile_dir, &current_winners, cancellation)?
+		file_dependencies(&profile_dir, &current_winners, cancellation).await?
 	};
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -378,33 +350,31 @@ enum ProviderKind {
 	Overwrite,
 }
 
-pub(crate) fn validate_staged_provider(
-	provider: &SafeDir,
+pub(crate) async fn validate_staged_provider(
+	provider: &Path,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	validate_provider(provider, ProviderKind::DataMod, cancellation)
+	validate_provider(provider, ProviderKind::DataMod, cancellation).await
 }
 
-fn validate_provider(
-	provider: &SafeDir,
+async fn validate_provider(
+	provider: &Path,
 	kind: ProviderKind,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	collect_provider_inventory(provider, kind, false, cancellation)?;
+	collect_provider_inventory(provider, kind, false, cancellation).await?;
 	Ok(())
 }
 
-fn collect_provider_inventory(
-	provider: &SafeDir,
+async fn collect_provider_inventory(
+	provider: &Path,
 	kind: ProviderKind,
 	file_details: bool,
 	cancellation: &CancellationToken,
 ) -> Result<ProviderInventory, ErrorMarker> {
 	let mut inventory = ProviderInventory::default();
 	let mut paths = HashSet::new();
-	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
 	validate_provider_directory(
-		provider,
 		provider,
 		kind,
 		"",
@@ -412,17 +382,12 @@ fn collect_provider_inventory(
 		&mut inventory,
 		file_details,
 		cancellation,
-		&mut budget,
-		MAX_TRAVERSAL_DEPTH,
-	)?;
-	if !provider
-		.exists("meta.toml")
-		.context(ErrorMarker::environment_invalid(None))?
-	{
+	)
+	.await?;
+	let Some(ProviderMetadata { tombstones, bytes }) = read_metadata(provider).await? else {
 		return Ok(inventory);
-	}
+	};
 
-	let ProviderMetadata { tombstones, bytes } = read_metadata(provider, cancellation)?;
 	inventory.metadata = Some(bytes);
 	let mut directory_tombstones = HashSet::new();
 	for (tombstone, directory) in &tombstones {
@@ -469,66 +434,39 @@ fn collect_provider_inventory(
 	Ok(inventory)
 }
 
-#[expect(
-	clippy::too_many_arguments,
-	reason = "the explicit depth bound must remain local to recursive provider validation"
-)]
-fn validate_provider_directory(
-	root: &SafeDir,
-	directory: &SafeDir,
+async fn validate_provider_directory(
+	directory: &Path,
 	kind: ProviderKind,
 	prefix: &str,
 	paths: &mut HashSet<String>,
 	inventory: &mut ProviderInventory,
 	file_details: bool,
 	cancellation: &CancellationToken,
-	budget: &mut EntryBudget,
-	remaining_depth: usize,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	let ancestry = root.is_ancestor_of(directory);
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	if !ancestry.context(ErrorMarker::environment_invalid(None))? {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
+
 	#[cfg(test)]
 	INVENTORY_IO.with(|count| {
 		let (walks, metadata) = count.get();
 		count.set((walks + 1, metadata));
 	});
-	let opened = directory.entries();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
-	let mut directory_entries = 0_usize;
+	let mut entries = read_dir(directory)
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
 	let mut local_names = HashSet::new();
-	loop {
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		let Some(entry) = entries.next() else {
-			break;
-		};
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
-		budget.consume(&mut directory_entries)
-			.context(ErrorMarker::environment_invalid(None))?;
-		if remaining_depth == 0 {
-			return Err(report!(io::Error::new(
-				io::ErrorKind::InvalidData,
-				"directory traversal depth limit exceeded",
-			))
-			.context(ErrorMarker::environment_invalid(None)));
-		}
-		let entry = entry.file_name();
-		let spelling = entry
+
+		let file_name = entry.file_name();
+		let spelling = file_name
 			.to_str()
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 		let relative = if prefix.is_empty() {
@@ -542,39 +480,27 @@ fn validate_provider_directory(
 		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
-		let metadata = directory.symlink_metadata(&entry);
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let metadata = metadata.context(ErrorMarker::environment_invalid(None))?;
+
+		let metadata = metadata(entry.path())
+			.await
+			.context(ErrorMarker::environment_invalid(None))?;
 		if metadata.is_dir() {
 			inventory.entries.push((data_path, true));
-			let child = directory.open_dir(&entry);
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			validate_provider_directory(
-				root,
-				&child.context(ErrorMarker::environment_invalid(None))?,
+			Box::pin(validate_provider_directory(
+				&entry.path(),
 				kind,
 				&relative,
 				paths,
 				inventory,
 				file_details,
 				cancellation,
-				budget,
-				remaining_depth - 1,
-			)?;
+			))
+			.await?;
 			continue;
 		}
-		if !metadata.is_file() || metadata.nlink() != 1 {
+		if !metadata.is_file() {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
-		let opened = directory.open_regular(&entry);
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let file = opened.context(ErrorMarker::environment_invalid(None))?;
 		if prefix.is_empty() {
 			let identity = case_fold_key(spelling);
 			if identity == case_fold_key(INVALIDATION_ARCHIVE) {
@@ -589,16 +515,15 @@ fn validate_provider_directory(
 		if prefix.is_empty() && spelling == "meta.toml" {
 			continue;
 		}
+
 		if file_details {
-			let metadata = file.metadata().context(ErrorMarker::environment_invalid(None))?;
 			inventory.files.insert(
 				data_path.comparison_key().to_owned(),
 				ProviderFileDetails {
 					length: metadata.len(),
 					modified: metadata
 						.modified()
-						.context(ErrorMarker::environment_invalid(None))?
-						.into_std(),
+						.context(ErrorMarker::environment_invalid(None))?,
 				},
 			);
 		}
@@ -607,27 +532,19 @@ fn validate_provider_directory(
 	Ok(())
 }
 
-fn validate_metadata(
-	provider: &SafeDir,
-	cancellation: &CancellationToken,
-) -> Result<Vec<(DataRelativePath, bool)>, ErrorMarker> {
-	Ok(read_metadata(provider, cancellation)?.tombstones)
-}
-
-fn read_metadata(provider: &SafeDir, cancellation: &CancellationToken) -> Result<ProviderMetadata, ErrorMarker> {
+/// Reads provider metadata, or returns `None` when the provider has no `meta.toml`.
+async fn read_metadata(provider: &Path) -> Result<Option<ProviderMetadata>, ErrorMarker> {
+	let bytes = read_optional(&provider.join("meta.toml"))
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
 	#[cfg(test)]
-	INVENTORY_IO.with(|count| {
-		let (walks, metadata) = count.get();
-		count.set((walks, metadata + 1));
-	});
-	let bytes = read_bounded(
-		provider,
-		"meta.toml",
-		MAX_PROVIDER_METADATA_BYTES,
-		ErrorMarker::environment_invalid(None),
-		cancellation,
-	)?;
-	parse_metadata(bytes)
+	if bytes.is_some() {
+		INVENTORY_IO.with(|count| {
+			let (walks, metadata) = count.get();
+			count.set((walks, metadata + 1));
+		});
+	}
+	bytes.map(parse_metadata).transpose()
 }
 
 pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMarker> {
@@ -689,43 +606,32 @@ pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMa
 	})
 }
 
-pub(crate) fn validate_prospective_namespace(
-	root: &SafeDir,
+pub(crate) async fn validate_prospective_namespace(
+	root: &Path,
 	binding: &GameBinding,
-	staged_mod: &SafeDir,
+	staged_mod: &Path,
 	plan: &InstallPlan,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	let profile = root
-		.open_dir("profile")
+	let modlist = read(root.join("profile/modlist.txt"))
+		.await
 		.context(ErrorMarker::environment_invalid(None))?;
-	let installed = parse_modlist(&read_bounded(
-		&profile,
-		"modlist.txt",
-		MAX_PROFILE_BYTES,
-		ErrorMarker::environment_invalid(None),
-		cancellation,
-	)?)?;
-	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
+	let installed = parse_modlist(&modlist)?;
+	let mods = root.join("mods");
 	let mut namespace = HashMap::new();
 	let mut winners = HashMap::new();
-	let game = SafeDir::open_absolute(binding.game_directory().as_path())
-		.context(ErrorMarker::environment_invalid(None))?;
-	match game.open_dir("Data") {
-		Ok(data) => {
-			validate_provider(&data, ProviderKind::GameBase, cancellation)?;
-			apply_provider(
-				&data,
-				ProviderClass::SteamData,
-				None,
-				None,
-				&mut namespace,
-				&mut winners,
-				cancellation,
-			)?;
-		}
-		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {}
-		Err(error) => return Err(error.context(ErrorMarker::environment_invalid(None))),
+	if let Some(data) = game_data(binding).await? {
+		validate_provider(&data, ProviderKind::GameBase, cancellation).await?;
+		apply_provider(
+			&data,
+			ProviderClass::SteamData,
+			None,
+			None,
+			&mut namespace,
+			&mut winners,
+			cancellation,
+		)
+		.await?;
 	}
 	for installed_mod in installed.iter().filter(|installed_mod| installed_mod.enabled) {
 		if cancellation.is_cancelled() {
@@ -735,18 +641,16 @@ pub(crate) fn validate_prospective_namespace(
 		if plan.replacement && installed_mod.name == plan.mod_name {
 			continue;
 		}
-		let directory = mods
-			.open_dir(installed_mod.name.as_str())
-			.context(ErrorMarker::environment_invalid(None))?;
 		apply_provider(
-			&directory,
+			&mods.join(installed_mod.name.as_str()),
 			ProviderClass::DataMod,
 			Some(installed_mod.name.clone()),
 			Some(installed_mod.priority),
 			&mut namespace,
 			&mut winners,
 			cancellation,
-		)?;
+		)
+		.await?;
 	}
 	apply_provider(
 		staged_mod,
@@ -756,23 +660,33 @@ pub(crate) fn validate_prospective_namespace(
 		&mut namespace,
 		&mut winners,
 		cancellation,
-	)?;
-	let overwrite = root
-		.open_dir("overwrite")
-		.context(ErrorMarker::environment_invalid(None))?;
+	)
+	.await?;
 	apply_provider(
-		&overwrite,
+		&root.join("overwrite"),
 		ProviderClass::Overwrite,
 		None,
 		None,
 		&mut namespace,
 		&mut winners,
 		cancellation,
-	)?;
+	)
+	.await?;
 	Ok(())
 }
 
-fn current_winners(
+/// Returns the game `Data` directory, or `None` when the game has none.
+async fn game_data(binding: &GameBinding) -> Result<Option<PathBuf>, ErrorMarker> {
+	let data = binding.game_directory().as_path().join("Data");
+	match metadata(&data).await {
+		Ok(metadata) if metadata.is_dir() => Ok(Some(data)),
+		Ok(_) => Err(report!(ErrorMarker::environment_invalid(None))),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+		Err(error) => Err(report!(error).context(ErrorMarker::environment_invalid(None))),
+	}
+}
+
+async fn current_winners(
 	installed: &[InstalledMod],
 	inventories: Vec<ProviderInventory>,
 	overwrite: ProviderInventory,
@@ -782,24 +696,18 @@ fn current_winners(
 ) -> Result<InventoryWinners, ErrorMarker> {
 	let mut namespace = HashMap::new();
 	let mut winners = HashMap::new();
-	let game = SafeDir::open_absolute(binding.game_directory().as_path())
-		.context(ErrorMarker::environment_invalid(None))?;
-	match game.open_dir("Data") {
-		Ok(data) => {
-			let inventory =
-				collect_provider_inventory(&data, ProviderKind::GameBase, file_details, cancellation)?;
-			apply_inventory(
-				inventory,
-				ProviderClass::SteamData,
-				None,
-				None,
-				&mut namespace,
-				&mut winners,
-				cancellation,
-			)?;
-		}
-		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {}
-		Err(error) => return Err(error.context(ErrorMarker::environment_invalid(None))),
+	if let Some(data) = game_data(binding).await? {
+		let inventory =
+			collect_provider_inventory(&data, ProviderKind::GameBase, file_details, cancellation).await?;
+		apply_inventory(
+			inventory,
+			ProviderClass::SteamData,
+			None,
+			None,
+			&mut namespace,
+			&mut winners,
+			cancellation,
+		)?;
 	}
 	for (installed_mod, inventory) in installed.iter().zip(inventories) {
 		if !installed_mod.enabled {
@@ -845,8 +753,8 @@ fn current_winners(
 	Ok(InventoryWinners { files: result, details })
 }
 
-fn apply_provider(
-	directory: &SafeDir,
+async fn apply_provider(
+	directory: &Path,
 	class: ProviderClass,
 	mod_name: Option<ModName>,
 	priority: Option<ModPriority>,
@@ -854,15 +762,11 @@ fn apply_provider(
 	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult, Option<ProviderFileDetails>)>,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	let entries = collect_entries(directory, "", cancellation)?;
-	let tombstones = if directory
-		.exists("meta.toml")
-		.context(ErrorMarker::environment_invalid(None))?
-	{
-		validate_metadata(directory, cancellation)?
-	} else {
-		Vec::new()
-	};
+	let entries = collect_entries(directory, cancellation).await?;
+	let tombstones = read_metadata(directory)
+		.await?
+		.map(|metadata| metadata.tombstones)
+		.unwrap_or_default();
 
 	apply_inventory(
 		ProviderInventory {
@@ -983,66 +887,42 @@ fn provider_reference(
 	}
 }
 
-fn collect_entries(
-	directory: &SafeDir,
-	prefix: &str,
+async fn collect_entries(
+	directory: &Path,
 	cancellation: &CancellationToken,
 ) -> Result<Vec<(DataRelativePath, bool)>, ErrorMarker> {
 	let mut result = Vec::new();
-	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
-	collect_entries_inner(
-		directory,
-		prefix,
-		cancellation,
-		&mut budget,
-		&mut result,
-		MAX_TRAVERSAL_DEPTH,
-	)?;
+	collect_entries_inner(directory, "", cancellation, &mut result).await?;
 	Ok(result)
 }
 
-fn collect_entries_inner(
-	directory: &SafeDir,
+async fn collect_entries_inner(
+	directory: &Path,
 	prefix: &str,
 	cancellation: &CancellationToken,
-	budget: &mut EntryBudget,
 	result: &mut Vec<(DataRelativePath, bool)>,
-	remaining_depth: usize,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	#[cfg(test)]
 	INVENTORY_IO.with(|count| {
 		let (walks, metadata) = count.get();
 		count.set((walks + 1, metadata));
 	});
-	let opened = directory.entries();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
-	let mut directory_entries = 0_usize;
-	loop {
+	let mut entries = read_dir(directory)
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		let Some(entry) = entries.next() else {
-			break;
-		};
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
-		budget.consume(&mut directory_entries)
-			.context(ErrorMarker::environment_invalid(None))?;
-		if remaining_depth == 0 {
-			return Err(report!(io::Error::new(
-				io::ErrorKind::InvalidData,
-				"directory traversal depth limit exceeded",
-			))
-			.context(ErrorMarker::environment_invalid(None)));
-		}
+
 		let name = entry.file_name();
 		let text = name
 			.to_str()
@@ -1050,37 +930,20 @@ fn collect_entries_inner(
 		if prefix.is_empty() && text == "meta.toml" {
 			continue;
 		}
+
 		let relative = if prefix.is_empty() {
 			text.to_owned()
 		} else {
 			format!("{prefix}/{text}")
 		};
 		let path = DataRelativePath::new(relative.clone()).context(ErrorMarker::environment_invalid(None))?;
-		let metadata = directory.symlink_metadata(&name);
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let metadata = metadata.context(ErrorMarker::environment_invalid(None))?;
+		let metadata = metadata(entry.path())
+			.await
+			.context(ErrorMarker::environment_invalid(None))?;
 		if metadata.is_dir() {
 			result.push((path, true));
-			let child = directory.open_dir(&name);
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			collect_entries_inner(
-				&child.context(ErrorMarker::environment_invalid(None))?,
-				&relative,
-				cancellation,
-				budget,
-				result,
-				remaining_depth - 1,
-			)?;
+			Box::pin(collect_entries_inner(&entry.path(), &relative, cancellation, result)).await?;
 		} else if metadata.is_file() {
-			let opened = directory.open_regular(&name);
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			opened.context(ErrorMarker::environment_invalid(None))?;
 			result.push((path, false));
 		} else {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
@@ -1089,12 +952,12 @@ fn collect_entries_inner(
 	Ok(())
 }
 
-fn file_dependencies(
-	profile: &SafeDir,
+async fn file_dependencies(
+	profile: &Path,
 	winners: &HashMap<DataRelativePath, EffectiveResult>,
 	cancellation: &CancellationToken,
 ) -> Result<HashMap<String, FileDependencyFact>, ErrorMarker> {
-	let activation = ProfileActivation::load(profile, cancellation)?;
+	let activation = ProfileActivation::load(profile, cancellation).await?;
 	let mut dependencies = HashMap::new();
 	for (path, result) in winners {
 		if !matches!(result, EffectiveResult::File(_)) {
@@ -1143,32 +1006,26 @@ struct AssessmentTraversal {
 	tombstones: TombstoneIndex,
 }
 
-pub(crate) fn assess_installation(
+pub(crate) async fn assess_installation(
 	root_path: &Path,
 	binding: &GameBinding,
 	plan: &InstallPlan,
 	cancellation: &CancellationToken,
 ) -> Result<InstallationAssessment, ErrorMarker> {
-	let current = load(root_path, binding, InstallationStateAccess::Preview, cancellation)?;
-	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::environment_invalid(None))?;
-	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
+	let current = load(root_path, binding, InstallationStateAccess::Preview, cancellation).await?;
+	let mods = root_path.join("mods");
 	let mut traversal = AssessmentTraversal::default();
 
-	let game = SafeDir::open_absolute(binding.game_directory().as_path())
-		.context(ErrorMarker::environment_invalid(None))?;
-	match game.open_dir("Data") {
-		Ok(data) => {
-			add_assessment_provider(
-				&data,
-				ProviderClass::SteamData,
-				None,
-				None,
-				&mut traversal,
-				cancellation,
-			)?;
-		}
-		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {}
-		Err(error) => return Err(error.context(ErrorMarker::environment_invalid(None))),
+	if let Some(data) = game_data(binding).await? {
+		add_assessment_provider(
+			&data,
+			ProviderClass::SteamData,
+			None,
+			None,
+			&mut traversal,
+			cancellation,
+		)
+		.await?;
 	}
 
 	let mut proposal_added = false;
@@ -1184,33 +1041,29 @@ pub(crate) fn assess_installation(
 		if !installed.enabled {
 			continue;
 		}
-		let directory = mods
-			.open_dir(installed.name.as_str())
-			.context(ErrorMarker::environment_invalid(None))?;
 		add_assessment_provider(
-			&directory,
+			&mods.join(installed.name.as_str()),
 			ProviderClass::DataMod,
 			Some(installed.name.clone()),
 			Some(installed.priority),
 			&mut traversal,
 			cancellation,
-		)?;
+		)
+		.await?;
 	}
 	if !proposal_added {
 		add_proposed_provider(plan, &mut traversal, cancellation)?;
 	}
 
-	let overwrite = root
-		.open_dir("overwrite")
-		.context(ErrorMarker::environment_invalid(None))?;
 	add_assessment_provider(
-		&overwrite,
+		&root_path.join("overwrite"),
 		ProviderClass::Overwrite,
 		None,
 		None,
 		&mut traversal,
 		cancellation,
-	)?;
+	)
+	.await?;
 
 	let AssessmentTraversal { files, tombstones } = traversal;
 
@@ -1314,15 +1167,15 @@ pub(crate) fn assess_installation(
 	Ok(InstallationAssessment { overlaps })
 }
 
-fn add_assessment_provider(
-	directory: &SafeDir,
+async fn add_assessment_provider(
+	directory: &Path,
 	class: ProviderClass,
 	mod_name: Option<ModName>,
 	priority: Option<ModPriority>,
 	traversal: &mut AssessmentTraversal,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	for (path, is_directory) in collect_entries(directory, "", cancellation)? {
+	for (path, is_directory) in collect_entries(directory, cancellation).await? {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -1337,23 +1190,22 @@ fn add_assessment_provider(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	if directory
-		.exists("meta.toml")
-		.context(ErrorMarker::environment_invalid(None))?
-	{
-		for (path, directory_scope) in validate_metadata(directory, cancellation)? {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			traversal.tombstones.insert(TombstoneReference {
-				owner: provider_reference(class, mod_name.clone(), priority, path)?,
-				scope: if directory_scope {
-					TombstoneScope::DirectorySubtree
-				} else {
-					TombstoneScope::ExactFile
-				},
-			});
+	let tombstones = read_metadata(directory)
+		.await?
+		.map(|metadata| metadata.tombstones)
+		.unwrap_or_default();
+	for (path, directory_scope) in tombstones {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+		traversal.tombstones.insert(TombstoneReference {
+			owner: provider_reference(class, mod_name.clone(), priority, path)?,
+			scope: if directory_scope {
+				TombstoneScope::DirectorySubtree
+			} else {
+				TombstoneScope::ExactFile
+			},
+		});
 	}
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -1393,123 +1245,89 @@ fn add_proposed_provider(
 	Ok(())
 }
 
-pub(crate) fn visible_plugins(
-	root: &SafeDir,
+pub(crate) async fn visible_plugins(
+	root: &Path,
 	binding: &GameBinding,
-	replacement: Option<(&ModName, &SafeDir)>,
+	replacement: Option<(&ModName, &Path)>,
 	cancellation: &CancellationToken,
 ) -> Result<HashMap<String, String>, ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	let profile = root.open_dir("profile");
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	let profile = profile.context(ErrorMarker::environment_invalid(None))?;
-	let modlist = parse_modlist(&read_bounded(
-		&profile,
-		"modlist.txt",
-		MAX_PROFILE_BYTES,
-		ErrorMarker::environment_invalid(None),
-		cancellation,
-	)?)?;
-	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
-	let mut visible = HashMap::new();
-	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
-	let game = SafeDir::open_absolute(binding.game_directory().as_path())
+
+	let modlist = read(root.join("profile/modlist.txt"))
+		.await
 		.context(ErrorMarker::environment_invalid(None))?;
-	match game.open_dir("Data") {
-		Ok(data) => add_root_plugins(&data, &mut visible, cancellation, &mut budget)?,
-		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {}
-		Err(error) => return Err(error.context(ErrorMarker::environment_invalid(None))),
+	let modlist = parse_modlist(&modlist)?;
+	let mods = root.join("mods");
+	let mut visible = HashMap::new();
+	if let Some(data) = game_data(binding).await? {
+		add_root_plugins(&data, &mut visible, cancellation).await?;
 	}
 	for installed in modlist.into_iter().filter(|installed| installed.enabled) {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
 		if let Some((name, staged)) = replacement
 			&& *name == installed.name
 		{
-			add_root_plugins(staged, &mut visible, cancellation, &mut budget)?;
+			add_root_plugins(staged, &mut visible, cancellation).await?;
 		} else {
-			let directory = mods.open_dir(installed.name.as_str());
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			add_root_plugins(
-				&directory.context(ErrorMarker::environment_invalid(None))?,
-				&mut visible,
-				cancellation,
-				&mut budget,
-			)?;
+			add_root_plugins(&mods.join(installed.name.as_str()), &mut visible, cancellation).await?;
 		}
 	}
-	let overwrite = root.open_dir("overwrite");
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	add_root_plugins(
-		&overwrite.context(ErrorMarker::environment_invalid(None))?,
-		&mut visible,
-		cancellation,
-		&mut budget,
-	)?;
+	add_root_plugins(&root.join("overwrite"), &mut visible, cancellation).await?;
 	Ok(visible)
 }
 
-fn add_root_plugins(
-	directory: &SafeDir,
+async fn add_root_plugins(
+	directory: &Path,
 	visible: &mut HashMap<String, String>,
 	cancellation: &CancellationToken,
-	budget: &mut EntryBudget,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	let opened = directory.entries();
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled()));
-	}
-	let mut entries = opened.context(ErrorMarker::environment_invalid(None))?;
-	let mut directory_entries = 0_usize;
-	loop {
+
+	let mut entries = read_dir(directory)
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		let Some(entry) = entries.next() else {
-			break;
-		};
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-		let entry = entry.into_report().context(ErrorMarker::environment_invalid(None))?;
-		budget.consume(&mut directory_entries)
-			.context(ErrorMarker::environment_invalid(None))?;
+
 		let name = entry.file_name();
 		let text = name
 			.to_str()
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 		if is_activatable_plugin_name(text) {
-			let opened = directory.open_regular(&name);
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+			if !metadata(entry.path())
+				.await
+				.context(ErrorMarker::environment_invalid(None))?
+				.is_file()
+			{
+				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
-			opened.context(ErrorMarker::environment_invalid(None))?;
 			visible.insert(case_fold_key(text), text.to_owned());
 		}
 	}
-	if directory
-		.exists("meta.toml")
-		.context(ErrorMarker::environment_invalid(None))?
-	{
-		for (path, _) in validate_metadata(directory, cancellation)? {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			if path.components().count() == 1 && is_activatable_plugin_name(path.as_str()) {
-				visible.remove(path.comparison_key());
-			}
+
+	let tombstones = read_metadata(directory)
+		.await?
+		.map(|metadata| metadata.tombstones)
+		.unwrap_or_default();
+	for (path, _) in tombstones {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		if path.components().count() == 1 && is_activatable_plugin_name(path.as_str()) {
+			visible.remove(path.comparison_key());
 		}
 	}
 	Ok(())
@@ -1605,24 +1423,15 @@ fn last_separator(bytes: &[u8]) -> Option<&'static [u8]> {
 	reason = "test fixture failures should report their exact setup step"
 )]
 mod tests {
-	use super::MAX_MODS;
-	use super::MAX_PROVIDER_ENTRIES;
-	use super::MAX_PROVIDER_METADATA_BYTES;
-	use super::ProviderInventory;
 	use super::ProviderKind;
 	use super::assess_installation;
-	use super::collect_entries_inner;
 	use super::insert_disabled_mod;
 	use super::load;
 	use super::parse_modlist;
 	use super::validate_provider;
-	use super::validate_provider_directory;
 	use super::visible_plugins;
 	use crate::EnvironmentAdapter;
 	use crate::profile::PROFILE_FILES;
-	use crate::safe_fs::EntryBudget;
-	use crate::safe_fs::MAX_TRAVERSAL_DEPTH;
-	use crate::safe_fs::SafeDir;
 	use application::ErrorCode;
 	use application::installation::CandidateDecision;
 	use application::installation::EffectiveResult;
@@ -1654,18 +1463,16 @@ mod tests {
 	use domain::ParticipationReason;
 	use domain::ProviderReference;
 	use domain::Sha256Digest;
-	use std::collections::HashSet;
 	use std::env::current_dir;
 	use std::error::Error;
 	use std::fs;
-	use std::io;
 	use std::path::Path;
 	use std::result::Result as StdResult;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn new_mods_are_inserted_at_the_top_after_leading_comments() {
+	#[tokio::test]
+	async fn new_mods_are_inserted_at_the_top_after_leading_comments() {
 		let name = ModName::new("New".to_owned()).expect("mod name must be valid");
 		for (current, expected) in [
 			(&b""[..], &b"-New\r\n"[..]),
@@ -1685,86 +1492,8 @@ mod tests {
 		}
 	}
 
-	#[test]
-	fn snapshot_resource_caps_are_deliberate() {
-		assert_eq!(MAX_MODS, 4096);
-		assert_eq!(MAX_PROVIDER_ENTRIES, 100_000);
-		assert_eq!(MAX_PROVIDER_METADATA_BYTES, 1024 * 1024);
-		assert_eq!(MAX_TRAVERSAL_DEPTH, 64);
-	}
-
-	#[test]
-	fn canonical_tree_collection_rejects_total_cap_with_io_cause() -> StdResult<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		fs::write(temp.path().join("one.dds"), b"one")?;
-		fs::write(temp.path().join("two.dds"), b"two")?;
-		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "safe provider directory must open")?;
-		let mut budget = EntryBudget::new(1);
-		let mut result: Vec<(DataRelativePath, bool)> = Vec::new();
-		let capped = collect_entries_inner(
-			&directory,
-			"",
-			&CancellationToken::new(),
-			&mut budget,
-			&mut result,
-			MAX_TRAVERSAL_DEPTH,
-		)
-		.expect_err("entry cap must reject canonical tree");
-		assert!(capped.iter_reports().any(|report| {
-			report.downcast_current_context::<io::Error>()
-				.is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
-		}));
-		Ok(())
-	}
-
-	#[test]
-	fn provider_collection_and_validation_reject_exhausted_depth_with_io_causes() -> StdResult<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		fs::write(temp.path().join("entry.dds"), b"contents")?;
-		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "safe provider directory must open")?;
-
-		let mut collection_budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
-		let mut result = Vec::new();
-		let collection_error = collect_entries_inner(
-			&directory,
-			"",
-			&CancellationToken::new(),
-			&mut collection_budget,
-			&mut result,
-			0,
-		)
-		.expect_err("exhausted depth must reject provider collection");
-		assert!(collection_error.iter_reports().any(|report| {
-			report.downcast_current_context::<io::Error>()
-				.is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
-		}));
-
-		let mut validation_budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
-		let mut paths = HashSet::new();
-		let validation_error = validate_provider_directory(
-			&directory,
-			&directory,
-			ProviderKind::Overwrite,
-			"",
-			&mut paths,
-			&mut ProviderInventory::default(),
-			false,
-			&CancellationToken::new(),
-			&mut validation_budget,
-			0,
-		)
-		.expect_err("exhausted depth must reject provider validation");
-		assert!(validation_error.iter_reports().any(|report| {
-			report.downcast_current_context::<io::Error>()
-				.is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
-		}));
-		Ok(())
-	}
-
-	#[test]
-	fn provider_metadata_rejects_reserved_root_tombstones_for_both_scopes() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn provider_metadata_rejects_reserved_root_tombstones_for_both_scopes() -> StdResult<(), Box<dyn Error>> {
 		for (scope, path) in [
 			("files", "meta.toml"),
 			("directories", "META.TOML"),
@@ -1776,10 +1505,10 @@ mod tests {
 				temp.path().join("meta.toml"),
 				format!("schema_version = 1\n[tombstones]\n{scope} = [\"{path}\"]\n"),
 			)?;
-			let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-				.map_err(|_| "safe provider directory must open")?;
+			let directory = temp.path().canonicalize()?;
 
 			let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+				.await
 				.expect_err("reserved tombstone path must be rejected");
 
 			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
@@ -1787,15 +1516,15 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn provider_validation_rejects_case_folded_reserved_root_entries() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn provider_validation_rejects_case_folded_reserved_root_entries() -> StdResult<(), Box<dyn Error>> {
 		for name in ["META.TOML", "Fallout - Invalidation.bſa"] {
 			let temp = TempDir::new()?;
 			fs::write(temp.path().join(name), b"reserved")?;
-			let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-				.map_err(|_| "safe provider directory must open")?;
+			let directory = temp.path().canonicalize()?;
 
 			let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+				.await
 				.expect_err("reserved root entry must be rejected");
 
 			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
@@ -1803,32 +1532,33 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn data_mod_validation_accepts_missing_metadata() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn data_mod_validation_accepts_missing_metadata() -> StdResult<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		fs::write(temp.path().join("ordinary.dds"), b"content")?;
-		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "safe provider directory must open")?;
+		let directory = temp.path().canonicalize()?;
 
 		validate_provider(&directory, ProviderKind::DataMod, &CancellationToken::new())
+			.await
 			.map_err(|_| "missing metadata must mean empty tombstones")?;
 		Ok(())
 	}
 
-	#[test]
-	fn data_mod_validation_allows_exact_canonical_metadata_name() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn data_mod_validation_allows_exact_canonical_metadata_name() -> StdResult<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		fs::write(temp.path().join("meta.toml"), b"schema_version = 1\n")?;
-		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "safe provider directory must open")?;
+		let directory = temp.path().canonicalize()?;
 
 		validate_provider(&directory, ProviderKind::DataMod, &CancellationToken::new())
+			.await
 			.map_err(|_| "canonical mod metadata must be allowed")?;
 		Ok(())
 	}
 
-	#[test]
-	fn provider_validation_rejects_paths_nested_under_directory_tombstones() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn provider_validation_rejects_paths_nested_under_directory_tombstones() -> StdResult<(), Box<dyn Error>>
+	{
 		for (physical_path, metadata) in [
 			(
 				Some("nested/physical.dds"),
@@ -1849,10 +1579,10 @@ mod tests {
 				fs::write(temp.path().join(path), b"physical")?;
 			}
 			fs::write(temp.path().join("meta.toml"), metadata)?;
-			let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-				.map_err(|_| "safe provider directory must open")?;
+			let directory = temp.path().canonicalize()?;
 
 			let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+				.await
 				.expect_err("nested provider path must be rejected");
 
 			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
@@ -1860,8 +1590,8 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn provider_validation_distinguishes_component_boundaries() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn provider_validation_distinguishes_component_boundaries() -> StdResult<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		fs::create_dir(temp.path().join("foobar"))?;
 		fs::write(temp.path().join("foobar/physical.dds"), b"physical")?;
@@ -1873,16 +1603,16 @@ mod tests {
 				"files = [\"foobar/deleted.dds\"]\n",
 			),
 		)?;
-		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "safe provider directory must open")?;
+		let directory = temp.path().canonicalize()?;
 
 		validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+			.await
 			.map_err(|_| "non-boundary prefixes must not overlap")?;
 		Ok(())
 	}
 
-	#[test]
-	fn provider_validation_uses_folded_unicode_for_tombstone_ancestry() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn provider_validation_uses_folded_unicode_for_tombstone_ancestry() -> StdResult<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		fs::write(
 			temp.path().join("meta.toml"),
@@ -1892,34 +1622,34 @@ mod tests {
 				"files = [\"éς/deleted.dds\"]\n",
 			),
 		)?;
-		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "safe provider directory must open")?;
+		let directory = temp.path().canonicalize()?;
 
 		let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+			.await
 			.expect_err("folded Unicode ancestor must be rejected");
 
 		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
 		Ok(())
 	}
 
-	#[test]
-	fn provider_validation_honors_pre_cancelled_tokens() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn provider_validation_honors_pre_cancelled_tokens() -> StdResult<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		fs::write(temp.path().join("meta.toml"), b"schema_version = 1\n")?;
-		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "safe provider directory must open")?;
+		let directory = temp.path().canonicalize()?;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 
 		let error = validate_provider(&directory, ProviderKind::Overwrite, &cancellation)
+			.await
 			.expect_err("pre-cancelled provider validation must stop");
 
 		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
 		Ok(())
 	}
 
-	#[test]
-	fn snapshot_accepts_data_mod_without_metadata() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn snapshot_accepts_data_mod_without_metadata() -> StdResult<(), Box<dyn Error>> {
 		let fixture = TempDir::new_in(current_dir()?)?;
 		let game = fixture.path().join("game");
 		fs::create_dir_all(game.join("Data"))?;
@@ -1927,6 +1657,7 @@ mod tests {
 			.expect("fixture environment root must be valid");
 		EnvironmentAdapter
 			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
 			.expect("fixture environment must initialize");
 		let mod_dir = root.as_path().join("mods/Plain");
 		fs::create_dir(&mod_dir)?;
@@ -1939,6 +1670,7 @@ mod tests {
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
 		)
+		.await
 		.expect("metadata-free Data Mod must load");
 		assert_eq!(
 			snapshot.file_dependencies.get("ordinary.dds").map(|fact| fact.state),
@@ -1947,8 +1679,8 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn plugin_dependency_state_uses_effective_profile_activation() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn plugin_dependency_state_uses_effective_profile_activation() -> StdResult<(), Box<dyn Error>> {
 		let fixture = TempDir::new_in(current_dir()?)?;
 		let game = fixture.path().join("game");
 		let data = game.join("Data");
@@ -1978,19 +1710,19 @@ mod tests {
 			.expect("fixture environment root must be valid");
 		EnvironmentAdapter
 			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
 			.expect("fixture environment must initialize");
-		let safe_root = SafeDir::open_absolute(
-			&root.as_path()
-				.canonicalize()
-				.expect("fixture environment root must canonicalize"),
-		)
-		.expect("fixture environment root must open");
+		let safe_root = root
+			.as_path()
+			.canonicalize()
+			.expect("fixture environment root must canonicalize");
 		let visible = visible_plugins(
 			&safe_root,
 			&initialization_plan(&fixture.path().join("game")).game_binding,
 			None,
 			&CancellationToken::new(),
 		)
+		.await
 		.expect("visible plugins must load");
 		assert_eq!(visible.get("éσ.esp").map(String::as_str), Some("éς.ESP"));
 		let profile = root.as_path().join("profile");
@@ -2037,6 +1769,7 @@ mod tests {
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
 		)
+		.await
 		.expect("environment snapshot must load");
 		for plugin in [
 			"listed.esp",
@@ -2078,8 +1811,8 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn plugin_dependency_classification_requires_a_data_root_path() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn plugin_dependency_classification_requires_a_data_root_path() -> StdResult<(), Box<dyn Error>> {
 		let fixture = TempDir::new_in(current_dir()?)?;
 		let game = fixture.path().join("game");
 		let data = game.join("Data");
@@ -2090,6 +1823,7 @@ mod tests {
 			.expect("fixture environment root must be valid");
 		EnvironmentAdapter
 			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
 			.expect("fixture environment must initialize");
 
 		let snapshot = load(
@@ -2098,6 +1832,7 @@ mod tests {
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
 		)
+		.await
 		.expect("environment snapshot must load");
 
 		assert_eq!(
@@ -2117,8 +1852,8 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn installation_assessment_reports_only_paths_with_physical_overlaps() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn installation_assessment_reports_only_paths_with_physical_overlaps() -> StdResult<(), Box<dyn Error>> {
 		let fixture = TempDir::new_in(current_dir()?)?;
 		let game = fixture.path().join("game");
 		let data = game.join("Data");
@@ -2128,6 +1863,7 @@ mod tests {
 			.expect("fixture environment root must be valid");
 		EnvironmentAdapter
 			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
 			.expect("fixture environment must initialize");
 
 		let existing_path =
@@ -2199,6 +1935,7 @@ mod tests {
 			&plan,
 			&CancellationToken::new(),
 		)
+		.await
 		.expect("installation must be assessed");
 
 		assert!(assessment.overlaps.iter().all(|overlap| overlap.path != new_path));
@@ -2224,8 +1961,8 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn installation_assessment_preserves_physical_overlap_under_directory_tombstone()
+	#[tokio::test]
+	async fn installation_assessment_preserves_physical_overlap_under_directory_tombstone()
 	-> StdResult<(), Box<dyn Error>> {
 		let fixture = TempDir::new_in(current_dir()?)?;
 		let game = fixture.path().join("game");
@@ -2236,6 +1973,7 @@ mod tests {
 			.expect("fixture environment root must be valid");
 		EnvironmentAdapter
 			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
 			.expect("fixture environment must initialize");
 		fs::write(
 			root.as_path().join("overwrite/meta.toml"),
@@ -2295,6 +2033,7 @@ mod tests {
 			&plan,
 			&CancellationToken::new(),
 		)
+		.await
 		.expect("installation must be assessed");
 
 		assert_eq!(assessment.overlaps.len(), 1);
@@ -2338,8 +2077,8 @@ sArchiveList=Fallout - Meshes.bsa
 		}
 	}
 
-	#[test]
-	fn preview_rejects_unfinished_work_as_invalid_without_mutation() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn preview_rejects_unfinished_work_as_invalid_without_mutation() -> StdResult<(), Box<dyn Error>> {
 		let fixture = TempDir::new_in(current_dir()?)?;
 		let stage = fixture.path().join("temp/operation/stage");
 		fs::create_dir_all(&stage)?;
@@ -2351,7 +2090,8 @@ sArchiveList=Fallout - Meshes.bsa
 			&initialization_plan(&fixture.path().join("game")).game_binding,
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
-		);
+		)
+		.await;
 
 		assert!(matches!(
 			result,
@@ -2362,8 +2102,8 @@ sArchiveList=Fallout - Meshes.bsa
 		Ok(())
 	}
 
-	#[test]
-	fn unfinished_work_precedes_missing_canonical_layout_without_mutation() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn unfinished_work_precedes_missing_canonical_layout_without_mutation() -> StdResult<(), Box<dyn Error>> {
 		let fixture = TempDir::new_in(current_dir()?)?;
 		let stage = fixture.path().join("temp/operation/stage");
 		fs::create_dir_all(&stage)?;
@@ -2375,7 +2115,8 @@ sArchiveList=Fallout - Meshes.bsa
 			&initialization_plan(&fixture.path().join("game")).game_binding,
 			InstallationStateAccess::Mutation,
 			&CancellationToken::new(),
-		);
+		)
+		.await;
 
 		assert!(matches!(
 			result,
