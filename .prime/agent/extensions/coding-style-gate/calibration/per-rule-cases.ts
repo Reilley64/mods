@@ -17,6 +17,168 @@ export interface PerRuleCase {
 
 export const perRuleCases: PerRuleCase[] = [
   {
+    "name": "workflow-port-for-export",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/application/src/export/export_environment.rs",
+    "before": "",
+    "after": "pub struct ExportEnvironmentDependencies {\n\tpub prepare_export: PrepareExport,\n}\n\npub type PrepareExport = Arc<dyn Fn(PathBuf, bool, CancellationToken) -> PortFuture<PreparedExport> + Send + Sync>;\n\npub struct PreparedExport {\n\tpub files: Vec<ExportFile>,\n\tpub publish: PublishExport,\n}"
+  },
+  {
+    "name": "duplicate-port-for-second-use-case",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/application/src/ports/conflicts.rs",
+    "before": "",
+    "after": "// ScanEnvironmentConflicts already scans enabled providers for list_conflicts.\npub type ScanConflictsForExplain =\n\tArc<dyn Fn(CancellationToken) -> PortFuture<EnvironmentConflictScan> + Send + Sync>;"
+  },
+  {
+    "name": "neutral-shared-preparation-ports",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/application/src/ports/preparation.rs",
+    "before": "",
+    "after": "pub type PrepareEnvironmentPlan = Arc<dyn Fn(CancellationToken) -> PortFuture<EnvironmentPlan> + Send + Sync>;\npub type ProjectProfile = Arc<dyn Fn(&EnvironmentPlan) -> PortFuture<ProfileProjection> + Send + Sync>;"
+  },
+  {
+    "name": "use-case-specific-final-step",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/application/src/ports/export.rs",
+    "before": "",
+    "after": "/// Only export writes a standalone output directory.\npub type WriteExport = Arc<dyn Fn(Vec<ExportFile>, PathBuf, CancellationToken) -> PortFuture<()> + Send + Sync>;"
+  },
+  {
+    "name": "launch-named-plan-shared-with-export",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "validation",
+    "expectedViolation": true,
+    "path": "src/application/src/export/export_environment.rs",
+    "before": "",
+    "after": "pub struct ExportEnvironmentDependencies {\n\t// The same winner resolution exec uses, still named for launching.\n\tpub prepare_launch_plan: PrepareLaunchPlan,\n\tpub write_export: WriteExport,\n}"
+  },
+  {
+    "name": "reused-neutral-port-in-second-use-case",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "validation",
+    "expectedViolation": false,
+    "path": "src/application/src/export/export_environment.rs",
+    "before": "",
+    "after": "pub struct ExportEnvironmentDependencies {\n\tpub prepare_environment_plan: PrepareEnvironmentPlan,\n\tpub project_profile: ProjectProfile,\n\tpub write_export: WriteExport,\n}"
+  },
+  {
+    "name": "let-else-only-returns-error",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/infrastructure/execution/src/usvfs/session.rs",
+    "before": "",
+    "after": "fn native(&self) -> Result<NonNull<Session>, ExecutionError> {\n\tlet Some(native) = self.native else {\n\t\treturn Err(report!(ExecutionError));\n\t};\n\tOk(native)\n}"
+  },
+  {
+    "name": "match-only-defaults-option",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/infrastructure/settings/src/limits.rs",
+    "before": "",
+    "after": "fn scan_limit(configured: Option<usize>) -> usize {\n\tmatch configured {\n\t\tSome(limit) => limit,\n\t\tNone => DEFAULT_SCAN_LIMIT,\n\t}\n}"
+  },
+  {
+    "name": "ok-or-else-conversion",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/infrastructure/execution/src/usvfs/session.rs",
+    "before": "",
+    "after": "fn native(&self) -> Result<NonNull<Session>, ExecutionError> {\n\tlet native = self.native.ok_or_else(|| report!(ExecutionError))?;\n\tOk(native)\n}"
+  },
+  {
+    "name": "let-else-with-cleanup-work",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/infrastructure/environment/src/staging.rs",
+    "before": "",
+    "after": "async fn first_entry(entries: &mut Entries, staging: &Staging) -> Result<Summary, ErrorMarker> {\n\tlet Some(entry) = entries.next() else {\n\t\ttracing::warn!(\"no staged entries\");\n\t\tstaging.remove().await?;\n\t\treturn Ok(Summary::empty());\n\t};\n\tOk(Summary::from(entry))\n}"
+  },
+  {
+    "name": "match-only-wraps-parse-error",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "validation",
+    "expectedViolation": true,
+    "path": "src/infrastructure/environment/src/manifest.rs",
+    "before": "",
+    "after": "fn parse_manifest(text: &str) -> Result<Manifest, ErrorMarker> {\n\tlet manifest = match toml::from_str::<Manifest>(text) {\n\t\tOk(manifest) => manifest,\n\t\tErr(error) => return Err(report!(error).context(ErrorMarker::manifest_invalid())),\n\t};\n\tOk(manifest)\n}"
+  },
+  {
+    "name": "context-chain-for-parse-error",
+    "ruleId": "control-flow-prefer-option-and-result-combinators",
+    "split": "validation",
+    "expectedViolation": false,
+    "path": "src/infrastructure/environment/src/manifest.rs",
+    "before": "",
+    "after": "fn parse_manifest(text: &str) -> Result<Manifest, ErrorMarker> {\n\tlet manifest = toml::from_str::<Manifest>(text).context(ErrorMarker::manifest_invalid())?;\n\tOk(manifest)\n}"
+  },
+  {
+    "name": "required-archive-option",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct InspectArgs {\n    #[arg(long)]\n    archive: PathBuf,\n}"
+  },
+  {
+    "name": "required-archive-positional",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct InspectArgs {\n    archive: PathBuf,\n}"
+  },
+  {
+    "name": "optional-report-positional",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct VerifyArgs {\n    archive: PathBuf,\n    report: Option<PathBuf>,\n}"
+  },
+  {
+    "name": "optional-report-and-flag-named",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct VerifyArgs {\n    archive: PathBuf,\n    #[arg(long)]\n    report: Option<PathBuf>,\n    #[arg(long)]\n    verbose: bool,\n}"
+  },
+  {
+    "name": "defaulted-limit-positional",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "validation",
+    "expectedViolation": true,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct ListArgs {\n    #[arg(default_value_t = 20)]\n    limit: usize,\n}"
+  },
+  {
+    "name": "defaulted-limit-named",
+    "ruleId": "cli-arguments-required-positional-arguments-and-optional-named-arguments",
+    "split": "validation",
+    "expectedViolation": false,
+    "path": "src/presentation/cli/src/commands.rs",
+    "before": "",
+    "after": "#[derive(clap::Args)]\nstruct ListArgs {\n    #[arg(long, default_value_t = 20)]\n    limit: usize,\n}"
+  },
+  {
     "name": "fold-validation-into-publication-violation",
     "ruleId": "comments-and-documentation-readability-before-secondary-cleanup",
     "split": "train",

@@ -4,9 +4,9 @@
 
 - Source: current `CODING_STYLE.md` and `reviewer.ts` question/state contract.
 - New fixture: `.prime/agent/extensions/coding-style-gate/calibration/per-rule-cases.ts`.
-- 35 rule IDs; 210 individually named review snippets.
+- 38 rule IDs; 228 individually named review snippets.
 - Each rule: two positive and two negative training cases; one positive and one negative validation case.
-- Total training: 140 (70 positive, 70 negative). Total validation: 70 (35 positive, 35 negative).
+- Total training: 152 (76 positive, 76 negative). Total validation: 76 (38 positive, 38 negative).
 - Labels apply **only to `ruleId`**. Other rules can legitimately flag the same snippet.
 - Fixtures are independent authored scenarios, not verbatim rubric examples or imports of the old calibration corpus.
 - The interface is locally declared. There are no imports or live API calls.
@@ -16,7 +16,7 @@
 
 ## Evidence limits and unfilled sub-boundaries
 
-All 35 rules have six supported target-label examples. This does **not** mean every normative clause is covered:
+All 38 rules have six supported target-label examples. This does **not** mean every normative clause is covered:
 
 - Dependency direction: positive examples show forbidden external types directly in domain/application Rust paths. Rust patches alone cannot establish the complete dependency graph, virtual-root workspace status, package inventory, or actual binary composition-root ownership. No evidence-free positives were assigned to those clauses. Run dependency/workspace checks separately.
 - Established crates: positive cases use TOML table parsing, UTF-16 decoding, and asynchronous delay. `toml`, `encoding_rs`, and `tokio` are present in the current workspace dependency declarations. The snippets make those abstractions relevant. Popularity, maintenance status, approval changes, and the full requirement fit still need dependency review; a model cannot infer those facts from an arbitrary Rust patch.
@@ -27,6 +27,18 @@ All 35 rules have six supported target-label examples. This does **not** mean ev
 - Custom primitive and narrow-implementation justification: comments provide concrete hypothetical provider contracts. They are evidence within the scenario, not verified facts about production providers. They do not assert that an undocumented project-specific gap actually exists.
 - Cancellation completion: the final-mutation cases explicitly identify the irreversible publication point in patch context. Do not generalize their labels to code where completion cannot be established.
 - Validation uses distinct scenarios but the same frozen rubric. No model scoring, threshold tuning, or claim of statistical generalization was performed.
+
+## CLI argument rule
+
+The CLI rule adds six fixtures covering required positional inputs, optional named values and flags, and defaulted inputs. Defaulted inputs are held out for validation. Its configured threshold is provisionally `0.5`; no live model scoring or threshold fitting has been performed for this rule. The existing calibration results do not include it.
+
+## Option and Result combinator rule
+
+The combinator rule adds six fixtures: `let ... else` and `match` forms that only convert or default, their combinator equivalents, and a `let ... else` whose failure path does cleanup work. Error-wrapping `match` versus `.context(...)` is held out for validation. Its configured threshold is provisionally `0.5`; no live model scoring or threshold fitting has been performed for this rule. The existing calibration results do not include it.
+
+## Reusable capability port rule
+
+The reusable-port rule adds six fixtures: a whole-workflow export port, a near-duplicate conflict-scan port, neutral shared preparation ports, and an export-only final step. A launch-named plan reused by export is held out for validation, with its neutral counterpart. Its configured threshold is provisionally `0.5`; no live model scoring or threshold fitting has been performed for this rule. The existing calibration results do not include it.
 
 ## Preservation and deletion coverage
 
@@ -57,8 +69,10 @@ Every row has `train +2/-2`, `validation +1/-1`. The boundary column identifies 
 | `application-use-cases-and-ports-use-case-declaration-order` | Imports and secondary constants may surround correctly ordered primary items. |
 | `application-use-cases-and-ports-use-case-parameters` | A use case that does not support cancellation need not accept a token. |
 | `application-use-cases-and-ports-callable-port-invocation` | Ordinary local functions still use ordinary function-call syntax. |
+| `application-use-cases-and-ports-reusable-capability-ports` | A step only one use case needs, such as writing export output, may have a use-case-specific port. |
 | `application-use-cases-and-ports-focused-use-case-orchestration` | One-use transformation can remain inline; not every loop needs a module. |
 | `application-use-cases-and-ports-use-case-local-implementation-modules` | Repeated callers justify a precise capability-level helper. |
+| `cli-arguments-required-positional-arguments-and-optional-named-arguments` | A defaulted value is optional even when its Rust field is not `Option<T>`; it needs a named argument. |
 | `errors-rootcause-lower-layer-results` | An infallible predicate need not return a Rootcause result. |
 | `errors-preserve-causes-at-owned-boundaries` | A newly detected local validation error has no external cause to preserve. |
 | `errors-context-propagation` | Forwarding an existing report can use into_report without a fresh ownership context. |
@@ -71,6 +85,7 @@ Every row has `train +2/-2`, `validation +1/-1`. The boundary column identifies 
 | `control-flow-choose-the-narrow-conditional-form` | Multi-way action mapping legitimately uses match. |
 | `control-flow-guard-clauses` | Both continuing branches may use else. |
 | `control-flow-match-only-for-multi-way-logic` | A two-variant exhaustive value mapping may be clearer as match. |
+| `control-flow-prefer-option-and-result-combinators` | A `let ... else` whose failure path logs and cleans up does real work and stays a conditional. |
 | `functions-and-tests-cohesive-orchestration` | A shared codec is a meaningful algorithmic seam, not one-use step fragmentation. |
 | `functions-and-tests-helpers-earn-an-interface` | Repeated callers can justify a small named predicate. |
 | `functions-and-tests-pre-mvp-test-placement` | Fixture helper functions belong inside the colocated test module. |
@@ -82,7 +97,7 @@ Every row has `train +2/-2`, `validation +1/-1`. The boundary column identifies 
 
 ## Validation performed
 
-- Parsed all 35 rule IDs from the authoritative Markdown.
-- Checked exact per-rule label/split counts, 210 unique names, and nonempty before/after differences.
-- Imported the TypeScript fixture through the repository Bun runtime and compared IDs to `extractStyleRules` (see parent report for command result).
+- `bun test ./.prime/agent/extensions/coding-style-gate/tests/calibration.test.ts` passed all eight tests.
+- Checked all 36 rule IDs, exact per-rule label/split counts, 216 unique names, and nonempty before/after differences.
+- `bun run check:tools` passed all 104 tests on the PR branch.
 - No live TypeSafe calls and no Rust builds. Synthetic snippets are not runnable units.

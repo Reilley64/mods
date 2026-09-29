@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -199,7 +200,9 @@ describe("Prime coding style gate", () => {
 			} else {
 				expect(guidance).toContain("fix the code and recheck");
 				expect(guidance).toContain("explicitly accept the finding");
-				expect(guidance).toContain("file, rule, and reason");
+				expect(guidance).toContain("file, rule, reason, and sha256");
+				expect(guidance).toContain("git-ignored; never commit it");
+				expect(guidance).toContain("in the PR description");
 				expect(guidance).toContain("does not clear the block");
 			}
 			await worker.handlers.get("agent_end")?.({ messages: [] }, context);
@@ -927,3 +930,143 @@ for (const local of [{ model: "jev-1.13.0" }, { provider: "typesafe", model: "je
   for (const entry of prime.entries) expect(entry.data).toMatchObject({ outcome: "reviewed", findingCount: 1, filesReviewed: 2 });
  });
 }
+
+describe("documented dispositions", () => {
+	const ruleId = "comments-and-documentation-reason-comments";
+	const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
+	const editedHash = sha256("// Run the function.\nfn run() {}\n");
+
+	async function enforcedProject(dispositions?: string) {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-dispositions-"));
+		temporaryDirectories.push(root);
+		await Bun.$`git init -q ${root}`;
+		await writeStyleFixture(root);
+		await writeFile(join(root, ".prime/agent/coding-style-gate.json"), JSON.stringify({ mode: "enforce", ruleThresholds }));
+		if (dispositions !== undefined) {
+			await writeFile(join(root, ".prime/agent/coding-style-dispositions.json"), dispositions);
+		}
+		await mkdir(join(root, "src"));
+		for (const name of ["accepted.rs", "open.rs"]) {
+			await writeFile(join(root, "src", name), "fn run() {}\n");
+		}
+		const prime = fakePrime();
+		codingStyleGate(prime.api as never);
+		const context = { cwd: root, hasUI: false, ui: { notify() {} }, waitForIdle: async () => {} };
+		await prime.handlers.get("session_start")?.({}, context);
+		return { root, prime, context };
+	}
+
+	async function editBoth({ root, prime, context }: Awaited<ReturnType<typeof enforcedProject>>): Promise<string> {
+		const event = { toolName: "ipython", toolCallId: "disposition-edit", input: {} };
+		await prime.handlers.get("tool_call")?.(event, context);
+		for (const name of ["accepted.rs", "open.rs"]) {
+			await writeFile(join(root, "src", name), "// Run the function.\nfn run() {}\n");
+		}
+		const result = await prime.handlers.get("tool_result")?.({ ...event, content: [] }, context);
+		return result?.content.map((part: { text: string }) => part.text).join("\n") ?? "";
+	}
+
+	test("blocks only unaccepted findings and counts accepted ones", async () => {
+		const project = await enforcedProject(
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash }] }),
+		);
+
+		const toolText = await editBoth(project);
+		await project.prime.handlers.get("agent_end")?.({ messages: [] }, project.context);
+
+		for (const text of [toolText, project.prime.userMessages[0]?.text ?? ""]) {
+			expect(text).toContain("coding-style-gate found 1 likely violation in 2 Rust files");
+			expect(text).toContain("- src/open.rs |");
+			expect(text).not.toContain("- src/accepted.rs |");
+			expect(text).toContain("1 finding was accepted by documented dispositions");
+			expect(text).toContain("Accepted findings are not a clean review.");
+		}
+		expect(project.prime.userMessages).toHaveLength(1);
+		expect(project.prime.entries.at(-1)?.data).toMatchObject({
+			findingCount: 1,
+			findings: [{ file: "src/open.rs", rule: ruleId }],
+			acceptedFindingCount: 1,
+			acceptedFindings: [{ file: "src/accepted.rs", rule: ruleId }],
+		});
+	});
+
+	test("does not block or follow up when every finding is accepted", async () => {
+		const project = await enforcedProject(
+			JSON.stringify({
+				dispositions: [
+					{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash },
+					{ file: "src/open.rs", rule: "Comments and documentation / Reason comments", reason: "The comment records a documented contract.", sha256: editedHash },
+				],
+			}),
+		);
+
+		const toolText = await editBoth(project);
+		await project.prime.handlers.get("agent_end")?.({ messages: [] }, project.context);
+
+		expect(toolText).toContain("found no unaccepted likely violations in 2 Rust files");
+		expect(toolText).toContain("2 findings were accepted by documented dispositions");
+		expect(toolText).toContain("Accepted findings are not a clean review.");
+		expect(toolText).not.toContain("- src/");
+		expect(project.prime.userMessages).toHaveLength(0);
+		expect(JSON.stringify(project.prime.sentMessages)).toContain("2 findings were accepted");
+		expect(JSON.stringify(project.prime.sentMessages)).not.toContain("correction limit");
+		expect(project.prime.entries.at(-1)?.data).toMatchObject({ trigger: "agent_end", findingCount: 0, acceptedFindingCount: 2 });
+	});
+
+	for (const [name, dispositions, problem] of [
+		["an absent file", undefined, undefined],
+		["a malformed file", "{not json", "is not valid JSON"],
+		["an empty reason", JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: " ", sha256: editedHash }] }), "entry 0 has no non-empty reason"],
+		["a missing hash", JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "Documented." }] }), "entry 0 has no valid sha256"],
+		[
+			"a file changed since its disposition",
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "Documented.", sha256: sha256("fn run() {}\n") }] }),
+			"src/accepted.rs changed since this disposition was recorded",
+		],
+	] as const) {
+		test(`accepts nothing from ${name}`, async () => {
+			const project = await enforcedProject(dispositions);
+
+			const toolText = await editBoth(project);
+			await project.prime.handlers.get("agent_end")?.({ messages: [] }, project.context);
+
+			expect(toolText).toContain("coding-style-gate found 2 likely violations");
+			expect(toolText).not.toContain("accepted by documented dispositions");
+			if (problem === undefined) {
+				expect(toolText).not.toContain("dispositions problem");
+			} else {
+				expect(toolText).toContain("coding-style-gate dispositions problem: ");
+				expect(toolText).toContain(problem);
+			}
+			expect(project.prime.userMessages).toHaveLength(1);
+			expect(project.prime.entries.at(-1)?.data).toMatchObject({ findingCount: 2, acceptedFindingCount: 0 });
+		});
+	}
+
+	test("accepts findings from a git-ignored dispositions file", async () => {
+		const project = await enforcedProject(
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash }] }),
+		);
+		await writeFile(join(project.root, ".gitignore"), ".prime/agent/coding-style-dispositions.json\n");
+		const ignored = await Bun.$`git check-ignore .prime/agent/coding-style-dispositions.json`.cwd(project.root).nothrow().quiet();
+
+		const toolText = await editBoth(project);
+
+		expect(ignored.exitCode).toBe(0);
+		expect(toolText).toContain("1 finding was accepted by documented dispositions");
+		expect(toolText).not.toContain("dispositions problem");
+	});
+
+	test("keeps the override mechanism for unaccepted findings", async () => {
+		const project = await enforcedProject(
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash }] }),
+		);
+
+		await editBoth(project);
+		await project.prime.handlers.get("agent_end")?.({ messages: [] }, project.context);
+		await project.prime.commands.get("coding-style-gate").handler("override accepted by the user", project.context);
+		await project.prime.handlers.get("agent_end")?.({ messages: [] }, project.context);
+
+		expect(project.prime.userMessages).toHaveLength(1);
+	});
+});

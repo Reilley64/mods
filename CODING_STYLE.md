@@ -436,6 +436,52 @@ let archive = dependencies.open_archive(path).await?;
 let archive = dependencies.open_archive.call((path,)).await?;
 ```
 
+### Reusable capability ports
+
+
+#### Rule
+
+Name a port and its input and output types for the capability they provide, not for the use case that first consumed them. A port does one step, so use cases compose ports instead of receiving a combined workflow. When a second use case needs the same step, it reuses the existing port. It does not get a use-case-specific copy, and it does not get a port that runs the whole workflow inside infrastructure. Keep use-case-specific steps in their own ports next to the shared ones.
+
+#### Violation
+
+A port or its types are named after one use case even though the step is general. A port bundles several steps that another use case also needs. Or a second use case adds a near-duplicate port instead of reusing the existing one.
+
+#### Compliant
+
+Shared steps are neutral, single-step ports that more than one use case can compose. Only steps that one use case alone needs are specific to that use case.
+
+#### Bad example
+
+```rust
+pub struct ExportEnvironmentDependencies {
+	// Prepares, lists, and returns a publisher in one infrastructure call.
+	pub prepare_export: PrepareExport,
+}
+
+pub struct ExecuteProgramDependencies {
+	pub prepare_launch_plan: PrepareLaunchPlan,
+}
+```
+
+#### Good example
+
+```rust
+pub struct ExportEnvironmentDependencies {
+	pub prepare_environment_plan: PrepareEnvironmentPlan,
+	pub project_profile: ProjectProfile,
+	pub list_export_files: ListExportFiles,
+	pub write_export: WriteExport,
+}
+
+pub struct ExecuteProgramDependencies {
+	pub prepare_environment_plan: PrepareEnvironmentPlan,
+	pub project_profile: ProjectProfile,
+	pub create_virtual_file_system: CreateVirtualFileSystem,
+}
+```
+
+
 ### Focused use-case orchestration
 
 
@@ -508,6 +554,36 @@ or a capability interface module:
 
 file: src/application/src/installation/types.rs
 patch: pub struct InstallArchiveInput; pub struct InstallArchiveOutput;
+```
+
+## CLI arguments
+
+### Required positional arguments and optional named arguments
+
+#### Rule
+
+Use positional arguments for required CLI inputs. Use long options for optional inputs: `--argument <value>` for values and `--flag` for boolean switches. Inputs that callers may omit because they have defaults are optional and use long options. Do not make named options required or define optional positional arguments.
+
+#### Violation
+
+A command requires a named option, accepts an optional positional argument, or exposes an optional input only through a short option.
+
+#### Compliant
+
+Required inputs are positional. Optional inputs have long option names and may be omitted.
+
+#### Bad example
+
+For a command with a required source and an optional destination:
+
+```text
+tool copy --source <source> [<destination>]
+```
+
+#### Good example
+
+```text
+tool copy <source> [--destination <destination>]
 ```
 
 ## Errors
@@ -786,7 +862,7 @@ async fn copy(progress: ReportProgress, cancellation: CancellationToken) { /* ..
 
 #### Rule
 
-Use `if` for boolean conditions, `let ... else` for one required pattern with an exiting failure path, and `if let` when behavior depends on one relevant pattern.
+Use `if` for boolean conditions, `let ... else` for one required pattern with an exiting failure path, and `if let` when behavior depends on one relevant pattern. When the failure path only converts to an error or a default, use a combinator instead; see "Prefer Option and Result combinators".
 
 #### Violation
 
@@ -879,6 +955,36 @@ if let Some(value) = value {
 	use_value(value);
 }
 ```
+
+### Prefer Option and Result combinators
+
+
+#### Rule
+
+When a branch only converts, forwards, or defaults an `Option` or `Result`, write it as a combinator chain with `?`, such as `ok_or`, `ok_or_else`, `map`, `map_err`, `and_then`, `unwrap_or`, or `.context(...)`, instead of `match`, `if let`, or `let ... else`. Keep a conditional when a branch has side effects or does more than one conversion, or when the chain would need nested closures that are harder to read. Error conversions still follow "Preserve causes at owned boundaries": attach context and never discard the source error.
+
+#### Violation
+
+A `match`, `if let`, or `let ... else` only turns `None` or an error into another error or a default value, where a combinator chain expresses the same logic.
+
+#### Compliant
+
+Pure conversions use combinators and `?`. Conditionals remain for branches with real work in them.
+
+#### Bad example
+
+```rust
+let Some(native) = self.native else {
+	return Err(report!(ExecutionError));
+};
+```
+
+#### Good example
+
+```rust
+let native = self.native.ok_or_else(|| report!(ExecutionError))?;
+```
+
 
 ## Functions and tests
 
