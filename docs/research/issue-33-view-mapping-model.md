@@ -104,7 +104,7 @@ Read-only scope: local worktree `/Users/reilley/Repositories/mods/.worktrees/iss
 
 ## Authority and actual callers
 
-- `CONTEXT.md`: enabled mods only; complete low-to-high priority; Overwrite highest; Output Target selection does not reorder providers or relocate existing destinations. Tombstones suppress lower files or inclusive subtrees.
+- `CONTEXT.md`: enabled mods only; complete Mod Priority order (at the time of this review, `modlist.txt` was read low-to-high; it now uses MO2 order, first listed highest); Overwrite highest; Output Target selection does not reorder providers or relocate existing destinations. Tombstones suppress lower files or inclusive subtrees.
 - `docs/adr/0005-use-upstream-usvfs.md`: accepted physical mutation, no copy-on-write or durable execution Tombstones, non-opaque namespaces, and non-fail-closed descendant injection. Rust still owns Mod Priority, Output Target and Profile State.
 - `docs/research/issue-31-execution-composition.md`: named optional source files need not be synthesized; virtual user-directory containers precede files; only saves are a recursive profile creation target; timestamp load order is not enforced.
 - `docs/research/issue-33-mo2-integration.md`, Mapping callers and S1–S5/D1–D5: real launch uses `fileMapping(profileName, customOverwrite)`, not the alternate resolved-file helper. Enabled regular mods map in ascending priority; selected enabled custom target receives CREATETARGET at its normal rank; Overwrite maps last and is default creation target; connector makes directory entries recursive and preserves order.

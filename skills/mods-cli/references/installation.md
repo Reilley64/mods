@@ -14,7 +14,7 @@ mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures.z
 
 An **Install Plan** describes validated source-to-Data destinations, winner decisions, and overlaps on planned paths. It is neither an installed mod nor a complete File Conflict report. Inspect `plan.archive_identity`, `plan.mod_name`, `plan.replacement`, choices, warnings, candidates, and `plan.projected_state` before proceeding. A later invocation recomputes the plan; a preview does not freeze the archive or environment.
 
-New installs go at the top of `modlist.txt`, after any leading `#` comment lines, with the highest Mod Priority, and are **initially disabled**. Installation success does not mean participation in the Virtual Game View. There is no released enable command; do not invent one or silently edit `profile/modlist.txt`.
+New installs go at the top of `modlist.txt`, after any leading `#` comment lines, with the highest Mod Priority, and are **initially disabled**. There is no migration: a list written low-to-high by earlier mods versions now reads reversed, so reverse its mod entries by hand. Installation success does not mean participation in the Virtual Game View. There is no released enable command; do not invent one or silently edit `profile/modlist.txt`.
 
 ## Replacement
 
@@ -24,7 +24,7 @@ mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-u
 mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-update.7z' --name 'Mojave Textures' --replace
 ```
 
-`--replace` requires an existing Data Mod. It retains the existing canonical Mod Name, Mod Priority, list position (counted from the top of `modlist.txt`), and enabled state. Without `--replace`, a matching name fails with `mod_already_exists`; replacement of a missing name fails with `mod_not_found`. Never add `--replace` automatically to bypass a collision.
+`--replace` requires an existing Data Mod. It retains the existing canonical Mod Name, Mod Priority, list position (counted in mod entries from the top of `modlist.txt`; comment lines are not counted), and enabled state. Without `--replace`, a matching name fails with `mod_already_exists`; replacement of a missing name fails with `mod_not_found`. Never add `--replace` automatically to bypass a collision.
 
 ## FOMOD Choices: resubmit complete state
 

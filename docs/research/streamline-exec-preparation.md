@@ -145,11 +145,11 @@ The gate remains non-clean. The CLI crate now enables `fn_traits`, so `runner.rs
 
 ## MO2 modlist order
 
-The user approved reading `profile/modlist.txt` in Mod Organizer 2 order. The first listed mod has the highest Mod Priority and the last has priority 0. Overwrite stays implicitly highest and game Data lowest. There is no migration: an existing list written in the old low-to-high order now reads with the order reversed.
+The user approved reading `profile/modlist.txt` in Mod Organizer 2 order. The first listed mod has the highest Mod Priority and the last has priority 0. Overwrite stays implicitly highest and game Data lowest. There is no migration: an existing list written in the old low-to-high order now reads with the order reversed. The skill references and `CONTEXT.md` say so, and tell users to reverse the mod entries by hand.
 
 - `snapshot::parse_modlist` (strict preparation, installation state, export) and `conflict_scan::parse_modlist` (conflict list, inspect, explain, and installation previews) collect entries in file order. They then return them lowest priority first, with priority = rank from the end of the file. Exec's inventory uses the strict parser. Every caller that iterates installed mods therefore keeps its low-to-high order.
 - `insert_disabled_mod` (renamed from `append_disabled_mod`) puts a new disabled mod before the first non-comment line, after any leading `#` lines. It keeps the BOM and reuses the file's last separator. New installs still get priority = number of installed mods, which is now the highest.
-- `ProjectedModState.list_position` now counts from the top of `modlist.txt`: a new install is at 0, and a replacement keeps its current line. The installation use case and transaction intent validation both use this meaning. The install preview prints this field.
+- `ProjectedModState.list_position` now counts mod entries from the top of `modlist.txt`; comment lines are not counted. A new install is at 0, and a replacement keeps its current entry position. Transaction intent validation computes the replacement position with checked arithmetic and rejects an inconsistent plan as `transaction_failure`. The installation use case and transaction intent validation both use this meaning. The install preview prints this field.
 - `CONTEXT.md` (Mod Priority) and the skill references `execution.md` and `installation.md` describe the new order.
 - New tests:
   - `first_listed_mod_wins_in_an_mo2_ordered_modlist`: a comment header, `+High` first, `+Base` last, and a conflicting `shared.txt`. `High` wins in both launch and strict preparation.

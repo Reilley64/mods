@@ -317,6 +317,9 @@ pub struct ProjectedModState {
 	pub mode: InstallMode,
 	pub mod_name: ModName,
 	pub priority: ModPriority,
+	/// Zero-based position among mod entries in `modlist.txt`, counted from the
+	/// top. Comment lines are not counted. MO2 order puts the highest Mod
+	/// Priority first, so a new install is at 0.
 	pub list_position: u64,
 	pub enabled: bool,
 	pub overlaps: Vec<InstallOverlap>,

@@ -316,6 +316,19 @@ Decision (user chose the product change): read `modlist.txt` in MO2 order. The f
 
 The user approved removing the explicit `CloseVirtualFileSystem` port, relying on `VirtualGameView`'s existing `Drop`. The only behavior change: a teardown failure on the cancel-after-VFS-creation path is no longer reported as `vfs_failed` (phase `cleanup`); the user sees `operation_cancelled`. This is done after the refactor build (`c5e040f`) is installed, before the working-directory default and MO2 modlist-order changes.
 
+### Decision: drop SafeDir, use tokio::fs everywhere
+
+The user decided to drop `SafeDir` (cap-std) and use `tokio::fs` throughout, including the places that currently use `std::fs`. The rationale: the planned git rollback ticket will cover recovery from bad writes, so the handle-relative, no-follow, reparse-point and hard-link protections are no longer needed, and the application use cases are already async.
+
+Defaults unless the user says otherwise:
+- Keep only `create_new` opens for no-overwrite creation (`meta.toml`).
+- Drop the compare-before-publish checks for settings and INIs, as the user decided. Concurrent edits made while a command or the game runs may be overwritten; the planned git rollback ticket covers recovery.
+- Drop durable publication (write, flush, then rename) for settings, INIs and exports, as the user decided. Files are written directly.
+- Drop the no-follow and link checks, handle-relative directory walking, reparse/hard-link rejection, byte caps, and ancestry checks, except export's rule that the output must not be inside the environment, which prevents recursive copying.
+- Enable tokio's `fs` feature.
+- Measure the exec inventory walk before and after. `tokio::fs` sends every call through the blocking pool, and the user's setup has tens of thousands of files, so the walk may get slower.
+- Do this on `perf/streamline-exec-preparation` itself, as its own commit, after the current build is installed.
+
 ## Execution cost map and optimization candidates
 
 The detailed read-only trace below explains the installed revision. Source-derived costs are hypotheses, not measured Windows bottlenecks.

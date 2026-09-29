@@ -314,11 +314,17 @@ fn validate_intent(installed: &[InstalledMod], plan: &InstallPlan) -> Result<(),
 			}
 		}
 		(true, Some(existing)) => {
+			// MO2 order lists the highest priority first, so the entry position
+			// counts down from the last priority.
+			let list_position = u64::try_from(installed.len())
+				.ok()
+				.and_then(|count| count.checked_sub(1))
+				.and_then(|last| last.checked_sub(u64::from(existing.priority.get())))
+				.ok_or_else(|| report!(ErrorMarker::transaction_failure().with_phase("publication")))?;
 			if plan.projected_state.mode != InstallMode::Replacement
 				|| plan.mod_name.as_str() != existing.name.as_str()
 				|| plan.projected_state.mod_name != existing.name
-				|| plan.projected_state.list_position
-					!= (installed.len() - 1 - existing.priority.get() as usize) as u64
+				|| plan.projected_state.list_position != list_position
 				|| plan.projected_state.enabled != existing.enabled
 				|| plan.projected_state.priority != existing.priority
 			{
