@@ -4,9 +4,9 @@
 
 - Source: current `CODING_STYLE.md` and `reviewer.ts` question/state contract.
 - New fixture: `.prime/agent/extensions/coding-style-gate/calibration/per-rule-cases.ts`.
-- 36 rule IDs; 216 individually named review snippets.
+- 37 rule IDs; 222 individually named review snippets.
 - Each rule: two positive and two negative training cases; one positive and one negative validation case.
-- Total training: 144 (72 positive, 72 negative). Total validation: 72 (36 positive, 36 negative).
+- Total training: 148 (74 positive, 74 negative). Total validation: 74 (37 positive, 37 negative).
 - Labels apply **only to `ruleId`**. Other rules can legitimately flag the same snippet.
 - Fixtures are independent authored scenarios, not verbatim rubric examples or imports of the old calibration corpus.
 - The interface is locally declared. There are no imports or live API calls.
@@ -16,7 +16,7 @@
 
 ## Evidence limits and unfilled sub-boundaries
 
-All 36 rules have six supported target-label examples. This does **not** mean every normative clause is covered:
+All 37 rules have six supported target-label examples. This does **not** mean every normative clause is covered:
 
 - Dependency direction: positive examples show forbidden external types directly in domain/application Rust paths. Rust patches alone cannot establish the complete dependency graph, virtual-root workspace status, package inventory, or actual binary composition-root ownership. No evidence-free positives were assigned to those clauses. Run dependency/workspace checks separately.
 - Established crates: positive cases use TOML table parsing, UTF-16 decoding, and asynchronous delay. `toml`, `encoding_rs`, and `tokio` are present in the current workspace dependency declarations. The snippets make those abstractions relevant. Popularity, maintenance status, approval changes, and the full requirement fit still need dependency review; a model cannot infer those facts from an arbitrary Rust patch.
@@ -31,6 +31,10 @@ All 36 rules have six supported target-label examples. This does **not** mean ev
 ## CLI argument rule
 
 The CLI rule adds six fixtures covering required positional inputs, optional named values and flags, and defaulted inputs. Defaulted inputs are held out for validation. Its configured threshold is provisionally `0.5`; no live model scoring or threshold fitting has been performed for this rule. The existing calibration results do not include it.
+
+## Option and Result combinator rule
+
+The combinator rule adds six fixtures: `let ... else` and `match` forms that only convert or default, their combinator equivalents, and a `let ... else` whose failure path does cleanup work. Error-wrapping `match` versus `.context(...)` is held out for validation. Its configured threshold is provisionally `0.5`; no live model scoring or threshold fitting has been performed for this rule. The existing calibration results do not include it.
 
 ## Preservation and deletion coverage
 
@@ -76,6 +80,7 @@ Every row has `train +2/-2`, `validation +1/-1`. The boundary column identifies 
 | `control-flow-choose-the-narrow-conditional-form` | Multi-way action mapping legitimately uses match. |
 | `control-flow-guard-clauses` | Both continuing branches may use else. |
 | `control-flow-match-only-for-multi-way-logic` | A two-variant exhaustive value mapping may be clearer as match. |
+| `control-flow-prefer-option-and-result-combinators` | A `let ... else` whose failure path logs and cleans up does real work and stays a conditional. |
 | `functions-and-tests-cohesive-orchestration` | A shared codec is a meaningful algorithmic seam, not one-use step fragmentation. |
 | `functions-and-tests-helpers-earn-an-interface` | Repeated callers can justify a small named predicate. |
 | `functions-and-tests-pre-mvp-test-placement` | Fixture helper functions belong inside the colocated test module. |

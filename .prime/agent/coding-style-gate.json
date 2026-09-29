@@ -40,6 +40,7 @@
     "control-flow-choose-the-narrow-conditional-form": 0.365,
     "control-flow-guard-clauses": 0.45999999999999996,
     "control-flow-match-only-for-multi-way-logic": 0.525,
+    "control-flow-prefer-option-and-result-combinators": 0.5,
     "functions-and-tests-cohesive-orchestration": 0.44,
     "functions-and-tests-helpers-earn-an-interface": 0.7,
     "functions-and-tests-pre-mvp-test-placement": 0.27,
