@@ -14,7 +14,6 @@ mod set_game_directory;
 
 use application::ErrorMarker;
 use domain::EnvironmentRoot;
-pub use execute_program::ExecuteProgram;
 use infrastructure_archive::ArchiveAdapter;
 use infrastructure_environment::EnvironmentAdapter;
 pub use infrastructure_execution::CapturedOutput;

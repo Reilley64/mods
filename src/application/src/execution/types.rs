@@ -1,5 +1,13 @@
+use crate::execution::ExecuteProgramError;
+use crate::execution::ExecuteProgramOutput;
+use crate::ports::PortFuture;
+use domain::OutputTarget;
+use domain::Program;
+use domain::ProgramArgument;
+use domain::WorkingDirectory;
 use std::fmt;
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionWarning {
@@ -22,3 +30,15 @@ impl fmt::Display for RetainedExecutionInis {
 		formatter.write_str("execution INIs retained")
 	}
 }
+
+/// Runs one composed exec use case. Composition chooses the thread it runs on.
+pub type ExecuteProgram = Box<
+	dyn FnOnce(
+			OutputTarget,
+			Option<WorkingDirectory>,
+			Program,
+			Vec<ProgramArgument>,
+			CancellationToken,
+		) -> PortFuture<ExecuteProgramOutput, ExecuteProgramError>
+		+ Send,
+>;

@@ -1,29 +1,11 @@
 use crate::Resources;
 use crate::execution_adapter::ExecutionAdapter;
-use application::execution::ExecuteProgramError;
-use application::execution::ExecuteProgramOutput;
-use application::ports::PortFuture;
+use application::execution::ExecuteProgram;
 use domain::GameBinding;
-use domain::OutputTarget;
-use domain::Program;
-use domain::ProgramArgument;
-use domain::WorkingDirectory;
 use infrastructure_execution::ExecutionCapture;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-
-/// Runs the composed exec use case on its own execution thread.
-pub type ExecuteProgram = Box<
-	dyn FnOnce(
-			OutputTarget,
-			Option<WorkingDirectory>,
-			Program,
-			Vec<ProgramArgument>,
-			CancellationToken,
-		) -> PortFuture<ExecuteProgramOutput, ExecuteProgramError>
-		+ Send,
->;
 
 impl Resources {
 	/// Composes exec with private output capture. The use case runs on its own

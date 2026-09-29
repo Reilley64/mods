@@ -214,7 +214,9 @@ pub async fn execute_program(
 
 	let exit = supervision.exit.context(ExecuteProgramError)?;
 
-	// The check reports retained state even after the caller cancelled execution.
+	// Deliberate exception to passing the caller's token: the post-run check gets
+	// an unlinked token so it still runs after the caller cancels. It only adds a
+	// warning about the retained Profile State.
 	let profile_state = dependencies.check_profile_state.call((CancellationToken::new(),)).await;
 	if profile_state.is_err() {
 		warnings.push(ExecutionWarning::ProfileStateInvalid);
@@ -432,9 +434,15 @@ mod tests {
 				launched();
 				complete(Ok(RunningProgram(AdapterState::new("program"))))
 			}),
-			supervise_program: Arc::new(move |program: RunningProgram, _| {
+			supervise_program: Arc::new(move |program: RunningProgram, cancellation: CancellationToken| {
 				assert_eq!(program.0.downcast::<&str>(), Some("program"));
 				supervised();
+
+				// Forced termination follows caller cancellation, so the caller's token
+				// is cancelled before the post-run check runs.
+				if matches!(scenario.supervision, Supervision::Forced) {
+					cancellation.cancel();
+				}
 
 				let exit = match scenario.supervision {
 					Supervision::Failed | Supervision::FailedAndUndrained => {
@@ -768,11 +776,14 @@ mod tests {
 		let mut scenario = default_scenario()?;
 		scenario.supervision = Supervision::Forced;
 		let (dependencies, steps) = fake_dependencies(scenario);
+		let cancellation = CancellationToken::new();
 
-		let Err(error) = run(dependencies, OutputTarget::Overwrite, CancellationToken::new()).await else {
+		let Err(error) = run(dependencies, OutputTarget::Overwrite, cancellation.clone()).await else {
 			return Err(report!(ErrorMarker::execution_supervision_failed()));
 		};
 
+		// The fake check asserts that its own token is not cancelled.
+		assert!(cancellation.is_cancelled());
 		assert!(has_marker(
 			&error,
 			&ErrorMarker::operation_cancelled().with_phase("cleanup")

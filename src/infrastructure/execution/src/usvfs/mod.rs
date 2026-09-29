@@ -56,18 +56,20 @@ pub struct VirtualGameView {
 	native: Option<NonNull<ModsUsvfs>>,
 }
 
-// SAFETY: Upstream controller state is process-global, not thread-local. In the
-// pinned usvfs-rs revision `c23705c`, `usvfsConnectVFS` and `usvfsDisconnectVFS`
-// store and delete the static `context` and `manager` (`src/usvfs_dll/usvfs.cpp`).
-// Each API call locks `HookContext` through `readAccess` or `writeAccess`, whose
-// scoped pointer unlocks before the call returns (`src/usvfs_dll/hookcontext.cpp`).
-// That RecursiveBenaphore records a thread owner only while one call holds it
-// (`src/usvfs_dll/semaphore.cpp`). The controller path and the shim in
-// `rust/usvfs-sys/native/barrier.cpp` keep no thread-local state and start no
-// threads, so a session may be used from a different thread than its creator.
-// Calls must not overlap: `SESSION_ACTIVE` allows one session per process, the
-// view stays `!Sync` through `NonNull`, and every native call takes `&mut self`
-// or `self`.
+// SAFETY: Moving the session to another thread is sound; overlapping calls are
+// not. In the pinned usvfs-rs revision `c23705c`, the controller exports that
+// the shim calls (`usvfsVirtualLinkFile`, `usvfsVirtualLinkDirectoryStatic`,
+// `usvfsCreateProcessHooked`, the clear functions, connect, and disconnect in
+// `src/usvfs_dll/usvfs.cpp`) use the process-global `context` without a lock.
+// `READ_CONTEXT`/`WRITE_CONTEXT` locking appears only in hook code for
+// injected children. No controller state is thread-local: `src/` has no
+// `thread_local`, `DllMain` ignores thread attach and detach, and the shim in
+// `rust/usvfs-sys/native/barrier.cpp` keeps no thread or lock state. The
+// caller's thread therefore does not matter, but calls must never overlap.
+// This wrapper prevents overlap: `SESSION_ACTIVE` allows one session per
+// process, `NonNull` keeps the view `!Sync`, and every native call takes
+// `&mut self` or `self`. Moving the value transfers ownership, which also
+// orders every call on the old thread before any call on the new one.
 unsafe impl Send for VirtualGameView {}
 
 impl VirtualGameView {

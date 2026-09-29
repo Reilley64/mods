@@ -22,15 +22,13 @@ use application::conflicts::inspect_mod_conflicts;
 use application::conflicts::list_effective_conflicts;
 use application::environment::InitializeEnvironmentDependencies;
 use application::environment::initialize_environment;
-use application::execution::ExecuteProgramError;
-use application::execution::ExecuteProgramOutput;
+use application::execution::ExecuteProgram;
 use application::execution::ExecutionWarning;
 use application::export::ExportEnvironmentDependencies;
 use application::export::export_environment;
 use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
 use application::installation::install_archive;
-use application::ports::PortFuture;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
 use application::settings::SetGameDirectoryDependencies;
@@ -59,19 +57,6 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
-
-/// Runs the composed exec use case. Composition owns the dedicated thread that
-/// keeps native execution calls from overlapping.
-pub(crate) type ExecuteProgram = Box<
-	dyn FnOnce(
-			OutputTarget,
-			Option<WorkingDirectory>,
-			Program,
-			Vec<ProgramArgument>,
-			CancellationToken,
-		) -> PortFuture<ExecuteProgramOutput, ExecuteProgramError>
-		+ Send,
->;
 
 pub(crate) enum CommandDependencies {
 	Initialize(InitializeEnvironmentDependencies),

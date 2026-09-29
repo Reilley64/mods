@@ -54,15 +54,9 @@ struct NativeLaunchTarget {
 	inherited_streams: Option<InheritedStreams>,
 }
 
-/// Stream owners that outlive the hooked process until the output is finished.
-struct ProgramStreams {
-	private: Option<PrivateStreams>,
-	inherited: Option<InheritedStreams>,
-}
-
 struct NativeProgram {
 	process: HookedProcess,
-	streams: ProgramStreams,
+	private_streams: Option<PrivateStreams>,
 }
 
 // These ports create every handle they consume, so another handle type is a
@@ -256,14 +250,13 @@ impl ExecutionAdapter {
 			streams.close_child_ends();
 		}
 
+		// Process creation gave the child its own copies of the inherited streams,
+		// so this function's duplicates close when it returns.
 		let process = launched?;
 
 		Ok(RunningProgram(AdapterState::new(NativeProgram {
 			process,
-			streams: ProgramStreams {
-				private: private_streams,
-				inherited: inherited_streams,
-			},
+			private_streams,
 		})))
 	}
 
@@ -373,7 +366,10 @@ async fn supervise_program(
 	cancellation: CancellationToken,
 	force_cancellation: CancellationToken,
 ) -> Result<ProgramSupervision, ErrorMarker> {
-	let NativeProgram { mut process, streams } = program.0.downcast().ok_or_else(foreign_handle)?;
+	let NativeProgram {
+		mut process,
+		private_streams,
+	} = program.0.downcast().ok_or_else(foreign_handle)?;
 
 	let exit = supervise(&mut process, cancellation, force_cancellation)
 		.await
@@ -389,7 +385,7 @@ async fn supervise_program(
 	Ok(ProgramSupervision {
 		exit,
 		job_drained,
-		output: ProgramOutput(AdapterState::new(streams)),
+		output: ProgramOutput(AdapterState::new(private_streams)),
 	})
 }
 
@@ -400,14 +396,11 @@ fn preserve_execution_profile(staged: StagedExecutionProfile) -> Result<(), Erro
 }
 
 fn finish_program_output(output: ProgramOutput) -> Result<(), ErrorMarker> {
-	let ProgramStreams { private, inherited } = output.0.downcast().ok_or_else(foreign_handle)?;
+	let private_streams: Option<PrivateStreams> = output.0.downcast().ok_or_else(foreign_handle)?;
 
-	if let Some(private) = private {
-		private.finish()?;
+	if let Some(private_streams) = private_streams {
+		private_streams.finish()?;
 	}
-
-	// Inherited duplicates stay open until the output is finished, as before ports.
-	drop(inherited);
 
 	Ok(())
 }
