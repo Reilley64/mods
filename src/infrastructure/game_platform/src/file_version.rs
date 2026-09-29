@@ -1,19 +1,12 @@
 use application::ErrorMarker;
-use cap_std::fs::File;
 use pelite::PeFile;
 use rootcause::Result;
-use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::error::Error;
 use std::fmt;
-use std::io::Read;
 
-pub(super) fn read_file_version(mut file: File) -> Result<Vec<u32>, ErrorMarker> {
-	let mut bytes = Vec::new();
-	file.read_to_end(&mut bytes)
-		.context(ErrorMarker::game_install_invalid())?;
-
-	let image = PeFile::from_bytes(&bytes)
+pub(super) fn read_file_version(bytes: &[u8]) -> Result<Vec<u32>, ErrorMarker> {
+	let image = PeFile::from_bytes(bytes)
 		.map_err(|error| report!(error).context(ErrorMarker::game_install_invalid()))?;
 	let resources = image
 		.resources()
@@ -48,20 +41,11 @@ impl Error for MalformedVersionResource {}
 mod tests {
 	use super::read_file_version;
 	use application::ErrorCode;
-	use cap_std::ambient_authority;
-	use cap_std::fs::Dir;
 	use rootcause::Result;
-	use std::fs;
-	use tempfile::TempDir;
 
 	#[test]
 	fn malformed_version_resource_is_typed() -> Result<()> {
-		let temp = TempDir::new()?;
-		fs::write(temp.path().join("FalloutNV.exe"), pe_with_version(None))?;
-		let directory = Dir::open_ambient_dir(temp.path(), ambient_authority())?;
-		let file = directory.open("FalloutNV.exe")?;
-
-		let result = read_file_version(file);
+		let result = read_file_version(&pe_with_version(None));
 
 		assert_eq!(
 			result.as_ref().err().map(|error| error.current_context().code()),

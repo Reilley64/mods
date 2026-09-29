@@ -36,12 +36,12 @@ pub struct Resources {
 }
 
 impl Resources {
-	pub fn load_settings(
+	pub async fn load_settings(
 		&self,
 		mode: SettingsLoadMode,
 		cancellation: &CancellationToken,
 	) -> Result<LoadedSettings, ErrorMarker> {
-		self.settings.load_command(mode, cancellation)
+		self.settings.load_command(mode, cancellation).await
 	}
 
 	pub fn system(root: EnvironmentRoot) -> Self {

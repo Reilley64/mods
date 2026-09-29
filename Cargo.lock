@@ -738,12 +738,11 @@ name = "infrastructure-game-platform"
 version = "0.1.0"
 dependencies = [
  "application",
- "cap-std",
  "domain",
- "libc",
  "pelite",
  "rootcause",
  "tempfile",
+ "tokio",
  "tokio-util",
  "windows",
  "winreg",
@@ -754,14 +753,13 @@ name = "infrastructure-settings"
 version = "0.1.0"
 dependencies = [
  "application",
- "cap-std",
  "config",
  "domain",
  "encoding_rs",
- "libc",
  "rootcause",
  "serde",
  "tempfile",
+ "tokio",
  "tokio-util",
  "toml",
  "windows",

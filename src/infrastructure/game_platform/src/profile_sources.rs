@@ -1,19 +1,17 @@
 use crate::GamePlatformAdapter;
 use crate::adapter::KnownFolderSource;
-use crate::fs_access;
 use crate::known_folders;
 use application::ErrorMarker;
 use application::ports::InitializationProfileSources;
 use application::ports::ProfileSource;
-use cap_std::fs::Dir;
 use domain::GameBinding;
 use rootcause::Result;
-use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::io::ErrorKind;
-use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio::fs::metadata;
+use tokio::fs::read;
 use tokio_util::sync::CancellationToken;
 
 impl GamePlatformAdapter {
@@ -36,7 +34,7 @@ impl GamePlatformAdapter {
 		))
 	}
 
-	pub(crate) fn load_profile_sources(
+	pub(crate) async fn load_profile_sources(
 		&self,
 		binding: &GameBinding,
 		cancellation: &CancellationToken,
@@ -54,8 +52,8 @@ impl GamePlatformAdapter {
 			#[cfg(test)]
 			KnownFolderSource::Fixed(folders) => folders,
 		};
-		let documents = open_optional_directory(&folders.documents, &["My Games", "FalloutNV"])?;
-		let local = open_optional_directory(&folders.local_app_data, &["FalloutNV"])?;
+		let documents = optional_directory(&folders.documents, &["My Games", "FalloutNV"]).await?;
+		let local = optional_directory(&folders.local_app_data, &["FalloutNV"]).await?;
 		let specifications = [
 			("Fallout.ini", documents.as_ref()),
 			("FalloutPrefs.ini", documents.as_ref()),
@@ -72,20 +70,20 @@ impl GamePlatformAdapter {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
 
-			let contents = directory
-				.map(|directory| read_optional_file(directory, Path::new(name)))
-				.transpose()?
-				.flatten();
+			let contents = match directory {
+				Some(directory) => read_optional_file(&directory.join(name)).await?,
+				None => None,
+			};
 			files.push(ProfileSource { name, contents });
 		}
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let (game, _) = fs_access::open_ambient_dir(binding.game_directory().as_path())
-			.context(ErrorMarker::game_install_invalid())?;
-		let fallout_default_ini = read_optional_file(&game, Path::new("Fallout_default.ini"))?
-			.ok_or_else(|| report!(ErrorMarker::game_install_invalid()))?;
+		let fallout_default_ini =
+			read_optional_file(&binding.game_directory().as_path().join("Fallout_default.ini"))
+				.await?
+				.ok_or_else(|| report!(ErrorMarker::game_install_invalid()))?;
 		Ok(InitializationProfileSources {
 			files,
 			fallout_default_ini,
@@ -93,35 +91,28 @@ impl GamePlatformAdapter {
 	}
 }
 
-fn open_optional_directory(base: &Path, components: &[&str]) -> Result<Option<Dir>, ErrorMarker> {
+async fn optional_directory(base: &Path, components: &[&str]) -> Result<Option<PathBuf>, ErrorMarker> {
 	if base.as_os_str().is_empty() {
 		return Ok(None);
 	}
-	let (mut directory, _) = match fs_access::open_ambient_dir(base) {
-		Ok(opened) => opened,
-		Err(error) if error.current_context().kind() == ErrorKind::NotFound => return Ok(None),
-		Err(error) => return Err(error.context(ErrorMarker::game_install_invalid())),
-	};
-	for component in components {
-		directory = match fs_access::open_dir(&directory, Path::new(component)) {
-			Ok(directory) => directory,
-			Err(error) if error.current_context().kind() == ErrorKind::NotFound => return Ok(None),
-			Err(error) => return Err(error.context(ErrorMarker::game_install_invalid())),
-		};
+
+	let directory = components
+		.iter()
+		.fold(base.to_path_buf(), |path, component| path.join(component));
+	match metadata(&directory).await {
+		Ok(metadata) if metadata.is_dir() => Ok(Some(directory)),
+		Ok(_) => Err(report!(ErrorMarker::game_install_invalid())),
+		Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+		Err(error) => Err(report!(error).context(ErrorMarker::game_install_invalid())),
 	}
-	Ok(Some(directory))
 }
 
-fn read_optional_file(directory: &Dir, path: &Path) -> Result<Option<Vec<u8>>, ErrorMarker> {
-	let mut file = match fs_access::open_regular(directory, path) {
-		Ok(file) => file,
-		Err(error) if error.current_context().kind() == ErrorKind::NotFound => return Ok(None),
-		Err(error) => return Err(error.context(ErrorMarker::game_install_invalid())),
-	};
-	let mut contents = Vec::new();
-	file.read_to_end(&mut contents)
-		.context(ErrorMarker::game_install_invalid())?;
-	Ok(Some(contents))
+async fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, ErrorMarker> {
+	match read(path).await {
+		Ok(contents) => Ok(Some(contents)),
+		Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+		Err(error) => Err(report!(error).context(ErrorMarker::game_install_invalid())),
+	}
 }
 
 #[cfg(test)]
@@ -136,10 +127,6 @@ mod tests {
 	use std::fs;
 	use std::io::Error as IoError;
 	use std::io::Result as IoResult;
-	#[cfg(unix)]
-	use std::os::unix::fs::symlink;
-	#[cfg(windows)]
-	use std::os::windows::fs::symlink_file as windows_symlink_file;
 	use std::path::Path;
 	use std::path::PathBuf;
 	use std::sync::Arc;
@@ -147,19 +134,20 @@ mod tests {
 	use tokio_util::sync::CancellationToken;
 
 	#[cfg(not(windows))]
-	#[test]
-	fn empty_non_windows_system_known_folders_mean_no_profile_sources() -> Result<()> {
+	#[tokio::test]
+	async fn empty_non_windows_system_known_folders_mean_no_profile_sources() -> Result<()> {
 		let (_fixture, game) = fixture()?;
-		let binding = steam::validate(&game)?;
-		let sources =
-			GamePlatformAdapter::system().load_profile_sources(&binding, &CancellationToken::new())?;
+		let binding = steam::validate(&game).await?;
+		let sources = GamePlatformAdapter::system()
+			.load_profile_sources(&binding, &CancellationToken::new())
+			.await?;
 		assert!(sources.files.iter().all(|source| source.contents.is_none()));
 		assert_eq!(sources.fallout_default_ini, b"[Archive]\n");
 		Ok(())
 	}
 
-	#[test]
-	fn profile_sources_are_read_from_known_folder_capabilities() -> Result<()> {
+	#[tokio::test]
+	async fn profile_sources_are_read_from_known_folder_capabilities() -> Result<()> {
 		let (game_fixture, game) = fixture()?;
 		let profile_fixture = TempDir::new()?;
 		let profile_root = fs::canonicalize(profile_fixture.path())?;
@@ -174,9 +162,10 @@ mod tests {
 		let profile_before = file_inventory(&profile_root)?;
 		let game_before = file_inventory(&game)?;
 
-		let binding = steam::validate(&game)?;
+		let binding = steam::validate(&game).await?;
 		let sources = adapter_with_profiles(documents, local_app_data)
-			.load_profile_sources(&binding, &CancellationToken::new())?;
+			.load_profile_sources(&binding, &CancellationToken::new())
+			.await?;
 		assert_eq!(sources.files[0].contents, Some(b"[Archive]\n".to_vec()));
 		assert_eq!(sources.files[5].contents, Some(b"Example.esp\r\n".to_vec()));
 		assert_eq!(sources.fallout_default_ini, b"[Archive]\n");
@@ -186,36 +175,16 @@ mod tests {
 		Ok(())
 	}
 
-	#[cfg(any(unix, windows))]
-	#[test]
-	fn symlinked_profile_source_is_rejected() -> Result<()> {
-		let (_game_fixture, game) = fixture()?;
-		let profile_fixture = TempDir::new()?;
-		let profile_root = fs::canonicalize(profile_fixture.path())?;
-		let documents = profile_root.join("Documents");
-		let local_app_data = profile_root.join("LocalAppData");
-		let fallout = documents.join("My Games/FalloutNV");
-		fs::create_dir_all(&fallout)?;
-		fs::create_dir_all(local_app_data.join("FalloutNV"))?;
-		let target = profile_root.join("outside.ini");
-		fs::write(&target, b"outside")?;
-		symlink_file(&target, &fallout.join("Fallout.ini"))?;
-		let binding = steam::validate(&game)?;
-		assert!(adapter_with_profiles(documents, local_app_data)
-			.load_profile_sources(&binding, &CancellationToken::new())
-			.is_err());
-		Ok(())
-	}
-
-	#[test]
-	fn cancelled_profile_load_stops_before_reads() -> Result<()> {
+	#[tokio::test]
+	async fn cancelled_profile_load_stops_before_reads() -> Result<()> {
 		let (_temp, game) = fixture()?;
-		let binding = steam::validate(&game)?;
+		let binding = steam::validate(&game).await?;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 
 		let result = adapter_with_profiles(PathBuf::new(), PathBuf::new())
-			.load_profile_sources(&binding, &cancellation);
+			.load_profile_sources(&binding, &cancellation)
+			.await;
 		assert_eq!(
 			result.as_ref().err().map(|error| error.current_context().code()),
 			Some(ErrorCode::OperationCancelled),
@@ -268,15 +237,5 @@ mod tests {
 				local_app_data,
 			}),
 		}
-	}
-
-	#[cfg(unix)]
-	fn symlink_file(source: &Path, destination: &Path) -> IoResult<()> {
-		symlink(source, destination)
-	}
-
-	#[cfg(windows)]
-	fn symlink_file(source: &Path, destination: &Path) -> IoResult<()> {
-		windows_symlink_file(source, destination)
 	}
 }

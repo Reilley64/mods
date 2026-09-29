@@ -160,6 +160,34 @@ The user approved reading `profile/modlist.txt` in Mod Organizer 2 order. The fi
 - Test fixtures with more than one mod now list the higher-priority mods first. They keep the same resulting priorities.
 - Gate findings on this diff: Use-case parameters (≤0.10) in `conflict_scan.rs`, `transactions.rs`, and `execution_preparation.rs`. Accepted as inapplicable: the changes are infrastructure parsers, a writer, intent validation, and test functions, and no signature changed apart from the `insert_disabled_mod` rename. A transient Phase spacing finding on `snapshot.rs` cleared after the parser was split into collection and priority-assignment blocks.
 
+## SafeDir removal and tokio::fs
+
+The user decided to drop `SafeDir` (cap-std) and use `tokio::fs` throughout. The decision is in [the exec discussion](../exec-performance-discussion.md#decision-drop-safedir-use-tokiofs-everywhere). The planned git rollback ticket covers recovery from bad writes. The change lands in two commits: first settings and game platform, then environment and its callers.
+
+### Part 1: settings and game platform
+
+- `infrastructure-settings` no longer uses cap-std or `libc`. `fs_access.rs` is deleted. Every settings read, layout check, and manifest write is async `tokio::fs`. `load_command`, readiness, and store are async, so the CLI dependency factory is now an async closure (`AsyncFnOnce`).
+- Settings manifest writes go directly to `mods.toml` after validation. The staged `temp/operation` copy, flushes, rename, and the compare-before-publish source check are gone, as is `SettingsAdapter::verify_source` (`settings_source_changed`). Pending work in `temp` still blocks a write. Export no longer compares settings source bytes or re-validates the binding before publication.
+- The layout check keeps entry names, entry types, required files, and content validation. It no longer walks trees to reject links, reparse points, or special files. Links are followed like ordinary entries.
+- `infrastructure-game-platform` no longer uses cap-std or `libc`. `fs_access/` and `separation.rs` are deleted. Steam validation checks directories and files by path, canonicalizes the game directory, and returns the canonical path instead of an open handle. It keeps the Steam structure, executable and default-INI checks, the reserved-archive check, and the appmanifest check. The same-directory identity check and the game/environment containment proof (an ancestry check) are removed. The validation ports no longer take the environment root.
+- Version reads and profile-source reads use `tokio::fs::read`. `read_file_version` now parses bytes.
+- Tests removed because they asserted dropped protections:
+  - settings: `failed_manifest_stage_blocks_a_later_store_and_preserves_all_artifacts`, `mutation_snapshot_refuses_changed_source_without_overwriting_it`, `nested_provider_symlink_is_rejected_as_unsafe`, `unsafe_disposable_entries_never_change_settings_behavior`, `manifest_symlink_is_rejected_without_reading_its_target`, `symlinked_root_ancestor_is_rejected`, and `root_directory_symlink_is_rejected`
+  - manifest writer: `failed_staged_validation_preserves_operation_state`, `edit_after_staging_is_not_overwritten`, `final_cancellation_preserves_the_validated_stage`, and `cleanup_failure_after_commit_returns_success_and_leaves_refusal_state`
+  - Steam validation: `rejects_symlinked_game_files_directories_and_manifest` and `rejects_symlinked_game_ancestor_and_directory`
+  - profile sources: `symlinked_profile_source_is_rejected`
+  - containment: the five separation tests
+- The remaining tests run on a Tokio test runtime. The manifest-writer replacement test now asserts only the direct write.
+
+Part 1 gate dispositions:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `settings/src/manifest_writer.rs`, `settings/src/layout.rs`, `game_platform/src/steam/libraries.rs` | Language-neutral review priorities | Accepted. Removing staging, flushes, source comparison, and link/reparse rejection is the user's explicit decision. Git rollback covers recovery. It is not a terseness trade. |
+| `settings/src/*`, `game_platform/src/*`, `dependencies/src/export_environment.rs`, `cli/src/runner.rs`, `cli/src/main.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure adapters, ports, and composition. Cancellation stays last where present. |
+| `dependencies/src/set_game_directory.rs` | Callable port invocation | Accepted as a false positive. It calls inherent adapter factory methods, not an application port. |
+| `settings/src/lib.rs`, `settings/src/layout.rs`, `game_platform/src/steam/validation.rs`, `game_platform/src/profile_sources.rs` | Phase spacing; Narrow custom implementations | Accepted. The checks are direct `tokio::fs` calls grouped per validation step. No general-purpose facility is added. |
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

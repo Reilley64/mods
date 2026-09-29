@@ -1,6 +1,4 @@
-use crate::fs_access;
 use application::ErrorMarker;
-use cap_std::fs::Dir;
 use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
 use encoding_rs::WINDOWS_1252;
@@ -8,9 +6,11 @@ use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::Path;
 use std::str;
+use tokio::fs::metadata;
+use tokio::fs::read;
+use tokio::fs::read_dir;
 use toml::Value;
 use toml::from_str;
 #[cfg(windows)]
@@ -42,40 +42,38 @@ const PROFILE_FILES: [&str; 8] = [
 	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
-pub(crate) fn validate(root: &Dir) -> Result<(), ErrorMarker> {
-	validate_root_entries(root)?;
-	let mods = fs_access::open_dir(root, Path::new("mods")).context(ErrorMarker::environment_root_unsafe())?;
-	let overwrite =
-		fs_access::open_dir(root, Path::new("overwrite")).context(ErrorMarker::environment_root_unsafe())?;
-	validate_safe_tree(&overwrite)?;
-	if entry_names(&overwrite)?.contains("meta.toml") {
-		validate_meta(&read_regular(&overwrite, "meta.toml")?)?;
+/// Validates the canonical Mod Environment layout for settings commands.
+///
+/// Only entry names, entry types, and file contents are checked. Links are
+/// followed like ordinary entries.
+pub(crate) async fn validate(root: &Path) -> Result<(), ErrorMarker> {
+	validate_root_entries(root).await?;
+	let overwrite = root.join("overwrite");
+	require_directory(&overwrite).await?;
+	if entry_names(&overwrite).await?.contains("meta.toml") {
+		validate_meta(&read_regular(&overwrite, "meta.toml").await?)?;
 	}
-	let profile = fs_access::open_dir(root, Path::new("profile")).context(ErrorMarker::environment_root_unsafe())?;
-	let listed_mods = validate_profile(&profile)?;
-	validate_mods(&mods, &listed_mods)
+
+	let listed_mods = validate_profile(&root.join("profile")).await?;
+	validate_mods(&root.join("mods"), &listed_mods).await
 }
 
-fn validate_root_entries(root: &Dir) -> Result<(), ErrorMarker> {
+async fn validate_root_entries(root: &Path) -> Result<(), ErrorMarker> {
 	let allowed = HashSet::from(["mods.toml", "mods", "profile", "overwrite", "cache", "temp", "logs"]);
-	for name in entry_names(root)? {
+	for name in entry_names(root).await? {
 		if !allowed.contains(name.as_str()) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		if name == "temp" {
-			let directory = open_real_dir(root, &name)?;
-			validate_safe_tree(&directory)?;
 		}
 	}
 	Ok(())
 }
 
-fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
+async fn validate_profile(profile: &Path) -> Result<HashSet<String>, ErrorMarker> {
 	let allowed = PROFILE_FILES
 		.into_iter()
 		.chain(["modlist.txt", "saves"])
 		.collect::<HashSet<_>>();
-	let names = entry_names(profile)?;
+	let names = entry_names(profile).await?;
 	if names.iter().any(|name| !allowed.contains(name.as_str()))
 		|| ["Fallout.ini", "plugins.txt", "loadorder.txt", "modlist.txt", "saves"]
 			.into_iter()
@@ -84,12 +82,11 @@ fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	for name in names.iter().filter(|name| name.as_str() != "saves") {
-		open_real_file(profile, name)?;
+		require_file(&profile.join(name)).await?;
 	}
-	let saves = open_real_dir(profile, "saves")?;
-	validate_safe_tree(&saves)?;
+	require_directory(&profile.join("saves")).await?;
 
-	let fallout = decode_ini(&read_regular(profile, "Fallout.ini")?)?;
+	let fallout = decode_ini(&read_regular(profile, "Fallout.ini").await?)?;
 	if !canonical_profile_routing_valid("Fallout.ini", &fallout) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
@@ -98,26 +95,26 @@ fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 			continue;
 		}
 
-		let text = decode_ini(&read_regular(profile, name)?)?;
+		let text = decode_ini(&read_regular(profile, name).await?)?;
 		if !canonical_profile_routing_valid(name, &text) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
-	validate_plugin_list(&read_regular(profile, "plugins.txt")?, false)?;
-	validate_plugin_list(&read_regular(profile, "loadorder.txt")?, true)?;
-	parse_modlist(&read_regular(profile, "modlist.txt")?)
+	validate_plugin_list(&read_regular(profile, "plugins.txt").await?, false)?;
+	validate_plugin_list(&read_regular(profile, "loadorder.txt").await?, true)?;
+	parse_modlist(&read_regular(profile, "modlist.txt").await?)
 }
 
-fn validate_mods(mods: &Dir, listed_mods: &HashSet<String>) -> Result<(), ErrorMarker> {
+async fn validate_mods(mods: &Path, listed_mods: &HashSet<String>) -> Result<(), ErrorMarker> {
 	let mut installed = HashSet::new();
-	for name in entry_names(mods)? {
+	for name in entry_names(mods).await? {
 		if !valid_windows_component(&name) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
-		let directory = open_real_dir(mods, &name)?;
-		validate_safe_tree(&directory)?;
-		if entry_names(&directory)?.contains("meta.toml") {
-			validate_meta(&read_regular(&directory, "meta.toml")?)?;
+		let directory = mods.join(&name);
+		require_directory(&directory).await?;
+		if entry_names(&directory).await?.contains("meta.toml") {
+			validate_meta(&read_regular(&directory, "meta.toml").await?)?;
 		}
 		if !installed.insert(case_fold_key(&name)) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
@@ -167,59 +164,32 @@ fn valid_windows_component(name: &str) -> bool {
 		&& !is_reserved_name(name)
 }
 
-fn validate_safe_tree(directory: &Dir) -> Result<(), ErrorMarker> {
-	for name in entry_names(directory)? {
-		let metadata = directory
-			.symlink_metadata(&name)
-			.map_err(|error| report!(error).context(ErrorMarker::environment_root_unsafe()))?;
-		if fs_access::is_reparse(&metadata) {
-			return Err(report!(ErrorMarker::environment_root_unsafe()));
-		}
-		if metadata.is_dir() {
-			let child = fs_access::open_dir(directory, Path::new(&name))
-				.context(ErrorMarker::environment_root_unsafe())?;
-			validate_safe_tree(&child)?;
-		} else if metadata.is_file() {
-			fs_access::open_regular(directory, Path::new(&name))
-				.context(ErrorMarker::environment_root_unsafe())?;
-		} else {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-	}
-	Ok(())
-}
-
-fn open_real_dir(parent: &Dir, name: &str) -> Result<Dir, ErrorMarker> {
-	let metadata = parent
-		.symlink_metadata(name)
-		.map_err(|error| report!(error).context(ErrorMarker::environment_invalid(None)))?;
-	if fs_access::is_reparse(&metadata) {
-		return Err(report!(ErrorMarker::environment_root_unsafe()));
-	}
+async fn require_directory(path: &Path) -> Result<(), ErrorMarker> {
+	let metadata = metadata(path).await.context(ErrorMarker::environment_invalid(None))?;
 	if !metadata.is_dir() {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
-	fs_access::open_dir(parent, Path::new(name)).context(ErrorMarker::environment_root_unsafe())
-}
-
-fn open_real_file(parent: &Dir, name: &str) -> Result<(), ErrorMarker> {
-	let metadata = parent
-		.symlink_metadata(name)
-		.map_err(|error| report!(error).context(ErrorMarker::environment_invalid(None)))?;
-	if fs_access::is_reparse(&metadata) {
-		return Err(report!(ErrorMarker::environment_root_unsafe()));
-	}
-	if !metadata.is_file() {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
-	fs_access::open_regular(parent, Path::new(name)).context(ErrorMarker::environment_root_unsafe())?;
 	Ok(())
 }
 
-fn entry_names(directory: &Dir) -> Result<HashSet<String>, ErrorMarker> {
+async fn require_file(path: &Path) -> Result<(), ErrorMarker> {
+	let metadata = metadata(path).await.context(ErrorMarker::environment_invalid(None))?;
+	if !metadata.is_file() {
+		return Err(report!(ErrorMarker::environment_invalid(None)));
+	}
+	Ok(())
+}
+
+async fn entry_names(directory: &Path) -> Result<HashSet<String>, ErrorMarker> {
 	let mut names = HashSet::new();
-	for entry in directory.entries().context(ErrorMarker::environment_invalid(None))? {
-		let entry = entry.context(ErrorMarker::environment_invalid(None))?;
+	let mut entries = read_dir(directory)
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
 		let name = entry
 			.file_name()
 			.into_string()
@@ -231,13 +201,10 @@ fn entry_names(directory: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 	Ok(names)
 }
 
-fn read_regular(directory: &Dir, name: &str) -> Result<Vec<u8>, ErrorMarker> {
-	let mut file =
-		fs_access::open_regular(directory, Path::new(name)).context(ErrorMarker::environment_invalid(None))?;
-	let mut bytes = Vec::new();
-	file.read_to_end(&mut bytes)
-		.context(ErrorMarker::environment_invalid(None))?;
-	Ok(bytes)
+async fn read_regular(directory: &Path, name: &str) -> Result<Vec<u8>, ErrorMarker> {
+	read(directory.join(name))
+		.await
+		.context(ErrorMarker::environment_invalid(None))
 }
 
 fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {

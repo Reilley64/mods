@@ -1,17 +1,20 @@
 use crate::steam;
 use application::ErrorMarker;
-use cap_std::fs::Dir;
 use domain::GameBinding;
 use rootcause::Result;
 use rootcause::report;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
-pub(super) fn reopen_bound_game(expected: &GameBinding, cancellation: &CancellationToken) -> Result<Dir, ErrorMarker> {
+pub(super) async fn reopen_bound_game(
+	expected: &GameBinding,
+	cancellation: &CancellationToken,
+) -> Result<PathBuf, ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let game = steam::reopen(expected)?;
+	let game = steam::reopen(expected).await?;
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
@@ -35,10 +38,10 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn reopening_ignores_a_changed_steam_build() -> Result<()> {
+	#[tokio::test]
+	async fn reopening_ignores_a_changed_steam_build() -> Result<()> {
 		let (_temp, game) = fixture()?;
-		let binding = steam::validate(&game)?;
+		let binding = steam::validate(&game).await?;
 		let steamapps = game
 			.parent()
 			.and_then(Path::parent)
@@ -53,14 +56,14 @@ mod tests {
 			),
 		)?;
 
-		let result = reopen_bound_game(&binding, &CancellationToken::new());
+		let result = reopen_bound_game(&binding, &CancellationToken::new()).await;
 
 		assert!(result.is_ok());
 		Ok(())
 	}
 
-	#[test]
-	fn cancellation_stops_before_reopening_the_game() -> Result<()> {
+	#[tokio::test]
+	async fn cancellation_stops_before_reopening_the_game() -> Result<()> {
 		let missing = if cfg!(windows) {
 			PathBuf::from(r"C:\game-that-must-not-be-opened")
 		} else {
@@ -71,7 +74,7 @@ mod tests {
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 
-		let result = reopen_bound_game(&binding, &cancellation);
+		let result = reopen_bound_game(&binding, &cancellation).await;
 
 		assert_eq!(
 			result.as_ref().err().map(|error| error.current_context().code()),

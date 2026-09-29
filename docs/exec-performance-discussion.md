@@ -329,6 +329,16 @@ Defaults unless the user says otherwise:
 - Measure the exec inventory walk before and after. `tokio::fs` sends every call through the blocking pool, and the user's setup has tens of thousands of files, so the walk may get slower.
 - Do this on `perf/streamline-exec-preparation` itself, as its own commit, after the current build is installed.
 
+### Queued: export shares ports with exec
+
+The user reports that exec feels much better, and asked to look next at export sharing ports with exec. This comes after the tokio::fs change. Starting point for the design discussion: export still uses the strict `prepare_execution` / `PreparedExecution` path, while exec uses `prepare_launch` / `PreparedLaunch` behind the `PrepareLaunchPlan` and `ProjectExecutionProfile` ports. Removing SafeDir takes away most of the integrity differences between the two paths. User direction: export and exec should behave the same up to their final step. Both run the same shared preparation through the same ports: binding, the settings load, `PrepareLaunchPlan` (winner resolution), and `ProjectExecutionProfile` (INIs, plugins, archive list). After that the two commands split:
+- exec stages the profile, creates the VFS, launches the program, supervises it, and preserves the INIs.
+- export copies every winner and every projected profile file into the output directory.
+
+Consequence: export drops its separate strict `prepare_execution` / `PreparedExecution` path and its extra integrity checks, and inherits exec's tolerances.
+
+Export-only concerns that stay after the split: the output must not be inside the environment, `--include-saves`, and `--dry-run`.
+
 ## Execution cost map and optimization candidates
 
 The detailed read-only trace below explains the installed revision. Source-derived costs are hypotheses, not measured Windows bottlenecks.

@@ -1,8 +1,6 @@
 use super::io::read_required_text;
 use super::manifest;
-use crate::fs_access;
 use application::ErrorMarker;
-use cap_std::fs::Dir;
 use domain::GameBinding;
 use domain::GameInstallationPath;
 use rootcause::Result;
@@ -11,23 +9,28 @@ use rootcause::report;
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::path::PathBuf;
+use tokio::fs::canonicalize;
+use tokio::fs::metadata;
+use tokio::fs::read_dir;
 
-pub(crate) fn validate(path: &Path) -> Result<GameBinding, ErrorMarker> {
-	Ok(open_validated(path)?.binding)
+pub(crate) async fn validate(path: &Path) -> Result<GameBinding, ErrorMarker> {
+	Ok(open_validated(path).await?.binding)
 }
 
-pub(crate) fn reopen(expected: &GameBinding) -> Result<Dir, ErrorMarker> {
-	let validated = open_validated(expected.game_directory().as_path())?;
+/// Validates the bound installation again and returns its canonical directory.
+pub(crate) async fn reopen(expected: &GameBinding) -> Result<PathBuf, ErrorMarker> {
+	let validated = open_validated(expected.game_directory().as_path()).await?;
 
 	Ok(validated.directory)
 }
 
 struct ValidatedGameInstallation {
 	binding: GameBinding,
-	directory: Dir,
+	directory: PathBuf,
 }
 
-fn open_validated(path: &Path) -> Result<ValidatedGameInstallation, ErrorMarker> {
+async fn open_validated(path: &Path) -> Result<ValidatedGameInstallation, ErrorMarker> {
 	let game_name = path
 		.file_name()
 		.ok_or_else(|| report!(ErrorMarker::game_install_invalid()))?;
@@ -44,37 +47,33 @@ fn open_validated(path: &Path) -> Result<ValidatedGameInstallation, ErrorMarker>
 		return Err(report!(ErrorMarker::game_install_invalid()));
 	}
 
-	let (steamapps, _) = fs_access::open_ambient_dir(steamapps_path).context(ErrorMarker::game_install_invalid())?;
-	let common_name = common_path
-		.file_name()
-		.ok_or_else(|| report!(ErrorMarker::game_install_invalid()))?;
-	let common =
-		fs_access::open_dir(&steamapps, Path::new(common_name)).context(ErrorMarker::game_install_invalid())?;
-	let game = fs_access::open_dir(&common, Path::new(game_name)).map_err(|error| {
-		let marker = if error.current_context().kind() == ErrorKind::NotFound {
+	require_directory(steamapps_path).await?;
+	require_directory(common_path).await?;
+	let game = metadata(path).await.map_err(|error| {
+		let marker = if error.kind() == ErrorKind::NotFound {
 			ErrorMarker::game_install_not_found()
 		} else {
 			ErrorMarker::game_install_invalid()
 		};
-		error.context(marker)
+		report!(error).context(marker)
 	})?;
-	let (named_game, canonical_game) =
-		fs_access::open_ambient_dir(path).context(ErrorMarker::game_install_invalid())?;
-	if !fs_access::same_dir(&game, &named_game).context(ErrorMarker::game_install_invalid())? {
+	if !game.is_dir() {
 		return Err(report!(ErrorMarker::game_install_invalid()));
 	}
+	let canonical_game = canonicalize(path).await.context(ErrorMarker::game_install_invalid())?;
 
-	fs_access::open_regular(&game, Path::new("FalloutNV.exe")).context(ErrorMarker::game_install_invalid())?;
-	fs_access::open_regular(&game, Path::new("Fallout_default.ini")).context(ErrorMarker::game_install_invalid())?;
-	let data = fs_access::open_dir(&game, Path::new("Data")).context(ErrorMarker::game_install_invalid())?;
-	for entry in data.entries().context(ErrorMarker::game_install_invalid())? {
-		let entry = entry.context(ErrorMarker::game_install_invalid())?;
+	require_file(&path.join("FalloutNV.exe")).await?;
+	require_file(&path.join("Fallout_default.ini")).await?;
+	let mut data = read_dir(path.join("Data"))
+		.await
+		.context(ErrorMarker::game_install_invalid())?;
+	while let Some(entry) = data.next_entry().await.context(ErrorMarker::game_install_invalid())? {
 		if os_eq_ignore_ascii_case(&entry.file_name(), "Fallout - Invalidation.bsa") {
 			return Err(report!(ErrorMarker::game_install_invalid()));
 		}
 	}
 
-	let text = read_required_text(&steamapps, Path::new("appmanifest_22380.acf"))?;
+	let text = read_required_text(&steamapps_path.join("appmanifest_22380.acf")).await?;
 	let (app_id, install_dir) = manifest::fields(&text).context(ErrorMarker::game_install_invalid())?;
 	if app_id != 22_380
 		|| !manifest::is_install_directory_name(&install_dir)
@@ -82,11 +81,28 @@ fn open_validated(path: &Path) -> Result<ValidatedGameInstallation, ErrorMarker>
 	{
 		return Err(report!(ErrorMarker::game_install_invalid()));
 	}
-	let game_path = GameInstallationPath::new(canonical_game).context(ErrorMarker::game_install_invalid())?;
+	let game_path =
+		GameInstallationPath::new(canonical_game.clone()).context(ErrorMarker::game_install_invalid())?;
 	Ok(ValidatedGameInstallation {
 		binding: GameBinding::new(game_path),
-		directory: game,
+		directory: canonical_game,
 	})
+}
+
+async fn require_directory(path: &Path) -> Result<(), ErrorMarker> {
+	let metadata = metadata(path).await.context(ErrorMarker::game_install_invalid())?;
+	if !metadata.is_dir() {
+		return Err(report!(ErrorMarker::game_install_invalid()));
+	}
+	Ok(())
+}
+
+async fn require_file(path: &Path) -> Result<(), ErrorMarker> {
+	let metadata = metadata(path).await.context(ErrorMarker::game_install_invalid())?;
+	if !metadata.is_file() {
+		return Err(report!(ErrorMarker::game_install_invalid()));
+	}
+	Ok(())
 }
 
 fn has_name(path: &Path, expected: &str) -> bool {
@@ -104,28 +120,21 @@ mod tests {
 	use rootcause::Result;
 	use std::fs;
 	use std::io::Error as IoError;
-	use std::io::Result as IoResult;
-	#[cfg(unix)]
-	use std::os::unix::fs::symlink;
-	#[cfg(windows)]
-	use std::os::windows::fs::symlink_dir as windows_symlink_dir;
-	#[cfg(windows)]
-	use std::os::windows::fs::symlink_file as windows_symlink_file;
 	use std::path::Path;
 	use std::path::PathBuf;
 	use tempfile::TempDir;
 
-	#[test]
-	fn validates_structured_manifest_and_executable() -> Result<()> {
+	#[tokio::test]
+	async fn validates_structured_manifest_and_executable() -> Result<()> {
 		let (_temp, game) = game_fixture(42)?;
-		assert_eq!(validate(&game)?.game_directory().as_path(), game);
+		assert_eq!(validate(&game).await?.game_directory().as_path(), game);
 		Ok(())
 	}
 
-	#[test]
-	fn ignores_build_id_and_rejects_reserved_base_archive_and_stray_manifest_keys() -> Result<()> {
+	#[tokio::test]
+	async fn ignores_build_id_and_rejects_reserved_base_archive_and_stray_manifest_keys() -> Result<()> {
 		let (_temp, game) = game_fixture(0)?;
-		assert!(validate(&game).is_ok());
+		assert!(validate(&game).await.is_ok());
 		let manifest = game
 			.parent()
 			.and_then(Path::parent)
@@ -135,73 +144,25 @@ mod tests {
 			&manifest,
 			"\"appid\" \"22380\"\n\"buildid\" \"42\"\n\"installdir\" \"Fallout New Vegas\"",
 		)?;
-		assert!(validate(&game).is_err());
+		assert!(validate(&game).await.is_err());
 		fs::write(
 			&manifest,
 			"\"AppState\" { \"appid\" \"22380\" \"buildid\" \"42\" \"installdir\" \"Fallout New Vegas\" }",
 		)?;
 		fs::write(game.join("Data/Fallout - Invalidation.bsa"), b"conflict")?;
-		assert!(validate(&game).is_err());
+		assert!(validate(&game).await.is_err());
 		Ok(())
 	}
 
-	#[test]
-	fn rejects_manifest_outside_a_steamapps_parent() -> Result<()> {
+	#[tokio::test]
+	async fn rejects_manifest_outside_a_steamapps_parent() -> Result<()> {
 		let (temp, game) = game_fixture(42)?;
 		let arbitrary = temp.path().join("arbitrary");
 		fs::rename(temp.path().join("steamapps"), &arbitrary)?;
 		let relocated = arbitrary
 			.join("common")
 			.join(game.file_name().ok_or_else(|| IoError::other("missing game name"))?);
-		assert!(validate(&relocated).is_err());
-		Ok(())
-	}
-
-	#[cfg(any(unix, windows))]
-	#[test]
-	fn rejects_symlinked_game_files_directories_and_manifest() -> Result<()> {
-		let (_temp, game) = game_fixture(42)?;
-		let executable = game.join("FalloutNV.exe");
-		let executable_target = game.join("FalloutNV.real.exe");
-		fs::rename(&executable, &executable_target)?;
-		symlink_file(&executable_target, &executable)?;
-		assert!(validate(&game).is_err());
-
-		let (_temp, game) = game_fixture(42)?;
-		let data = game.join("Data");
-		let data_target = game.join("RealData");
-		fs::rename(&data, &data_target)?;
-		symlink_dir(&data_target, &data)?;
-		assert!(validate(&game).is_err());
-
-		let (_temp, game) = game_fixture(42)?;
-		let manifest = game
-			.parent()
-			.and_then(Path::parent)
-			.ok_or_else(|| IoError::other("missing steamapps"))?
-			.join("appmanifest_22380.acf");
-		let manifest_target = manifest.with_extension("real.acf");
-		fs::rename(&manifest, &manifest_target)?;
-		symlink_file(&manifest_target, &manifest)?;
-		assert!(validate(&game).is_err());
-		Ok(())
-	}
-
-	#[cfg(any(unix, windows))]
-	#[test]
-	fn rejects_symlinked_game_ancestor_and_directory() -> Result<()> {
-		let (fixture, game) = game_fixture(42)?;
-		let holder = TempDir::new()?;
-		let linked_ancestor = holder.path().join("linked-library");
-		symlink_dir(fixture.path(), &linked_ancestor)?;
-		assert!(validate(&linked_ancestor.join("steamapps/common/Fallout New Vegas")).is_err());
-		drop(game);
-
-		let (_temp, game) = game_fixture(42)?;
-		let target = game.with_file_name("Real Fallout New Vegas");
-		fs::rename(&game, &target)?;
-		symlink_dir(&target, &game)?;
-		assert!(validate(&game).is_err());
+		assert!(validate(&relocated).await.is_err());
 		Ok(())
 	}
 
@@ -224,25 +185,5 @@ mod tests {
 			),
 		)?;
 		Ok((temp, game))
-	}
-
-	#[cfg(unix)]
-	fn symlink_file(source: &Path, destination: &Path) -> IoResult<()> {
-		symlink(source, destination)
-	}
-
-	#[cfg(windows)]
-	fn symlink_file(source: &Path, destination: &Path) -> IoResult<()> {
-		windows_symlink_file(source, destination)
-	}
-
-	#[cfg(unix)]
-	fn symlink_dir(source: &Path, destination: &Path) -> IoResult<()> {
-		symlink(source, destination)
-	}
-
-	#[cfg(windows)]
-	fn symlink_dir(source: &Path, destination: &Path) -> IoResult<()> {
-		windows_symlink_dir(source, destination)
 	}
 }

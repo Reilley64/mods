@@ -29,7 +29,7 @@ const BUILD_COMMIT: &str = env!("BUILD_COMMIT");
 #[tokio::main]
 async fn main() {
 	let arguments: Vec<OsString> = args_os().collect();
-	let result = runner::run_current_process(arguments, |root, startup, command| {
+	let result = runner::run_current_process(arguments, async |root, startup, command| {
 		let resources = Resources::system(root.clone());
 		if matches!(command, Command::Init { .. }) {
 			return Ok(runner::CommandDependencies::Initialize(
@@ -46,7 +46,7 @@ async fn main() {
 			Command::Exec(_) | Command::Export(_) | Command::Install(_) => SettingsLoadMode::Execution,
 			_ => SettingsLoadMode::Mutation,
 		};
-		let loaded = resources.load_settings(mode, &operation::ctrl_c_token())?;
+		let loaded = resources.load_settings(mode, &operation::ctrl_c_token()).await?;
 		let binding = loaded.resolved.effective_binding.clone();
 		let install_archive = resources.install_archive_dependencies(binding.clone());
 		let execution_force_cancellation = CancellationToken::new();
@@ -63,7 +63,7 @@ async fn main() {
 			get_setting: resources.get_setting_dependencies(),
 			set_game_directory: resources.set_game_directory_dependencies(loaded.clone()),
 			install_archive,
-			export_environment: resources.export_environment_dependencies(loaded, binding.clone()),
+			export_environment: resources.export_environment_dependencies(binding.clone()),
 			list_effective_conflicts: resources.list_effective_conflicts_dependencies(binding.clone()),
 			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(binding.clone()),
 			explain_path: resources.explain_path_dependencies(binding.clone()),

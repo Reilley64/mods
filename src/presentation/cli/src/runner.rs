@@ -103,7 +103,7 @@ pub(crate) async fn execute(
 	cli: Cli,
 	startup_directory: PathBuf,
 	local_app_data: Option<PathBuf>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot, &Command) -> RootResult<CommandDependencies, ErrorMarker>,
+	dependency_factory: impl AsyncFnOnce(&EnvironmentRoot, &Command) -> RootResult<CommandDependencies, ErrorMarker>,
 ) -> RunOutcome {
 	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
 		Ok(root) => root,
@@ -148,7 +148,7 @@ pub(crate) async fn execute(
 		};
 
 	let session_id = session.as_ref().map(DiagnosticSession::id);
-	let dependencies = match dependency_factory(&root, &cli.command) {
+	let dependencies = match dependency_factory(&root, &cli.command).await {
 		Ok(dependencies) => dependencies,
 		Err(report) => {
 			let mut stderr = error::application_error(&report);
@@ -567,7 +567,7 @@ pub(crate) async fn run(
 	dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<Dependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let cli = parse_from(arguments)?;
-	Ok(execute(cli, startup_directory, local_app_data, |root, _| {
+	Ok(execute(cli, startup_directory, local_app_data, async move |root, _| {
 		dependency_factory(root)
 			.map(|dependencies| CommandDependencies::Existing(Box::new(dependencies)))
 			.map_err(|marker| report!(marker))
@@ -577,16 +577,22 @@ pub(crate) async fn run(
 
 pub(crate) async fn run_current_process(
 	arguments: impl IntoIterator<Item = OsString>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot, &Path, &Command) -> RootResult<CommandDependencies, ErrorMarker>,
+	dependency_factory: impl AsyncFnOnce(
+		&EnvironmentRoot,
+		&Path,
+		&Command,
+	) -> RootResult<CommandDependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
 	let factory_startup = startup_directory.clone();
 	let cli = parse_from(arguments)?;
-	Ok(execute(cli, startup_directory, local_app_data, |root, command| {
-		dependency_factory(root, &factory_startup, command)
-	})
-	.await)
+	Ok(
+		execute(cli, startup_directory, local_app_data, async move |root, command| {
+			dependency_factory(root, &factory_startup, command).await
+		})
+		.await,
+	)
 }
 
 #[cfg(test)]
@@ -876,7 +882,7 @@ mod tests {
 	async fn help_and_version_never_construct_or_load_command_resources() {
 		for argument in ["--help", "--version"] {
 			let called = AtomicBool::new(false);
-			let result = super::run_current_process(arguments!["mods", argument], |_, _, _| {
+			let result = super::run_current_process(arguments!["mods", argument], async |_, _, _| {
 				called.store(true, Ordering::SeqCst);
 				Err(report!(ErrorMarker::environment_invalid(None)))
 			})
@@ -895,7 +901,7 @@ mod tests {
 			cli,
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_, command| {
+			async move |_, command| {
 				assert!(matches!(command, super::Command::Init { .. }));
 				Ok(super::CommandDependencies::Initialize(
 					dependencies.initialize_environment,
@@ -923,11 +929,13 @@ mod tests {
 				"--",
 				"tool.exe"
 			])?;
-			let result =
-				super::execute(cli, temp.path().to_owned(), Some(temp.path().to_owned()), |_, _| {
-					Err(report!(std::io::Error::other("private source path")).context(code))
-				})
-				.await;
+			let result = super::execute(
+				cli,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				async |_, _| Err(report!(std::io::Error::other("private source path")).context(code)),
+			)
+			.await;
 			assert_eq!(result.status, expected);
 			assert!(!result.stderr.contains("private source path"));
 		}
