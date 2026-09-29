@@ -409,7 +409,8 @@ INI derivation keeps two purposes. The exported folder is a standalone layout, s
 
 - Export may create missing `meta.toml` for enabled mods (question 1: yes).
 - Shared ports are neutral, composable, and reusable (question 3). CODING_STYLE now has the "Reusable capability ports" rule (main `4cdc383`), so the neutral names above are required.
-- Questions 2 and 4 are waiting for the user's answer.
+- Export prints the same plugin warnings as exec (question 2).
+- Export stages its files in `temp` and then copies them from `temp` into the output directory (question 4). Export reuses the shared staging step instead of deriving INIs in its own path. The stage port takes the profile purpose, so exported INIs keep the standalone form: `Fallout.ini` rewritten and `SLocalSavePath=Saves\\`. The writer checks why the invalidation BSA order differs between the two purposes, and makes it the same unless there is a reason not to.
 
 #### Questions for the user
 
