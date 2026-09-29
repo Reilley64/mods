@@ -5,9 +5,7 @@ use crate::profile::is_activatable_plugin_name;
 use crate::profile::validate_execution_profile;
 use crate::profile::validate_profile_files;
 use crate::profile_activation::ProfileActivation;
-use crate::publication::OPERATION_DIRECTORY;
 use crate::validate_bsa_file;
-use application::ErrorCode;
 use application::ErrorMarker;
 use application::installation::CandidateDecision;
 use application::installation::EffectiveResult;
@@ -76,23 +74,7 @@ pub(crate) async fn load(
 	access: InstallationStateAccess,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(
-		root_path,
-		binding,
-		SnapshotLoad::Installation(access),
-		false,
-		None,
-		cancellation,
-	)
-	.await
-}
-
-pub(crate) async fn load_during_publication(
-	root_path: &Path,
-	binding: &GameBinding,
-	cancellation: &CancellationToken,
-) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, binding, SnapshotLoad::Publication, false, None, cancellation).await
+	load_inner(root_path, binding, access, false, None, cancellation).await
 }
 
 pub(crate) async fn load_execution(
@@ -104,7 +86,7 @@ pub(crate) async fn load_execution(
 	load_inner(
 		root_path,
 		binding,
-		SnapshotLoad::Installation(InstallationStateAccess::Mutation),
+		InstallationStateAccess::Mutation,
 		true,
 		owned_spool,
 		cancellation,
@@ -112,16 +94,10 @@ pub(crate) async fn load_execution(
 	.await
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapshotLoad {
-	Installation(InstallationStateAccess),
-	Publication,
-}
-
 async fn load_inner(
 	root_path: &Path,
 	binding: &GameBinding,
-	load: SnapshotLoad,
+	access: InstallationStateAccess,
 	execution: bool,
 	owned_spool: Option<&TempDir>,
 	cancellation: &CancellationToken,
@@ -144,50 +120,25 @@ async fn load_inner(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	let temp_exists = temp_exists.context(ErrorMarker::environment_invalid(None))?;
-	if load == SnapshotLoad::Publication && !temp_exists {
-		return Err(report!(ErrorMarker::manual_cleanup_required()));
-	}
-	if temp_exists {
-		if let SnapshotLoad::Installation(access) = load {
-			let mut entries = read_dir(&temp).await.context(ErrorMarker::environment_invalid(None))?;
-			while let Some(entry) = entries
-				.next_entry()
-				.await
-				.context(ErrorMarker::environment_invalid(None))?
-			{
-				if owned_spool.is_some_and(|spool| {
-					spool.path().parent() == Some(temp.as_path())
-						&& spool.path().file_name() == Some(entry.file_name().as_os_str())
-				}) {
-					continue;
-				}
-
-				let marker = match access {
-					InstallationStateAccess::Preview => ErrorMarker::environment_invalid(None),
-					InstallationStateAccess::Mutation => ErrorMarker::manual_cleanup_required(),
-				};
-				return Err(report!(marker));
-			}
-		} else {
-			let validation = validate_exact_entries(&temp, &[OPERATION_DIRECTORY], cancellation).await;
-			if let Err(error) = validation {
-				if error.current_context().code() == ErrorCode::OperationCancelled {
-					return Err(error);
-				}
-				return Err(error.context(ErrorMarker::manual_cleanup_required()));
-			}
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
+	if temp_exists.context(ErrorMarker::environment_invalid(None))? {
+		let mut entries = read_dir(&temp).await.context(ErrorMarker::environment_invalid(None))?;
+		while let Some(entry) = entries
+			.next_entry()
+			.await
+			.context(ErrorMarker::environment_invalid(None))?
+		{
+			if owned_spool.is_some_and(|spool| {
+				spool.path().parent() == Some(temp.as_path())
+					&& spool.path().file_name() == Some(entry.file_name().as_os_str())
+			}) {
+				continue;
 			}
 
-			let current_operation_exists = try_exists(temp.join(OPERATION_DIRECTORY)).await;
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			if !current_operation_exists.context(ErrorMarker::manual_cleanup_required())? {
-				return Err(report!(ErrorMarker::manual_cleanup_required()));
-			}
+			let marker = match access {
+				InstallationStateAccess::Preview => ErrorMarker::environment_invalid(None),
+				InstallationStateAccess::Mutation => ErrorMarker::manual_cleanup_required(),
+			};
+			return Err(report!(marker));
 		}
 	}
 
@@ -1248,7 +1199,6 @@ fn add_proposed_provider(
 pub(crate) async fn visible_plugins(
 	root: &Path,
 	binding: &GameBinding,
-	replacement: Option<(&ModName, &Path)>,
 	cancellation: &CancellationToken,
 ) -> Result<HashMap<String, String>, ErrorMarker> {
 	if cancellation.is_cancelled() {
@@ -1269,13 +1219,7 @@ pub(crate) async fn visible_plugins(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		if let Some((name, staged)) = replacement
-			&& *name == installed.name
-		{
-			add_root_plugins(staged, &mut visible, cancellation).await?;
-		} else {
-			add_root_plugins(&mods.join(installed.name.as_str()), &mut visible, cancellation).await?;
-		}
+		add_root_plugins(&mods.join(installed.name.as_str()), &mut visible, cancellation).await?;
 	}
 	add_root_plugins(&root.join("overwrite"), &mut visible, cancellation).await?;
 	Ok(visible)
@@ -1719,7 +1663,6 @@ mod tests {
 		let visible = visible_plugins(
 			&safe_root,
 			&initialization_plan(&fixture.path().join("game")).game_binding,
-			None,
 			&CancellationToken::new(),
 		)
 		.await

@@ -1,18 +1,16 @@
-use crate::files::validate_exact_entries;
-use crate::profile::stage_plugin_maintenance;
-use crate::publication::OPERATION_DIRECTORY;
-use crate::publication::cleanup_best_effort;
+use crate::profile::update_plugin_lists;
 use crate::snapshot::insert_disabled_mod;
-use crate::snapshot::load_during_publication;
+use crate::snapshot::load;
 use crate::snapshot::validate_prospective_namespace;
 use crate::snapshot::validate_staged_provider;
-use application::ErrorCode;
+use crate::snapshot::visible_plugins;
 use application::ErrorMarker;
 use application::installation::ApprovedInstallation;
 use application::installation::CandidateDecision;
 use application::installation::InstallMode;
 use application::installation::InstallPlan;
 use application::installation::InstallWarning;
+use application::ports::InstallationStateAccess;
 use domain::ArchiveIdentity;
 use domain::DataRelativePath;
 use domain::GameBinding;
@@ -22,25 +20,28 @@ use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::fs::create_dir;
-use tokio::fs::metadata;
 use tokio::fs::read;
 use tokio::fs::read_dir;
-use tokio::fs::rename;
-use tokio::fs::try_exists;
+use tokio::fs::remove_dir_all;
 use tokio::fs::write;
 use tokio_util::sync::CancellationToken;
 use toml::to_string_pretty;
 
+/// Writes one approved installation directly into `mods/<name>` and the profile.
+///
+/// There is no staging and no rollback. A failure or cancellation after `begin` can leave a partial
+/// mod directory or profile edit; the planned git rollback covers recovery.
 pub(crate) struct InstallationTransaction {
 	root_path: PathBuf,
 	binding: GameBinding,
 	approved: ApprovedInstallation,
+	plugins_before: Option<HashMap<String, String>>,
 	remaining: HashSet<String>,
 	in_progress: HashSet<String>,
 	poisoned: bool,
@@ -58,44 +59,27 @@ impl InstallationTransaction {
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
-		match metadata(root_path).await {
-			Ok(metadata) if metadata.is_dir() => {}
-			Ok(_) => return Err(report!(ErrorMarker::environment_root_unsafe())),
-			Err(error) if error.kind() == io::ErrorKind::NotFound => {
-				return Err(report!(error).context(ErrorMarker::environment_not_initialized()));
-			}
-			Err(error) => return Err(report!(error).context(ErrorMarker::environment_root_unsafe())),
-		}
+		let current = load(root_path, binding, InstallationStateAccess::Mutation, cancellation).await?;
+		validate_intent(&current.installed_mods, &approved.plan)?;
 
-		let operation = root_path.join("temp").join(OPERATION_DIRECTORY);
-		match create_dir(&operation).await {
-			Ok(()) => {}
-			Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-				return Err(report!(error).context(ErrorMarker::manual_cleanup_required()));
-			}
-			Err(error) if error.kind() == io::ErrorKind::NotFound => {
-				return Err(report!(error).context(ErrorMarker::environment_invalid(None)));
-			}
-			Err(error) => {
-				return Err(report!(error)
-					.context(ErrorMarker::transaction_failure().with_phase("publication")));
-			}
-		}
+		let plugins_before = if approved.plan.replacement && approved.plan.projected_state.enabled {
+			Some(visible_plugins(root_path, binding, cancellation).await?)
+		} else {
+			None
+		};
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
-		let current = load_during_publication(root_path, binding, cancellation).await?;
-		validate_intent(&current.installed_mods, &approved.plan)?;
-
-		for directory in ["stage", "stage/mod", "stage/profile", "backup"] {
-			create_dir(operation.join(directory))
+		let mod_directory = root_path.join("mods").join(approved.plan.mod_name.as_str());
+		if approved.plan.replacement {
+			remove_dir_all(&mod_directory)
 				.await
 				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		}
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
-		}
+		create_dir(&mod_directory)
+			.await
+			.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 
 		let remaining = approved
 			.plan
@@ -108,6 +92,7 @@ impl InstallationTransaction {
 			root_path: root_path.to_owned(),
 			binding: binding.clone(),
 			approved,
+			plugins_before,
 			remaining,
 			in_progress: HashSet::new(),
 			poisoned: false,
@@ -115,8 +100,8 @@ impl InstallationTransaction {
 		})
 	}
 
-	fn stage(&self) -> PathBuf {
-		self.root_path.join("temp").join(OPERATION_DIRECTORY).join("stage")
+	fn mod_directory(&self) -> PathBuf {
+		self.root_path.join("mods").join(self.approved.plan.mod_name.as_str())
 	}
 
 	pub(crate) async fn begin_file(
@@ -137,7 +122,7 @@ impl InstallationTransaction {
 			return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 		}
 
-		let result = create_staged_file(&self.stage().join("mod"), path, cancellation).await;
+		let result = create_mod_file(&self.mod_directory(), path, cancellation).await;
 		let Ok(file) = result else {
 			self.poisoned = true;
 			return result;
@@ -163,42 +148,14 @@ impl InstallationTransaction {
 		}
 		self.finished = true;
 
-		let stage = self.stage();
-		let staged_mod = stage.join("mod");
-		write_metadata(&staged_mod, &self.approved).await?;
-		validate_staged_provider(&staged_mod, cancellation).await?;
+		let mod_directory = self.mod_directory();
+		write_metadata(&mod_directory, &self.approved).await?;
 
-		let staged_profile = stage.join("profile");
-		let profile = self.root_path.join("profile");
-		let mut profile_files = Vec::new();
-		if !self.approved.plan.replacement {
-			let current_modlist = read(profile.join("modlist.txt"))
-				.await
-				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
-			let intended_modlist = insert_disabled_mod(&current_modlist, &self.approved.plan.mod_name)?;
-			write(staged_profile.join("modlist.txt"), &intended_modlist)
-				.await
-				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
-			profile_files.push("modlist.txt".to_owned());
-		}
-		if self.approved.plan.replacement && self.approved.plan.projected_state.enabled {
-			profile_files = stage_plugin_maintenance(
-				&self.root_path,
-				&self.binding,
-				&staged_mod,
-				&staged_profile,
-				&self.approved.plan.mod_name,
-				profile_files,
-				cancellation,
-			)
-			.await?;
-		}
-		profile_files.sort_by_key(|name| usize::from(name == "modlist.txt"));
-
+		validate_staged_provider(&mod_directory, cancellation).await?;
 		validate_prospective_namespace(
 			&self.root_path,
 			&self.binding,
-			&staged_mod,
+			&mod_directory,
 			&self.approved.plan,
 			cancellation,
 		)
@@ -207,27 +164,28 @@ impl InstallationTransaction {
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
-		let mut published_profile_files = Vec::with_capacity(profile_files.len());
-		for name in profile_files {
-			let expected = read(staged_profile.join(&name))
+		let modlist = self.root_path.join("profile/modlist.txt");
+		if !self.approved.plan.replacement {
+			let current_modlist = read(&modlist)
 				.await
 				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
-			published_profile_files.push(PublishedProfileFile { name, expected });
+			let intended_modlist = insert_disabled_mod(&current_modlist, &self.approved.plan.mod_name)?;
+			write(&modlist, &intended_modlist)
+				.await
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 		}
 
-		publish_installation(
-			&self.root_path,
-			&self.binding,
-			&self.approved.plan,
-			&published_profile_files,
-			cancellation,
-		)
-		.await
+		if let Some(before) = &self.plugins_before {
+			update_plugin_lists(&self.root_path, &self.binding, before, cancellation).await?;
+		}
+
+		// The last write is done, so caller cancellation is no longer observed.
+		finish_committed_installation(&self.root_path, &self.binding, &self.approved.plan).await
 	}
 }
 
-async fn create_staged_file(
-	staged_mod: &Path,
+async fn create_mod_file(
+	mod_directory: &Path,
 	path: &DataRelativePath,
 	cancellation: &CancellationToken,
 ) -> Result<File, ErrorMarker> {
@@ -235,7 +193,8 @@ async fn create_staged_file(
 	let (file_name, parents) = components
 		.split_last()
 		.ok_or_else(|| report!(ErrorMarker::transaction_failure().with_phase("publication")))?;
-	let mut directory = staged_mod.to_path_buf();
+
+	let mut directory = mod_directory.to_path_buf();
 	for component in parents {
 		directory = open_or_create_exact(&directory, component, cancellation).await?;
 	}
@@ -416,122 +375,29 @@ fn warning_name(warning: &InstallWarning) -> &'static str {
 	}
 }
 
-#[derive(Debug)]
-struct PublishedProfileFile {
-	name: String,
-	expected: Vec<u8>,
-}
-
-async fn publish_installation(
-	root: &Path,
-	binding: &GameBinding,
-	plan: &InstallPlan,
-	profile_files: &[PublishedProfileFile],
-	cancellation: &CancellationToken,
-) -> Result<(), ErrorMarker> {
-	let temp = root.join("temp");
-	let operation = temp.join(OPERATION_DIRECTORY);
-	let stage = operation.join("stage");
-	let staged_profile = stage.join("profile");
-	let backup = operation.join("backup");
-	let mods = root.join("mods");
-	let profile = root.join("profile");
-	let mod_name = plan.mod_name.as_str();
-
-	let backup_validation = validate_exact_entries(&backup, &[], cancellation).await;
-	if let Err(error) = backup_validation {
-		if error.current_context().code() == ErrorCode::OperationCancelled {
-			return Err(error);
-		}
-		return Err(error.context(publication_failed()));
-	}
-
-	let canonical_mod_exists = try_exists(mods.join(mod_name)).await.context(publication_failed())?;
-	if canonical_mod_exists != plan.replacement {
-		return Err(report!(publication_failed()));
-	}
-	for file in profile_files {
-		if !metadata(profile.join(&file.name))
-			.await
-			.context(publication_failed())?
-			.is_file()
-		{
-			return Err(report!(publication_failed()));
-		}
-	}
-	if cancellation.is_cancelled() {
-		return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
-	}
-
-	if plan.replacement {
-		rename(mods.join(mod_name), backup.join("mod"))
-			.await
-			.context(publication_failed())?;
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
-		}
-	}
-
-	rename(stage.join("mod"), mods.join(mod_name))
-		.await
-		.context(publication_failed())?;
-
-	for file in profile_files {
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
-		}
-
-		rename(profile.join(&file.name), backup.join(&file.name))
-			.await
-			.context(publication_failed())?;
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
-		}
-
-		rename(staged_profile.join(&file.name), profile.join(&file.name))
-			.await
-			.context(publication_failed())?;
-	}
-
-	// The mod is final when no profile file changed. Otherwise, the last changed profile
-	// file is final. Caller cancellation is intentionally not observed after either rename.
-	finish_committed_installation(root, binding, plan, profile_files).await
-}
-
+/// Checks that the written installation reads back with the planned priority and state.
 async fn finish_committed_installation(
 	root: &Path,
 	binding: &GameBinding,
 	plan: &InstallPlan,
-	profile_files: &[PublishedProfileFile],
 ) -> Result<(), ErrorMarker> {
-	let validation_cancellation = CancellationToken::new();
-	let snapshot = load_during_publication(root, binding, &validation_cancellation)
-		.await
-		.context(publication_failed())?;
-	let installed = snapshot
-		.installed_mods
+	let snapshot = load(
+		root,
+		binding,
+		InstallationStateAccess::Mutation,
+		&CancellationToken::new(),
+	)
+	.await
+	.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+	snapshot.installed_mods
 		.iter()
 		.find(|installed| installed.name == plan.mod_name)
-		.ok_or_else(|| report!(publication_failed()))?;
-	if installed.priority != plan.projected_state.priority || installed.enabled != plan.projected_state.enabled {
-		return Err(report!(publication_failed()));
-	}
-
-	for file in profile_files {
-		let canonical = read(root.join("profile").join(&file.name))
-			.await
-			.context(publication_failed())?;
-		if canonical != file.expected {
-			return Err(report!(publication_failed()));
-		}
-	}
-
-	cleanup_best_effort(&root.join("temp"), OPERATION_DIRECTORY).await;
-	Ok(())
-}
-
-fn publication_failed() -> ErrorMarker {
-	ErrorMarker::environment_publication_failed(Some("publication"))
+		.filter(|installed| {
+			installed.priority == plan.projected_state.priority
+				&& installed.enabled == plan.projected_state.enabled
+		})
+		.map(drop)
+		.ok_or_else(|| report!(ErrorMarker::transaction_failure().with_phase("publication")))
 }
 
 #[cfg(test)]
@@ -541,10 +407,7 @@ fn publication_failed() -> ErrorMarker {
 )]
 mod tests {
 	use super::InstallationTransaction;
-	use super::PublishedProfileFile;
-	use super::finish_committed_installation;
 	use super::open_or_create_exact;
-	use super::publish_installation;
 	use crate::EnvironmentAdapter;
 	use crate::profile::PROFILE_FILES;
 	use application::ErrorCode;
@@ -561,7 +424,6 @@ mod tests {
 	use application::installation::WinnerReason;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
-	use application::ports::InstallationStateAccess;
 	use application::ports::ProfileSource;
 	use domain::ArchiveIdentity;
 	use domain::DataRelativePath;
@@ -731,27 +593,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn pending_operation_refuses_a_later_mutation() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		fs::create_dir(root.as_path().join("temp/operation")).expect("pending operation must be created");
-		let archive = parent.path().join("blocked.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-
-		assert_manual_cleanup_required(
-			InstallationTransaction::begin(
-				root.as_path(),
-				&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-					.game_binding,
-				approved_installation(&archive, "Blocked", false, false, 0, "blocked.txt"),
-				&CancellationToken::new(),
-			)
-			.await,
-		);
-	}
-
-	#[tokio::test]
-	async fn failed_intent_validation_preserves_the_reserved_operation() {
+	async fn failed_intent_validation_writes_nothing() {
 		let parent = temp_dir();
 		let root = initialized_environment(&parent).await;
 		let archive = parent.path().join("invalid-plan.zip");
@@ -767,14 +609,14 @@ mod tests {
 		)
 		.await
 		.err()
-		.expect("invalid intent must fail after reserving publication");
+		.expect("invalid intent must fail");
 
 		assert_eq!(error.current_context().code(), ErrorCode::TransactionFailure);
-		assert!(root.as_path().join("temp/operation").is_dir());
+		assert!(!root.as_path().join("mods/Invalid").exists());
 	}
 
 	#[tokio::test]
-	async fn prior_temp_debris_is_rejected_after_reservation() {
+	async fn prior_temp_debris_is_rejected() {
 		let parent = temp_dir();
 		let root = initialized_environment(&parent).await;
 		let archive = parent.path().join("blocked.zip");
@@ -793,7 +635,6 @@ mod tests {
 			.await,
 		);
 		assert_eq!(fs::read(debris).expect("prior debris must remain"), b"keep");
-		assert!(root.as_path().join("temp/operation").is_dir());
 	}
 
 	#[tokio::test]
@@ -808,32 +649,6 @@ mod tests {
 		assert!(open_or_create_exact(&directory, "ÉΣ", &CancellationToken::new())
 			.await
 			.is_err());
-	}
-
-	#[tokio::test]
-	async fn staging_does_not_mutate_canonical_state() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		let archive = parent.path().join("staged.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			approved_installation(&archive, "Staged", false, false, 0, "file.txt"),
-			&cancellation,
-		)
-		.await
-		.expect("transaction must begin");
-		stage_file(&mut transaction, "file.txt", b"staged", &cancellation).await;
-
-		assert!(!root.as_path().join("mods/Staged").exists());
-		assert_eq!(
-			fs::read(root.as_path().join("profile/modlist.txt")).expect("modlist must read"),
-			b""
-		);
-		assert!(root.as_path().join("temp/operation/stage/mod/file.txt").is_file());
 	}
 
 	#[tokio::test]
@@ -1004,231 +819,6 @@ mod tests {
 		assert_eq!(
 			fs::read(root.as_path().join("profile/loadorder.txt")).expect("load order must read"),
 			b"# order\r\nNew.ESP\r\n"
-		);
-	}
-
-	#[tokio::test]
-	async fn unexpected_backup_entry_is_a_publication_failure_with_its_original_cause() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		let archive = parent.path().join("new.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-		let approved = approved_installation(&archive, "New", false, false, 0, "file.txt");
-		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			approved.clone(),
-			&cancellation,
-		)
-		.await
-		.expect("installation must begin");
-		stage_file(&mut transaction, "file.txt", b"contents", &cancellation).await;
-		fs::write(root.as_path().join("temp/operation/backup/unexpected"), b"keep")
-			.expect("unexpected backup entry must exist");
-
-		let error = publish_installation(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			&approved.plan,
-			&[],
-			&cancellation,
-		)
-		.await
-		.expect_err("unexpected backup entry must stop publication");
-
-		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentPublicationFailed);
-		assert!(error.iter_reports().any(|report| {
-			report.downcast_current_context::<ErrorMarker>()
-				.is_some_and(|marker| marker.code() == ErrorCode::EnvironmentInvalid)
-		}));
-		assert!(root.as_path().join("temp/operation/backup/unexpected").is_file());
-	}
-
-	#[tokio::test]
-	async fn backup_validation_keeps_cancellation_as_the_top_marker() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		let archive = parent.path().join("new.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-		let approved = approved_installation(&archive, "New", false, false, 0, "file.txt");
-		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			approved.clone(),
-			&cancellation,
-		)
-		.await
-		.expect("installation must begin");
-		stage_file(&mut transaction, "file.txt", b"contents", &cancellation).await;
-		cancellation.cancel();
-
-		let error = publish_installation(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			&approved.plan,
-			&[],
-			&cancellation,
-		)
-		.await
-		.expect_err("cancelled backup validation must stop publication");
-
-		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
-		assert!(root.as_path().join("temp/operation").is_dir());
-	}
-
-	#[tokio::test]
-	async fn a_mid_publication_failure_keeps_stage_and_backups_then_refuses_later_mutation() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		let archive = parent.path().join("replacement.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-		install(
-			&root,
-			approved_installation(&archive, "Replace", false, false, 0, "Old.txt"),
-			"Old.txt",
-			b"old",
-		)
-		.await;
-		let approved = approved_installation(&archive, "Replace", true, false, 0, "New.txt");
-		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			approved.clone(),
-			&cancellation,
-		)
-		.await
-		.expect("replacement must begin");
-		stage_file(&mut transaction, "New.txt", b"new", &cancellation).await;
-		let missing_profile = [PublishedProfileFile {
-			name: "modlist.txt".to_owned(),
-			expected: b"-Replace\r\n".to_vec(),
-		}];
-
-		let result = publish_installation(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			&approved.plan,
-			&missing_profile,
-			&cancellation,
-		)
-		.await;
-		assert!(result.is_err());
-		assert!(root.as_path().join("mods/Replace/New.txt").is_file());
-		assert!(root.as_path().join("temp/operation/backup/mod/Old.txt").is_file());
-		assert!(root.as_path().join("temp/operation/backup/modlist.txt").is_file());
-		assert_manual_cleanup_required(
-			EnvironmentAdapter
-				.load_installation_state(
-					&root,
-					&initialization_plan(
-						&root.as_path().parent().expect("fixture parent").join("game"),
-					)
-					.game_binding,
-					InstallationStateAccess::Mutation,
-					&CancellationToken::new(),
-				)
-				.await,
-		);
-	}
-
-	#[tokio::test]
-	async fn cancellation_preserves_staging_without_canonical_mutation() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		let archive = parent.path().join("cancelled.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			approved_installation(&archive, "Cancelled", false, false, 0, "file.txt"),
-			&cancellation,
-		)
-		.await
-		.expect("transaction must begin");
-		stage_file(&mut transaction, "file.txt", b"contents", &cancellation).await;
-		cancellation.cancel();
-
-		let error = transaction
-			.finish(&cancellation)
-			.await
-			.expect_err("cancellation must stop publication");
-		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
-		assert!(root.as_path().join("temp/operation/stage/mod/file.txt").is_file());
-		assert!(!root.as_path().join("mods/Cancelled").exists());
-	}
-
-	#[tokio::test]
-	async fn postcommit_cancellation_is_not_observed() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		let archive = parent.path().join("committed.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-		let approved = approved_installation(&archive, "Committed", false, false, 0, "file.txt");
-		install(&root, approved.clone(), "file.txt", b"contents").await;
-		fs::create_dir(root.as_path().join("temp/operation")).expect("postcommit operation must exist");
-		let cancellation = CancellationToken::new();
-		cancellation.cancel();
-		assert!(cancellation.is_cancelled());
-
-		finish_committed_installation(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			&approved.plan,
-			&[],
-		)
-		.await
-		.expect("postcommit work must not observe caller cancellation");
-		assert!(fs::read_dir(root.as_path().join("temp"))
-			.expect("temp must read")
-			.next()
-			.is_none());
-	}
-
-	#[tokio::test]
-	async fn cleanup_failure_after_validation_still_returns_success() {
-		let parent = temp_dir();
-		let root = initialized_environment(&parent).await;
-		let archive = parent.path().join("committed.zip");
-		fs::write(&archive, b"archive").expect("archive fixture must exist");
-		let approved = approved_installation(&archive, "Committed", false, false, 0, "file.txt");
-		install(&root, approved.clone(), "file.txt", b"contents").await;
-		fs::write(root.as_path().join("temp/operation"), b"cleanup obstruction")
-			.expect("cleanup obstruction must exist");
-
-		finish_committed_installation(
-			root.as_path(),
-			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
-				.game_binding,
-			&approved.plan,
-			&[],
-		)
-		.await
-		.expect("validated commit must succeed despite cleanup failure");
-		assert!(root.as_path().join("temp/operation").is_file());
-		assert_manual_cleanup_required(
-			EnvironmentAdapter
-				.load_installation_state(
-					&root,
-					&initialization_plan(
-						&root.as_path().parent().expect("fixture parent").join("game"),
-					)
-					.game_binding,
-					InstallationStateAccess::Mutation,
-					&CancellationToken::new(),
-				)
-				.await,
 		);
 	}
 }

@@ -7,7 +7,6 @@ use application::ports::InitializationProfileSources;
 use application::ports::ProfileFileDisposition;
 use application::ports::ProfileFileRecord;
 use domain::GameBinding;
-use domain::ModName;
 use domain::ProfileIniPurpose;
 use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
@@ -38,7 +37,7 @@ pub(crate) const PROFILE_FILES: [&str; 8] = [
 	"Plugins.fnvviewsettings",
 ];
 
-pub(crate) async fn stage_profile(
+pub(crate) async fn write_initial_profile(
 	profile: &Path,
 	sources: &InitializationProfileSources,
 	cancellation: &CancellationToken,
@@ -258,21 +257,20 @@ async fn validate_saves(directory: &Path, cancellation: &CancellationToken) -> R
 	Ok(())
 }
 
-pub(crate) async fn stage_plugin_maintenance(
+/// Updates `plugins.txt` and `loadorder.txt` in place after an enabled replacement.
+///
+/// `before` holds the plugins that were visible before the old mod files were removed.
+pub(crate) async fn update_plugin_lists(
 	root: &Path,
 	binding: &GameBinding,
-	staged_mod: &Path,
-	staged_profile: &Path,
-	mod_name: &ModName,
-	mut profile_files: Vec<String>,
+	before: &HashMap<String, String>,
 	cancellation: &CancellationToken,
-) -> Result<Vec<String>, ErrorMarker> {
+) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let before = visible_plugins(root, binding, None, cancellation).await?;
-	let after = visible_plugins(root, binding, Some((mod_name, staged_mod)), cancellation).await?;
+	let after = visible_plugins(root, binding, cancellation).await?;
 	let unavailable = before
 		.keys()
 		.filter(|name| !after.contains_key(*name))
@@ -291,10 +289,9 @@ pub(crate) async fn stage_plugin_maintenance(
 	let plugins_output = remove_unavailable_lines(&plugins_text, &unavailable);
 	if plugins_output != plugins_text {
 		let bytes = encode_active_code_page(&plugins_output)?;
-		write(staged_profile.join("plugins.txt"), &bytes)
+		write(profile.join("plugins.txt"), &bytes)
 			.await
 			.context(ErrorMarker::transaction_failure())?;
-		profile_files.push("plugins.txt".to_owned());
 	}
 
 	let loadorder_bytes = read_regular_file(&profile, "loadorder.txt", cancellation).await?;
@@ -317,12 +314,11 @@ pub(crate) async fn stage_plugin_maintenance(
 		loadorder_output.push_str("\r\n");
 	}
 	if loadorder_output != loadorder_text {
-		write(staged_profile.join("loadorder.txt"), loadorder_output.as_bytes())
+		write(profile.join("loadorder.txt"), loadorder_output.as_bytes())
 			.await
 			.context(ErrorMarker::transaction_failure())?;
-		profile_files.push("loadorder.txt".to_owned());
 	}
-	Ok(profile_files)
+	Ok(())
 }
 
 fn remove_unavailable_lines(text: &str, unavailable: &HashSet<String>) -> String {
@@ -476,8 +472,8 @@ mod tests {
 	use super::PROFILE_FILES;
 	use super::is_activatable_plugin_name;
 	use super::remove_unavailable_lines;
-	use super::stage_profile;
 	use super::validate_saves;
+	use super::write_initial_profile;
 	use application::ErrorCode;
 	use application::ports::InitializationProfileSources;
 	use application::ports::ProfileFileDisposition;
@@ -551,7 +547,7 @@ mod tests {
 			fallout_default_ini: b"[Archive]\r\nsArchiveList=Default.bsa\r\n".to_vec(),
 		};
 		let profile = temp.path().canonicalize()?;
-		let records = stage_profile(&profile, &sources, &CancellationToken::new())
+		let records = write_initial_profile(&profile, &sources, &CancellationToken::new())
 			.await
 			.map_err(|_| "stage failed")?;
 		assert_eq!(records[0].disposition, ProfileFileDisposition::SeededFromGame);
@@ -641,7 +637,7 @@ mod tests {
 		};
 		let original_sources = sources.clone();
 		let profile = temp.path().canonicalize()?;
-		stage_profile(&profile, &sources, &CancellationToken::new())
+		write_initial_profile(&profile, &sources, &CancellationToken::new())
 			.await
 			.map_err(|_| "stage failed")?;
 
@@ -693,7 +689,7 @@ mod tests {
 			.to_vec(),
 		};
 		let profile = temp.path().canonicalize()?;
-		stage_profile(&profile, &sources, &CancellationToken::new())
+		write_initial_profile(&profile, &sources, &CancellationToken::new())
 			.await
 			.map_err(|_| "stage failed")?;
 
@@ -743,7 +739,7 @@ mod tests {
 				fallout_default_ini: b"[Archive]\r\n".to_vec(),
 			};
 			let profile = temp.path().canonicalize()?;
-			assert!(stage_profile(&profile, &sources, &CancellationToken::new())
+			assert!(write_initial_profile(&profile, &sources, &CancellationToken::new())
 				.await
 				.is_err());
 		}

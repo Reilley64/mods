@@ -53,7 +53,7 @@ mods --environment 'D:\Mod Environments\Mojave' config get game-dir
 
 A **Game Binding** records the Game Installation's Steam identity, path, and observed build. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.
 
-Initialization creates the manifest and Profile State. Use a nonexistent or empty root; existing `logs` and an empty `temp` are permitted when safe. An existing `mods.toml`, other contents, unsafe paths, or unfinished temporary state can block initialization. It is not a repair/reset command.
+Initialization creates the manifest and Profile State. Use a nonexistent or empty root; existing `logs` and an empty `temp` are permitted when safe. An existing `mods.toml`, other contents, unsafe paths, or unfinished temporary state can block initialization. It is not a repair/reset command. Initialization writes the layout directly into the root and writes `mods.toml` last. A failed initialization can leave a partial layout, which blocks a retry until it is removed.
 
 `MODS_GAME_DIR` is the only supported `MODS_*` setting override. Use an absolute Game Installation path. Unknown, duplicate, empty, or non-Unicode overrides fail validation; even an explicit `--game-install` does not bypass malformed override validation. Use [configuration](commands.md) to inspect effective versus stored values before changing a binding.
 

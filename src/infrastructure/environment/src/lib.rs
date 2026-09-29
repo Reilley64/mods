@@ -11,7 +11,6 @@ mod hashing;
 mod manifest;
 mod profile;
 mod profile_activation;
-mod publication;
 mod snapshot;
 mod transactions;
 
@@ -20,10 +19,8 @@ use crate::conflict_scan::scan as scan_conflicts;
 use crate::files::validate_exact_entries;
 use crate::manifest::validate_manifest_file;
 use crate::manifest::write_manifest;
-use crate::profile::stage_profile;
 use crate::profile::validate_profile;
-use crate::publication::OPERATION_DIRECTORY;
-use crate::publication::publish_initialization;
+use crate::profile::write_initial_profile;
 use crate::snapshot::assess_installation as assess_installation_snapshot;
 use crate::snapshot::load as load_snapshot;
 use crate::transactions::InstallationTransaction;
@@ -112,26 +109,11 @@ impl EnvironmentAdapter {
 			.context(ErrorMarker::environment_root_unsafe())?;
 		assess_open(root_dir, cancellation).await?;
 
-		let temp = root_dir.join("temp");
-		create_dir_all(&temp)
+		create_dir_all(root_dir.join("temp"))
 			.await
 			.context(ErrorMarker::environment_root_unsafe())?;
-
-		let operation = temp.join(OPERATION_DIRECTORY);
-		match create_dir(&operation).await {
-			Ok(()) => {}
-			Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-				return Err(report!(error).context(ErrorMarker::manual_cleanup_required()));
-			}
-			Err(error) => return Err(report!(error).context(ErrorMarker::environment_root_unsafe())),
-		}
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
-		let stage = operation.join("stage");
-		for directory in ["", "mods", "profile", "overwrite", "cache"] {
-			create_dir(stage.join(directory))
+		for directory in ["mods", "profile", "overwrite", "cache"] {
+			create_dir(root_dir.join(directory))
 				.await
 				.context(ErrorMarker::environment_root_unsafe())?;
 		}
@@ -139,12 +121,16 @@ impl EnvironmentAdapter {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let records = stage_profile(&stage.join("profile"), &plan.profile_sources, cancellation).await?;
-		write(stage.join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes())
+		let records =
+			write_initial_profile(&root_dir.join("profile"), &plan.profile_sources, cancellation).await?;
+		write(root_dir.join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes())
 			.await
 			.context(ErrorMarker::environment_root_unsafe())?;
-		write_manifest(&stage, &plan).await?;
-		validate_stage(&stage, LayoutLocation::Stage, cancellation)
+
+		// `mods.toml` goes last, so a partial layout is never mistaken for an initialized environment.
+		write_manifest(root_dir, &plan).await?;
+
+		validate_layout(root_dir, &CancellationToken::new())
 			.await
 			.map_err(|report| {
 				if report.current_context().code() == ErrorCode::EnvironmentInvalid {
@@ -153,11 +139,6 @@ impl EnvironmentAdapter {
 					report
 				}
 			})?;
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
-		publish_initialization(root_dir, &temp, cancellation).await?;
 		Ok(records)
 	}
 
@@ -401,12 +382,6 @@ impl EnvironmentAdapter {
 	}
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LayoutLocation {
-	Stage,
-	Root,
-}
-
 async fn assess_open(
 	root: &Path,
 	cancellation: &CancellationToken,
@@ -478,21 +453,21 @@ fn empty_bsa_bytes() -> Vec<u8> {
 	bytes
 }
 
-pub(crate) async fn validate_stage(
-	directory: &Path,
-	location: LayoutLocation,
-	cancellation: &CancellationToken,
-) -> Result<(), ErrorMarker> {
-	let allowed = if location == LayoutLocation::Stage {
-		&["mods", "profile", "overwrite", "cache", "mods.toml"][..]
-	} else {
-		&["mods", "profile", "overwrite", "cache", "mods.toml", "temp", "logs"][..]
-	};
-	validate_exact_entries(directory, allowed, cancellation).await?;
+/// Checks a freshly initialized environment: the exact layout, empty providers, the profile, the manifest,
+/// and the generated archive.
+async fn validate_layout(directory: &Path, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+	validate_exact_entries(
+		directory,
+		&["mods", "profile", "overwrite", "cache", "mods.toml", "temp", "logs"],
+		cancellation,
+	)
+	.await?;
 	validate_exact_entries(&directory.join("mods"), &[], cancellation).await?;
 	validate_exact_entries(&directory.join("overwrite"), &[], cancellation).await?;
 	validate_exact_entries(&directory.join("cache"), &["Fallout - Invalidation.bsa"], cancellation).await?;
+
 	validate_profile(&directory.join("profile"), cancellation).await?;
+
 	let manifest = validate_manifest_file(directory, cancellation).await?;
 	if !metadata(&manifest.game_dir)
 		.await
@@ -518,6 +493,7 @@ async fn validate_bsa_file(cache: &Path, cancellation: &CancellationToken) -> Re
 	}
 	Ok(())
 }
+
 #[cfg(test)]
 #[expect(
 	clippy::expect_used,
@@ -525,12 +501,7 @@ async fn validate_bsa_file(cache: &Path, cancellation: &CancellationToken) -> Re
 )]
 mod tests {
 	use super::EnvironmentAdapter;
-	use super::empty_bsa_bytes;
-	use crate::manifest::write_manifest;
 	use crate::profile::PROFILE_FILES;
-	use crate::profile::stage_profile;
-	use crate::publication::OPERATION_DIRECTORY;
-	use crate::publication::publish_initialization;
 	use application::ErrorCode;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
@@ -542,7 +513,6 @@ mod tests {
 	use std::env::current_dir;
 	use std::fs;
 	use std::path::Path;
-	use std::path::PathBuf;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
@@ -571,31 +541,6 @@ mod tests {
 		}
 	}
 
-	async fn staged_initialization(parent: &TempDir) -> (EnvironmentRoot, PathBuf, PathBuf, InitializationPlan) {
-		let root = environment_root(&parent.path().join("environment"));
-		let game = parent.path().join("game");
-		fs::create_dir(&game).expect("game dir must be created");
-		let plan = plan(&game);
-		let root_dir = root.as_path().to_path_buf();
-		let temp = root_dir.join("temp");
-		let stage = temp.join(OPERATION_DIRECTORY).join("stage");
-		for directory in ["mods", "profile", "overwrite", "cache"] {
-			fs::create_dir_all(stage.join(directory)).expect("stage directory must be created");
-		}
-		stage_profile(&stage.join("profile"), &plan.profile_sources, &CancellationToken::new())
-			.await
-			.expect("profile must stage");
-		fs::write(stage.join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes()).expect("BSA must stage");
-		write_manifest(&stage, &plan).await.expect("manifest must stage");
-		(root, root_dir, temp, plan)
-	}
-
-	fn assert_no_canonical_state(root: &Path) {
-		for name in ["mods", "profile", "overwrite", "cache", "mods.toml"] {
-			assert!(!root.join(name).exists(), "unexpected canonical artifact {name}");
-		}
-	}
-
 	#[tokio::test]
 	async fn pending_operation_takes_precedence_and_refuses_initialization() {
 		let parent = temp_dir();
@@ -609,15 +554,6 @@ mod tests {
 			.await
 			.expect_err("pending work must require cleanup");
 		assert_eq!(error.current_context().code(), ErrorCode::ManualCleanupRequired);
-	}
-
-	#[tokio::test]
-	async fn staged_initialization_has_no_canonical_mutation() {
-		let parent = temp_dir();
-		let (root, _, _, _) = staged_initialization(&parent).await;
-
-		assert_no_canonical_state(root.as_path());
-		assert!(root.as_path().join("temp/operation/stage/mods.toml").is_file());
 	}
 
 	#[tokio::test]
@@ -666,61 +602,5 @@ mod tests {
 			fs::read(&log).expect("log must remain readable"),
 			b"existing diagnostic fixture\n"
 		);
-	}
-
-	#[tokio::test]
-	async fn publication_failure_before_cache_keeps_manifest_staged_and_refuses_initialization() {
-		let parent = temp_dir();
-		let (root, root_dir, temp, _) = staged_initialization(&parent).await;
-		fs::write(root.as_path().join("cache"), b"publication obstruction")
-			.expect("cache obstruction must write");
-		let stage = root.as_path().join("temp/operation/stage");
-		let manifest_before = fs::read(stage.join("mods.toml")).expect("staged manifest must read");
-
-		let error = publish_initialization(&root_dir, &temp, &CancellationToken::new())
-			.await
-			.expect_err("cache obstruction must stop publication");
-
-		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentPublicationFailed);
-		for name in ["mods", "profile", "overwrite"] {
-			assert!(root.as_path().join(name).is_dir());
-			assert!(!stage.join(name).exists());
-		}
-		assert!(stage.join("cache/Fallout - Invalidation.bsa").is_file());
-		assert!(!root.as_path().join("mods.toml").exists());
-		assert_eq!(
-			fs::read(stage.join("mods.toml")).expect("manifest must remain staged"),
-			manifest_before
-		);
-		assert_eq!(
-			fs::read(root.as_path().join("cache")).expect("obstruction must remain"),
-			b"publication obstruction"
-		);
-
-		let error = EnvironmentAdapter
-			.assess(&root, &CancellationToken::new())
-			.await
-			.expect_err("partial publication must require manual cleanup");
-		assert_eq!(error.current_context().code(), ErrorCode::ManualCleanupRequired);
-		assert_eq!(
-			fs::read(stage.join("mods.toml")).expect("refusal must preserve manifest"),
-			manifest_before
-		);
-	}
-
-	#[tokio::test]
-	async fn cancellation_before_publication_preserves_the_complete_stage() {
-		let parent = temp_dir();
-		let (root, root_dir, temp, _) = staged_initialization(&parent).await;
-		let cancellation = CancellationToken::new();
-		cancellation.cancel();
-
-		let error = publish_initialization(&root_dir, &temp, &cancellation)
-			.await
-			.expect_err("cancellation must stop publication");
-
-		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
-		assert_no_canonical_state(root.as_path());
-		assert!(root.as_path().join("temp/operation/stage/mods.toml").is_file());
 	}
 }

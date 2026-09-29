@@ -9,7 +9,6 @@ pub enum ErrorCode {
 	EnvironmentRootUnsafe,
 	EnvironmentSchemaUnsupported,
 	EnvironmentInvalid,
-	EnvironmentPublicationFailed,
 	ManualCleanupRequired,
 	GameInstallNotFound,
 	GameInstallInvalid,
@@ -48,7 +47,6 @@ impl ErrorCode {
 			Self::EnvironmentRootUnsafe => "environment_root_unsafe",
 			Self::EnvironmentSchemaUnsupported => "environment_schema_unsupported",
 			Self::EnvironmentInvalid => "environment_invalid",
-			Self::EnvironmentPublicationFailed => "environment_publication_failed",
 			Self::ManualCleanupRequired => "manual_cleanup_required",
 			Self::GameInstallNotFound => "game_install_not_found",
 			Self::GameInstallInvalid => "game_install_invalid",
@@ -130,12 +128,6 @@ impl ErrorMarker {
 		Self {
 			phase,
 			..Self::simple(ErrorCode::EnvironmentInvalid)
-		}
-	}
-	pub fn environment_publication_failed(phase: Option<&'static str>) -> Self {
-		Self {
-			phase,
-			..Self::simple(ErrorCode::EnvironmentPublicationFailed)
 		}
 	}
 	pub fn manual_cleanup_required() -> Self {
@@ -320,7 +312,6 @@ impl ErrorMarker {
 			ErrorCode::EnvironmentRootUnsafe => "environment folder is unsafe",
 			ErrorCode::EnvironmentSchemaUnsupported => "environment schema is unsupported",
 			ErrorCode::EnvironmentInvalid => "environment is invalid",
-			ErrorCode::EnvironmentPublicationFailed => "environment publication failed",
 			ErrorCode::ManualCleanupRequired => "unfinished operation requires manual cleanup",
 			ErrorCode::GameInstallNotFound => "game installation was not found",
 			ErrorCode::GameInstallInvalid => "game installation is invalid",
