@@ -43,6 +43,7 @@ export function formatReview(report: GateReviewReport, dispositionsFile: string)
 		...(accepted > 0 ? [acceptedLine] : []),
 		...problems,
 		`Before handing back, address every finding: either fix the code and recheck it, or explicitly accept the finding by recording its file, rule, reason, and sha256 in ${dispositionsFile} (including why a suspected false positive does not apply).`,
+		`${dispositionsFile} is local and git-ignored; never commit it. Also list each accepted finding (file, rule, and reason) in the PR description.`,
 		`The sha256 is the lowercase hex SHA-256 of the file's current content; a disposition accepts nothing after the file changes. Record or refresh it with \`bun ${STAMP_SCRIPT}\` only after you re-review the file.`,
 		"Do not silently ignore findings or describe accepted findings as a clean review. In enforce mode, a disposition recorded in the dispositions file clears the block for that finding; acceptance only in your handoff does not clear the block. The existing /coding-style-gate override <reason> mechanism still applies.",
 	].join("\n");

@@ -14,13 +14,13 @@ Likely violations are appended to the tool result, so the agent sees them before
 
 Enforcement queues a task-bounded number of correction turns. If the code still fails, the extension asks the user to intervene instead of starting an infinite loop. A user can accept the exact current policy-and-code fingerprint with `/coding-style-gate override <reason>`. Any relevant code, policy, model, or threshold change invalidates that override.
 
-Before handing back, the receiving agent must fix and recheck each finding, or explicitly accept it with the file, rule, reason, and content hash. Accepted findings are not a clean review. A disposition recorded in the dispositions file clears the enforce-mode block for its finding; acceptance only in a handoff does not. The existing override mechanism is unchanged. Review failures must be resolved and rechecked, or reported as blocked; they are not findings that can be accepted. This guidance is included in the receiving session's tool results and final-review messages. Advisory mode does not force another agent turn.
+Before handing back, the receiving agent must fix and recheck each finding, or explicitly accept it with the file, rule, reason, and content hash in the local dispositions file, and list it in the PR description. Accepted findings are not a clean review. A disposition recorded in the dispositions file clears the enforce-mode block for its finding; acceptance only in a handoff does not. The existing override mechanism is unchanged. Review failures must be resolved and rechecked, or reported as blocked; they are not findings that can be accepted. This guidance is included in the receiving session's tool results and final-review messages. Advisory mode does not force another agent turn.
 
 The extension does not revert files. `rustfmt`, rustc, Clippy, and repository tests remain deterministic checks outside Jev.
 
 ## Documented dispositions
 
-The dispositions file (default `.prime/agent/coding-style-dispositions.json`) records accepted findings:
+The dispositions file (default `.prime/agent/coding-style-dispositions.json`) records accepted findings. It is local to the worktree: this repository git-ignores it, and it is never committed. When a PR relies on dispositions, list each accepted finding in the PR description with its file, rule, and reason. The gate reads the file directly from disk, so an untracked or git-ignored file works.
 
 ```json
 {

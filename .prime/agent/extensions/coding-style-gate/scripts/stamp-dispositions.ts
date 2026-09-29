@@ -13,7 +13,12 @@ const { values } = parseArgs({ options: { file: { type: "string" } } });
 const root = (await Bun.$`git rev-parse --show-toplevel`.text()).trim();
 const dispositionsPath = values.file === undefined ? join(root, (await loadConfig(root)).dispositionsFile) : resolve(values.file);
 
-const document = JSON.parse(await readFile(dispositionsPath, "utf8")) as { dispositions?: unknown };
+const text = await readFile(dispositionsPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+	if (error.code !== "ENOENT") throw error;
+	console.log(`No dispositions file at ${dispositionsPath}; nothing to stamp.`);
+	process.exit(0);
+});
+const document = JSON.parse(text) as { dispositions?: unknown };
 if (!Array.isArray(document?.dispositions)) {
 	throw new Error(`${dispositionsPath} must contain a "dispositions" array`);
 }

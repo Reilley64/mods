@@ -201,6 +201,8 @@ describe("Prime coding style gate", () => {
 				expect(guidance).toContain("fix the code and recheck");
 				expect(guidance).toContain("explicitly accept the finding");
 				expect(guidance).toContain("file, rule, reason, and sha256");
+				expect(guidance).toContain("git-ignored; never commit it");
+				expect(guidance).toContain("in the PR description");
 				expect(guidance).toContain("does not clear the block");
 			}
 			await worker.handlers.get("agent_end")?.({ messages: [] }, context);
@@ -1040,6 +1042,20 @@ describe("documented dispositions", () => {
 			expect(project.prime.entries.at(-1)?.data).toMatchObject({ findingCount: 2, acceptedFindingCount: 0 });
 		});
 	}
+
+	test("accepts findings from a git-ignored dispositions file", async () => {
+		const project = await enforcedProject(
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash }] }),
+		);
+		await writeFile(join(project.root, ".gitignore"), ".prime/agent/coding-style-dispositions.json\n");
+		const ignored = await Bun.$`git check-ignore .prime/agent/coding-style-dispositions.json`.cwd(project.root).nothrow().quiet();
+
+		const toolText = await editBoth(project);
+
+		expect(ignored.exitCode).toBe(0);
+		expect(toolText).toContain("1 finding was accepted by documented dispositions");
+		expect(toolText).not.toContain("dispositions problem");
+	});
 
 	test("keeps the override mechanism for unaccepted findings", async () => {
 		const project = await enforcedProject(
