@@ -64,6 +64,19 @@ A later change removed the `CloseVirtualFileSystem` port. When cancellation arri
 
 Handles that the application passes between steps (`LaunchTarget`, `LaunchPlan`, `ExecutionProfile`, `StagedExecutionProfile`, `VirtualFileSystem`, `RunningProgram`, `ProgramOutput`) are opaque. Each wraps `AdapterState`, a `Box<dyn Any + Send>`. Handles are `Send` but not `Sync`. Each port consumes or borrows a handle for one step, so native state is never used concurrently. A handle from another adapter fails with `execution_supervision_failed`.
 
+### Working directory default
+
+A later approved change sets the child's default working directory. When `mods exec` has no `--cwd`, the use case passes the bound game directory to `ResolveLaunchTarget`, which now takes a required `WorkingDirectory`. New Vegas and its script-extender loaders resolve `Data\` from the working directory. Program lookup keeps the caller's startup directory and PATH. An explicit `--cwd` is unchanged. The use case now receives the `GameBinding` from composition. The test `child_defaults_to_the_game_directory_unless_a_directory_is_given` covers both cases. The skill reference `execution.md` describes the new default.
+
+Gate dispositions for this change:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `src/application/src/execution/execute_program.rs` | Import placement and use | Accepted as a false positive. The new test imports (`temp_dir`, `GameBinding`, `GameInstallationPath`, `WorkingDirectory`) are at test-module scope. |
+| `src/application/src/execution/execute_program.rs` | Focused use-case orchestration | Accepted. The default is a five-line, single-use business rule, kept inline in the use case. |
+| `src/application/src/execution/execute_program.rs` | Dependency direction and composition roots | Accepted as a false positive. `GameBinding` is a domain type. Composition supplies it, and no infrastructure type enters the application. |
+| `src/application/src/execution/execute_program.rs`, `ports/execution.rs`, `native.rs`, `execution_adapter.rs` | Use-case parameters; Narrow custom implementations; Use-case declaration order | Accepted. Dependencies stay first, the supplied binding and requested values are typed arguments, and cancellation stays last. No new facility is added. |
+
 ### Execution thread and usvfs `Send`
 
 Composition runs the whole use case on one `spawn_blocking` thread with a current-thread Tokio runtime. `ExecutionAdapter::into_execute_program` builds the ports and calls the use case on that thread. It keeps the tracing dispatcher and span handoff that the old adapter wrapper used. A cancelled request returns `operation_cancelled` before the thread starts. Non-Windows builds return `program_unsupported` at the same point as before. The CLI holds this entry point as a `Send` boxed `FnOnce`.

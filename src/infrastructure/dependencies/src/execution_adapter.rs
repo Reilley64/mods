@@ -100,6 +100,7 @@ impl ExecutionAdapter {
 								.context(ExecuteProgramError)?;
 								runtime.block_on(execute_program(
 									self.dependencies(),
+									self.binding.clone(),
 									output_target,
 									working_directory,
 									program,

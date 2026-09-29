@@ -106,9 +106,8 @@ pub struct ProgramSupervision {
 	pub output: ProgramOutput,
 }
 
-pub type ResolveLaunchTarget = Arc<
-	dyn Fn(Program, Vec<ProgramArgument>, Option<WorkingDirectory>) -> PortFuture<LaunchTarget> + Send + Sync,
->;
+pub type ResolveLaunchTarget =
+	Arc<dyn Fn(Program, Vec<ProgramArgument>, WorkingDirectory) -> PortFuture<LaunchTarget> + Send + Sync>;
 pub type PrepareLaunchPlan = Arc<dyn Fn(CancellationToken) -> PortFuture<LaunchPlan> + Send + Sync>;
 pub type ProjectExecutionProfile = Arc<dyn Fn(&LaunchPlan) -> PortFuture<ExecutionProfileProjection> + Send + Sync>;
 pub type StageExecutionProfile =

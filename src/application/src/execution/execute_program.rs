@@ -14,6 +14,7 @@ use crate::ports::ReportProgress;
 use crate::ports::ResolveLaunchTarget;
 use crate::ports::StageExecutionProfile;
 use crate::ports::SuperviseProgram;
+use domain::GameBinding;
 use domain::OutputTarget;
 use domain::ProcessStatus;
 use domain::Program;
@@ -57,6 +58,9 @@ impl fmt::Display for ExecuteProgramError {
 
 /// Runs one managed program inside the virtual file system.
 ///
+/// Without `working_directory`, the child starts in the bound game directory.
+/// Program lookup does not use the working directory.
+///
 /// Handles pass between steps in order, so native calls never overlap. Exec
 /// composition also runs this use case on one dedicated thread.
 ///
@@ -68,6 +72,7 @@ impl fmt::Display for ExecuteProgramError {
 #[tracing::instrument(skip_all)]
 pub async fn execute_program(
 	dependencies: ExecuteProgramDependencies,
+	game_binding: GameBinding,
 	output_target: OutputTarget,
 	working_directory: Option<WorkingDirectory>,
 	program: Program,
@@ -81,6 +86,16 @@ pub async fn execute_program(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()).context(ExecuteProgramError));
 	}
+
+	// The game resolves `Data\` and its script-extender loaders relative to its
+	// working directory, so a child without `--cwd` starts in the game directory.
+	let working_directory = if let Some(working_directory) = working_directory {
+		working_directory
+	} else {
+		WorkingDirectory::new(game_binding.game_directory().as_path().to_owned())
+			.context(ErrorMarker::invalid_working_directory())
+			.context(ExecuteProgramError)?
+	};
 
 	let target = dependencies
 		.resolve_launch_target
@@ -244,16 +259,20 @@ mod tests {
 	use crate::ports::RunningProgram;
 	use crate::ports::StagedExecutionProfile;
 	use crate::ports::VirtualFileSystem;
+	use domain::GameBinding;
+	use domain::GameInstallationPath;
 	use domain::ModName;
 	use domain::ModPriority;
 	use domain::OutputTarget;
 	use domain::ProcessStatus;
 	use domain::Program;
 	use domain::ProviderIdentity;
+	use domain::WorkingDirectory;
 	use rootcause::Report;
 	use rootcause::Result;
 	use rootcause::prelude::ResultExt;
 	use rootcause::report;
+	use std::env::temp_dir;
 	use std::future::Future;
 	use std::future::ready;
 	use std::path::PathBuf;
@@ -485,7 +504,29 @@ mod tests {
 				.context(ExecuteProgramError)
 		})?;
 
-		execute_program(dependencies, output_target, None, program, Vec::new(), cancellation).await
+		execute_program(
+			dependencies,
+			game_binding()?,
+			output_target,
+			None,
+			program,
+			Vec::new(),
+			cancellation,
+		)
+		.await
+	}
+
+	fn game_directory() -> PathBuf {
+		temp_dir().join("Fallout New Vegas")
+	}
+
+	fn game_binding() -> Result<GameBinding, ExecuteProgramError> {
+		let path = GameInstallationPath::new(game_directory()).map_err(|error| {
+			error.context(ErrorMarker::game_install_invalid())
+				.context(ExecuteProgramError)
+		})?;
+
+		Ok(GameBinding::new(path))
 	}
 
 	fn has_marker(error: &Report<ExecuteProgramError>, marker: &ErrorMarker) -> bool {
@@ -738,6 +779,48 @@ mod tests {
 		));
 		assert!(retained_paths(&error).is_empty());
 		assert_eq!(recorded(&steps)[8..], ["supervise", "preserve", "finish", "check"]);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn child_defaults_to_the_game_directory_unless_a_directory_is_given() -> Result<(), ErrorMarker> {
+		let explicit = temp_dir().join("explicit");
+		for (requested, expected) in [(None, game_directory()), (Some(explicit.clone()), explicit)] {
+			let (mut dependencies, _steps) = fake_dependencies(default_scenario()?);
+			let observed = Arc::new(Mutex::new(None));
+			dependencies.resolve_launch_target = Arc::new({
+				let observed = observed.clone();
+				move |_, _, working_directory: WorkingDirectory| {
+					if let Ok(mut observed) = observed.lock() {
+						*observed = Some(working_directory.as_path().to_owned());
+					}
+					complete(Ok(LaunchTarget(AdapterState::new("target"))))
+				}
+			});
+			let requested = requested
+				.map(WorkingDirectory::new)
+				.transpose()
+				.map_err(|error| error.context(ErrorMarker::invalid_working_directory()))?;
+			let program = Program::new("tool.exe".into())
+				.map_err(|error| error.context(ErrorMarker::program_unsupported()))?;
+
+			execute_program(
+				dependencies,
+				game_binding().context(ErrorMarker::game_install_invalid())?,
+				OutputTarget::Overwrite,
+				requested,
+				program,
+				Vec::new(),
+				CancellationToken::new(),
+			)
+			.await
+			.context(ErrorMarker::execution_supervision_failed())?;
+
+			assert_eq!(
+				observed.lock().ok().and_then(|observed| observed.clone()),
+				Some(expected)
+			);
+		}
 		Ok(())
 	}
 

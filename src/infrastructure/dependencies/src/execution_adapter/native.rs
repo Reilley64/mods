@@ -141,7 +141,7 @@ impl ExecutionAdapter {
 		&self,
 		program: Program,
 		arguments: Vec<ProgramArgument>,
-		working_directory: Option<WorkingDirectory>,
+		working_directory: WorkingDirectory,
 	) -> Result<LaunchTarget, ErrorMarker> {
 		let arguments: Vec<_> = arguments
 			.iter()
@@ -149,11 +149,7 @@ impl ExecutionAdapter {
 			.collect();
 		let launch = self
 			.caller
-			.resolve(
-				program.as_os_str(),
-				&arguments,
-				working_directory.as_ref().map(WorkingDirectory::as_path),
-			)
+			.resolve(program.as_os_str(), &arguments, Some(working_directory.as_path()))
 			.map_err(|error| {
 				let marker = match error.current_context() {
 					LaunchInputError::NotFound => ErrorMarker::program_not_found(),
