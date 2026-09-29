@@ -17,6 +17,7 @@ use crate::installation::AutomaticChoiceEvent;
 use crate::installation::CandidateDecision;
 use crate::installation::ConditionEvaluation;
 use crate::installation::IndexedInstaller;
+use crate::installation::InstallArchiveSource;
 use crate::installation::InstallMode;
 use crate::installation::InstallPlan;
 use crate::installation::InstallPreview;
@@ -36,7 +37,6 @@ use crate::ports::ReadGameVersion;
 use crate::ports::ReadXnvseVersion;
 use crate::ports::ScanEnvironmentConflicts;
 use domain::ArchiveIdentity;
-use domain::ArchivePath;
 use domain::FomodChoice;
 use domain::FomodCondition;
 use domain::InstallCandidate;
@@ -82,13 +82,31 @@ impl fmt::Display for InstallArchiveError {
 #[tracing::instrument(skip_all)]
 pub async fn install_archive(
 	dependencies: InstallArchiveDependencies,
-	archive: ArchivePath,
+	source: impl Into<InstallArchiveSource>,
 	mod_name: Option<ModName>,
 	replace: bool,
 	choices: Vec<FomodChoice>,
 	dry_run: bool,
 	cancellation: CancellationToken,
 ) -> Result<InstallArchiveOutput, InstallArchiveError> {
+	let (archive, nexus, suggested_name) = match source.into() {
+		InstallArchiveSource::Local(archive) => (archive, None, None),
+		InstallArchiveSource::Downloaded(downloaded) => (
+			downloaded.archive,
+			downloaded.provenance,
+			Some(downloaded.suggested_name),
+		),
+	};
+	let mod_name = if let Some(name) = mod_name {
+		Some(name)
+	} else if let Some(name) = suggested_name {
+		Some(ModName::new(name)
+			.context(ErrorMarker::invalid_mod_name())
+			.context(InstallArchiveError)?)
+	} else {
+		None
+	};
+
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled().with_phase("settings_load"))
 			.context(InstallArchiveError));
@@ -467,6 +485,7 @@ pub async fn install_archive(
 		.begin_installation
 		.call((
 			ApprovedInstallation {
+				nexus,
 				source_basename: source_basename.to_owned(),
 				fomod_schema_version: evaluation.fomod_schema_version,
 				plan: plan.clone(),
@@ -562,6 +581,7 @@ mod tests {
 	use crate::conflicts::ScannedConflictProvider;
 	use crate::installation::ArchiveIndex;
 	use crate::installation::CandidateDecision;
+	use crate::installation::DownloadedMod;
 	use crate::installation::FileDependencyFact;
 	use crate::installation::FileDependencyKind;
 	use crate::installation::FomodFlagWrite;
@@ -570,9 +590,11 @@ mod tests {
 	use crate::installation::FomodOption;
 	use crate::installation::FomodOptionTypePattern;
 	use crate::installation::IndexedInstaller;
+	use crate::installation::InstallArchiveSource;
 	use crate::installation::InstallWarning;
 	use crate::installation::InstallationAssessment;
 	use crate::installation::InstallationState;
+	use crate::installation::NexusProvenance;
 	use crate::ports::InstallationChange;
 	use crate::ports::InstallationFile;
 	use crate::ports::InstallationStateAccess;
@@ -844,6 +866,81 @@ mod tests {
 			}) as PortFuture<_>
 		});
 		dependencies
+	}
+
+	#[tokio::test]
+	async fn nexus_handoff_preserves_provenance_and_local_cache_paths_do_not_inherit_it() {
+		let provenance = NexusProvenance {
+			game_domain: "newvegas".into(),
+			mod_id: 42,
+			file_id: 7,
+			file_version: "01-beta".into(),
+			mod_version: "2.0".into(),
+			mod_name: "Page".into(),
+			file_name: "Selected file".into(),
+		};
+		for remote in [false, true] {
+			let order = Arc::new(Mutex::new(Vec::new()));
+			let mut deps = dependencies(order.clone(), false, Arc::new(AtomicUsize::new(0)));
+			let begin = deps.begin_installation.clone();
+			let recorded = Arc::new(Mutex::new(None));
+			deps.begin_installation = Arc::new({
+				let recorded = recorded.clone();
+				move |approved, token| {
+					*recorded.lock().expect("record") = Some(approved.clone());
+					begin.call((approved, token))
+				}
+			});
+			let archive = ArchivePath::new(temp_dir().join("cache/downloads/newvegas-42-7/archive"))
+				.expect("archive");
+			let source = if remote {
+				InstallArchiveSource::Downloaded(DownloadedMod {
+					suggested_name: "Selected file".into(),
+					archive,
+					provenance: Some(provenance.clone()),
+				})
+			} else {
+				InstallArchiveSource::Local(archive)
+			};
+			let result =
+				install_archive(deps, source, None, false, vec![], false, CancellationToken::new())
+					.await
+					.expect("install");
+			assert!(matches!(result, InstallArchiveOutput::Installed(_)));
+			let approved = recorded.lock().expect("record").clone().expect("approved");
+			assert_eq!(approved.nexus, remote.then(|| provenance.clone()));
+			assert_eq!(
+				approved.plan.mod_name.as_str(),
+				if remote { "Selected file" } else { "archive" }
+			);
+		}
+	}
+
+	#[tokio::test]
+	async fn nexus_preview_and_invalid_names_never_begin_publication() {
+		let order = Arc::new(Mutex::new(Vec::new()));
+		let deps = dependencies(order.clone(), false, Arc::new(AtomicUsize::new(0)));
+		let provenance = NexusProvenance {
+			game_domain: "newvegas".into(),
+			mod_id: 42,
+			file_id: 7,
+			file_version: "01".into(),
+			mod_version: "2".into(),
+			mod_name: "Fallback page".into(),
+			file_name: String::new(),
+		};
+		let source = InstallArchiveSource::Downloaded(DownloadedMod {
+			suggested_name: "Fallback page".into(),
+			archive: ArchivePath::new(temp_dir().join("archive")).expect("archive"),
+			provenance: Some(provenance),
+		});
+		let result = install_archive(deps, source, None, false, vec![], true, CancellationToken::new())
+			.await
+			.expect("preview");
+		assert!(
+			matches!(result, InstallArchiveOutput::Preview(value) if value.plan.mod_name.as_str() == "Fallback page")
+		);
+		assert!(!order.lock().expect("order").contains(&"begin"));
 	}
 
 	#[tokio::test]

@@ -26,7 +26,7 @@ async fn main() {
 	let arguments: Vec<OsString> = args_os().collect();
 	let result = runner::run_current_process(arguments, |root, startup| {
 		let resources = Resources::system(root.clone());
-		let install_archive = resources.install_archive_dependencies();
+		let install_mod = resources.install_mod_dependencies();
 		let execution_force_cancellation = CancellationToken::new();
 		Ok(runner::Dependencies {
 			execute_program: resources
@@ -36,7 +36,7 @@ async fn main() {
 			list_settings: resources.list_settings_dependencies(),
 			get_setting: resources.get_setting_dependencies(),
 			set_game_directory: resources.set_game_directory_dependencies(),
-			install_archive,
+			install_mod,
 			list_effective_conflicts: resources.list_effective_conflicts_dependencies(),
 			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(),
 			explain_path: resources.explain_path_dependencies(),

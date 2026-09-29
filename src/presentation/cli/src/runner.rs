@@ -24,9 +24,12 @@ use application::environment::initialize_environment;
 use application::execution::ExecuteProgramDependencies;
 use application::execution::ExecutionWarning;
 use application::execution::execute_program;
-use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
-use application::installation::install_archive;
+use application::installation::InstallModDependencies;
+use application::installation::InstallModOutput;
+use application::installation::ModSource;
+use application::installation::RemoteModSource;
+use application::installation::install_mod;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
 use application::settings::SetGameDirectoryDependencies;
@@ -63,7 +66,7 @@ pub(crate) struct Dependencies {
 	pub(crate) list_settings: ListSettingsDependencies,
 	pub(crate) get_setting: GetSettingDependencies,
 	pub(crate) set_game_directory: SetGameDirectoryDependencies,
-	pub(crate) install_archive: InstallArchiveDependencies,
+	pub(crate) install_mod: InstallModDependencies,
 	pub(crate) list_effective_conflicts: ListEffectiveConflictsDependencies,
 	pub(crate) inspect_mod_conflicts: InspectModConflictsDependencies,
 	pub(crate) explain_path: ExplainPathDependencies,
@@ -258,10 +261,23 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 		Command::Install(arguments) => {
 			let cancellation = operation::ctrl_c_token();
 
-			let archive_path = resolve_path(&arguments.archive, &startup);
-			let Ok(archive) = ArchivePath::new(archive_path) else {
-				return marker_outcome(ErrorMarker::unsafe_archive());
+			let source = if let Some(url) =
+				arguments.archive.to_str().filter(|source| source.contains("://"))
+			{
+				ModSource::Remote(RemoteModSource {
+					url: url.to_owned(),
+					file_id: arguments.file,
+				})
+			} else {
+				if arguments.file.is_some() {
+					return marker_outcome(ErrorMarker::nexus_source_invalid());
+				}
+				let Ok(archive) = ArchivePath::new(resolve_path(&arguments.archive, &startup)) else {
+					return marker_outcome(ErrorMarker::unsafe_archive());
+				};
+				ModSource::Local(archive)
 			};
+
 			let mod_name = if let Some(value) = arguments.name {
 				let Ok(value) = ModName::new(value) else {
 					return marker_outcome(ErrorMarker::invalid_mod_name());
@@ -274,9 +290,10 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				Ok(choices) => choices,
 				Err(report) => return report_outcome(&report),
 			};
-			match install_archive(
-				dependencies.install_archive,
-				archive,
+
+			match install_mod(
+				dependencies.install_mod,
+				source,
 				mod_name,
 				arguments.replace,
 				choices,
@@ -285,7 +302,26 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			)
 			.await
 			{
-				Ok(InstallArchiveOutput::AdditionalSelectionsRequired(output_value)) => {
+				Ok(InstallModOutput::SelectionRequired(files)) => {
+					let mut stderr = "error [nexus_file_selection_required]: Select a file with --file <id>.\n".to_owned();
+					for file in files {
+						stderr.push_str(&format!(
+							"file_id = {}, name = {}, version = {}, category = {}\n",
+							file.file_id,
+							output::quote(&file.name),
+							output::quote(&file.version),
+							output::quote(&file.category)
+						));
+					}
+					RunOutcome {
+						status: 2,
+						stdout: String::new(),
+						stderr,
+					}
+				}
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::AdditionalSelectionsRequired(
+					output_value,
+				))) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
 					RunOutcome {
 						status: 0,
@@ -293,7 +329,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 						stderr,
 					}
 				}
-				Ok(InstallArchiveOutput::Preview(output_value)) => {
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::Preview(output_value))) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
 					RunOutcome {
 						status: 0,
@@ -301,11 +337,13 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 						stderr,
 					}
 				}
-				Ok(InstallArchiveOutput::Installed(output_value)) => RunOutcome {
-					status: 0,
-					stdout: String::new(),
-					stderr: output::install_warnings(&output_value.warnings),
-				},
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::Installed(output_value))) => {
+					RunOutcome {
+						status: 0,
+						stdout: String::new(),
+						stderr: output::install_warnings(&output_value.warnings),
+					}
+				}
 				Err(report) => report_outcome(&report),
 			}
 		}
@@ -541,10 +579,22 @@ mod tests {
 	use application::execution::ExecuteProgramDependencies;
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
+	use application::installation::ArchiveIndex;
+	use application::installation::DownloadModOutput;
+	use application::installation::DownloadedMod;
+	use application::installation::FomodGroup;
+	use application::installation::FomodInstaller;
+	use application::installation::FomodOption;
+	use application::installation::IndexedInstaller;
 	use application::installation::InstallArchiveDependencies;
+	use application::installation::InstallModDependencies;
+	use application::installation::InstallationAssessment;
+	use application::installation::InstallationState;
+	use application::installation::NexusProvenance;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
 	use application::ports::InitializationTargetAssessment;
+	use application::ports::InstallationChange;
 	use application::ports::PortFuture;
 	use application::ports::ResolvedGameInstallation;
 	use application::ports::StoredAndEffectiveBinding;
@@ -554,9 +604,16 @@ mod tests {
 	use application::settings::SetGameDirectoryDependencies;
 	use application::settings::SettingSource;
 	use clap::Parser;
+	use domain::ArchiveIdentity;
+	use domain::ArchivePath;
 	use domain::DataRelativePath;
+	use domain::FomodCardinality;
+	use domain::FomodCondition;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
+	use domain::InstallCandidate;
+	use domain::InstallCandidateOrigin;
+	use domain::InstallationPhase;
 	use domain::ModName;
 	use domain::ModPriority;
 	use domain::OutputTarget;
@@ -564,10 +621,15 @@ mod tests {
 	use domain::ProcessStatus;
 	use domain::ProviderIdentity;
 	use domain::ProviderReference;
+	use domain::ResolvedOptionType;
+	use domain::Sha256Digest;
 	use domain::SteamBuildId;
 	use rootcause::report;
+	use std::collections::HashMap;
 	use std::error::Error;
 	use std::ffi::OsString;
+	use std::fs::create_dir_all;
+	use std::fs::read;
 	use std::fs::read_dir;
 	use std::fs::read_to_string;
 	use std::fs::write;
@@ -788,7 +850,13 @@ mod tests {
 					Box::pin(async move { Ok(binding) }) as PortFuture<_>
 				}),
 			},
-			install_archive,
+			install_mod: InstallModDependencies {
+				install_archive,
+				download_mod: Arc::new(|_, _| {
+					Box::pin(async { Err(report!(ErrorMarker::nexus_network_failure())) })
+						as PortFuture<_>
+				}),
+			},
 			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
 			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
 			explain_path: unavailable_explain_path_dependencies(),
@@ -817,6 +885,215 @@ mod tests {
 				}),
 			},
 		))
+	}
+
+	#[tokio::test]
+	#[expect(
+		clippy::expect_used,
+		reason = "synthetic fixture values must retain report details on setup failure"
+	)]
+	async fn remote_install_replays_full_choices_previews_and_retains_cache_after_installation_failure()
+	-> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let cache = temp.path().join("cache/downloads/newvegas-42-7");
+		create_dir_all(&cache)?;
+		let archive_path = cache.join("archive");
+		write(&archive_path, b"completed archive fixture")?;
+		let archive = ArchivePath::new(archive_path.clone()).expect("archive fixture");
+		let provenance = NexusProvenance {
+			game_domain: "newvegas".into(),
+			mod_id: 42,
+			file_id: 7,
+			file_version: "01-beta".into(),
+			mod_version: "2.0".into(),
+			mod_name: "Page".into(),
+			file_name: "Selected file".into(),
+		};
+		let game_binding = GameBinding::new(
+			GameInstallationPath::new(temp.path().join("game")).expect("game fixture"),
+			SteamBuildId::new(1).expect("build fixture"),
+		);
+		let candidate = InstallCandidate {
+			candidate_id: 1,
+			origin: InstallCandidateOrigin::Required,
+			phase: InstallationPhase::Required,
+			declared_priority: 0,
+			descriptor_order: 0,
+			source_member: "Data/file.txt".into(),
+			destination: DataRelativePath::new("file.txt".into()).expect("path fixture"),
+		};
+		let groups = [("first", "a"), ("second", "b")]
+			.into_iter()
+			.map(|(group, option)| FomodGroup {
+				id: group.into(),
+				label: group.into(),
+				description: String::new(),
+				cardinality: FomodCardinality::SelectExactlyOne,
+				condition: FomodCondition::Constant(true),
+				options: vec![FomodOption {
+					id: option.into(),
+					label: option.into(),
+					description: String::new(),
+					condition: FomodCondition::Constant(true),
+					default_type: ResolvedOptionType::Optional,
+					type_patterns: Vec::new(),
+					flag_writes: Vec::new(),
+					file_candidates: Vec::new(),
+					file_effects: Vec::new(),
+				}],
+			})
+			.collect();
+		let index = ArchiveIndex {
+			identity: ArchiveIdentity::Fomod {
+				archive_sha256: Sha256Digest::new("a".repeat(64)).expect("hash fixture"),
+				package_root: String::new(),
+				config_member: "fomod/ModuleConfig.xml".into(),
+				config_sha256: Sha256Digest::new("b".repeat(64)).expect("hash fixture"),
+			},
+			installer: IndexedInstaller::Fomod(FomodInstaller {
+				schema_version: "5.0".into(),
+				module_condition: FomodCondition::Constant(true),
+				groups,
+				required_candidates: vec![candidate],
+				conditional_candidates: Vec::new(),
+				warnings: Vec::new(),
+			}),
+		};
+
+		for (choices, dry_run, expected) in [
+			(vec![], true, "additional_selections_required"),
+			(vec!["first=a"], true, "additional_selections_required"),
+			(vec!["first=a", "second=b"], true, "preview"),
+			(vec!["first=a", "second=b"], false, "failed"),
+		] {
+			let mut dependencies = successful_dependencies(temp.path()).expect("dependency fixture");
+			dependencies.install_mod.download_mod = Arc::new({
+				let downloaded = DownloadedMod {
+					suggested_name: "Selected file".into(),
+					archive: archive.clone(),
+					provenance: Some(provenance.clone()),
+				};
+				move |source, _| {
+					assert_eq!(source.url, "https://www.nexusmods.com/newvegas/mods/42");
+					assert_eq!(source.file_id, Some(7));
+					let downloaded = downloaded.clone();
+					Box::pin(async move { Ok(DownloadModOutput::Downloaded(downloaded)) })
+						as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.load_installation_state = Arc::new({
+				let game_binding = game_binding.clone();
+				move |_, _| {
+					let game_binding = game_binding.clone();
+					Box::pin(async move {
+						Ok(InstallationState {
+							game_binding,
+							installed_mods: Vec::new(),
+							current_winners: HashMap::new(),
+							file_dependencies: HashMap::new(),
+						})
+					}) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.index_archive = Arc::new({
+				let archive = archive.clone();
+				let index = index.clone();
+				move |received, _, _| {
+					assert_eq!(received, archive);
+					let index = index.clone();
+					Box::pin(async move { Ok(index) }) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.assess_installation = Arc::new(|_, _| {
+				Box::pin(async { Ok(InstallationAssessment { overlaps: Vec::new() }) }) as PortFuture<_>
+			});
+			dependencies.install_mod.install_archive.scan_environment_conflicts = Arc::new(|_| {
+				Box::pin(async {
+					Ok(EnvironmentConflictScan {
+						providers: Vec::new(),
+						problems: Vec::new(),
+					})
+				}) as PortFuture<_>
+			});
+			let began = Arc::new(AtomicBool::new(false));
+			let published = Arc::new(AtomicBool::new(false));
+			dependencies.install_mod.install_archive.begin_installation = Arc::new({
+				let began = began.clone();
+				let published = published.clone();
+				let provenance = provenance.clone();
+				move |approved, _| {
+					began.store(true, Ordering::SeqCst);
+					assert_eq!(approved.nexus, Some(provenance.clone()));
+					assert_eq!(
+						approved.plan
+							.accepted_choices
+							.iter()
+							.map(|choice| (
+								choice.group_id.as_str(),
+								choice.option_id.as_str()
+							))
+							.collect::<Vec<_>>(),
+						[("first", "a"), ("second", "b")]
+					);
+					let published = published.clone();
+					Box::pin(async move {
+						Ok(InstallationChange {
+							begin_file: Arc::new(|_, _| {
+								Box::pin(async {
+									Err(report!(ErrorMarker::io_failure()))
+								}) as PortFuture<_>
+							}),
+							finish: Arc::new(move |_| {
+								published.store(true, Ordering::SeqCst);
+								Box::pin(async { Ok(()) }) as PortFuture<_>
+							}),
+						})
+					}) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.extract_approved_files =
+				Arc::new(|_, _, _, _, _, _| {
+					Box::pin(async { Err(report!(ErrorMarker::unsafe_archive())) }) as PortFuture<_>
+				});
+			let mut arguments = arguments![
+				"mods",
+				"--log-level",
+				"off",
+				"install",
+				"https://www.nexusmods.com/newvegas/mods/42",
+				"--file",
+				"7"
+			];
+			for choice in choices {
+				arguments.extend(arguments!["--choice", choice]);
+			}
+			if dry_run {
+				arguments.push(OsString::from("--dry-run"));
+			}
+
+			let result = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+				Ok(dependencies)
+			})
+			.await?;
+
+			if expected == "failed" {
+				assert_ne!(result.status, 0);
+				assert!(result.stderr.contains("unsafe_archive"));
+				assert!(began.load(Ordering::SeqCst));
+			} else {
+				assert_eq!(result.status, 0, "{}", result.stderr);
+				assert!(
+					result.stdout.contains(&format!("outcome = \"{expected}\"")),
+					"{}",
+					result.stdout
+				);
+				assert!(!began.load(Ordering::SeqCst));
+			}
+			assert!(!published.load(Ordering::SeqCst));
+			assert_eq!(read(&archive_path)?, b"completed archive fixture");
+			assert!(!temp.path().join("mods/Selected file/meta.toml").exists());
+		}
+		Ok(())
 	}
 
 	#[tokio::test]
