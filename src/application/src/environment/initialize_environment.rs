@@ -140,7 +140,6 @@ mod tests {
 	use domain::EnvironmentRoot;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
-	use domain::SteamBuildId;
 	use rootcause::report;
 	use std::env::temp_dir;
 	use std::error::Error;
@@ -155,7 +154,7 @@ mod tests {
 		let root = EnvironmentRoot::new(temp_dir().join("application-init-test"))
 			.map_err(|_| "invalid test environment root")?;
 		let game = GameInstallationPath::new(temp_dir().join("fnv")).map_err(|_| "invalid test game path")?;
-		let binding = GameBinding::new(game, SteamBuildId::new(4).map_err(|_| "invalid test build ID")?);
+		let binding = GameBinding::new(game);
 		let dependencies = InitializeEnvironmentDependencies {
 			assess_target: Arc::new(|_, _| {
 				Box::pin(async { Ok(InitializationTargetAssessment::Available) }) as PortFuture<_>
@@ -193,7 +192,7 @@ mod tests {
 		let output = initialize_environment(dependencies, root, None, CancellationToken::new())
 			.await
 			.map_err(|_| "initialize failed")?;
-		assert_eq!(output.game_binding.observed_build_id().get(), 4);
+		assert_eq!(output.game_binding, binding);
 		assert_eq!(
 			output.warnings,
 			vec![InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed]

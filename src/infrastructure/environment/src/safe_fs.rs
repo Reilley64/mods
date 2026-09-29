@@ -153,6 +153,15 @@ impl SafeDir {
 		}
 	}
 
+	pub(crate) fn read(&self, name: impl AsRef<Path>) -> Result<Vec<u8>, io::Error> {
+		let mut file = self.open_regular(name)?;
+
+		let mut contents = Vec::new();
+		file.inner.read_to_end(&mut contents).into_report()?;
+
+		Ok(contents)
+	}
+
 	pub(crate) fn entries(&self) -> Result<ReadDir, io::Error> {
 		self.inner.entries().into_report()
 	}

@@ -71,7 +71,7 @@ fn discover_with_before_libraries(
 					continue;
 				}
 			};
-			let (_, install_dir, _) = match manifest::fields(&text) {
+			let (_, install_dir) = match manifest::fields(&text) {
 				Ok(fields) => fields,
 				Err(error) => {
 					if first_invalid.is_none() {

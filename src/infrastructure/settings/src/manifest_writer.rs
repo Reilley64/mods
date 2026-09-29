@@ -2,6 +2,7 @@ use crate::SettingsAccess;
 use crate::fs_access::create_dir;
 use crate::fs_access::create_new_regular;
 use crate::fs_access::open_dir;
+use crate::fs_access::open_regular;
 use crate::fs_access::sync_dir;
 use crate::refuse_unfinished_operation_in_temp;
 use application::ErrorMarker;
@@ -21,6 +22,7 @@ const OPERATION: &str = "operation";
 
 pub(crate) fn replace_validated(
 	root: &Dir,
+	expected: &str,
 	contents: &str,
 	cancellation: &CancellationToken,
 	validate: impl Fn(&str) -> bool,
@@ -65,6 +67,18 @@ pub(crate) fn replace_validated(
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	drop(staged);
+
+	let mut canonical = open_regular(root, Path::new(MANIFEST)).context(ErrorMarker::environment_root_unsafe())?;
+	let mut current = String::new();
+	canonical
+		.read_to_string(&mut current)
+		.context(ErrorMarker::environment_root_unsafe())?;
+	if current != expected {
+		return Err(report!(ErrorMarker::environment_invalid(Some(
+			"settings_source_changed"
+		))));
+	}
+	drop(canonical);
 
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -113,7 +127,9 @@ mod tests {
 	fn replacement_uses_the_exclusive_operation_directory_and_cleans_it() -> Result<()> {
 		let (fixture, root) = fixture()?;
 
-		replace_validated(&root, "new", &CancellationToken::new(), |candidate| candidate == "new")?;
+		replace_validated(&root, "old", "new", &CancellationToken::new(), |candidate| {
+			candidate == "new"
+		})?;
 
 		assert_eq!(fs::read_to_string(fixture.path().join(MANIFEST)).into_report()?, "new");
 		assert!(fs::read_dir(fixture.path().join("temp"))
@@ -129,7 +145,7 @@ mod tests {
 		let pending = fixture.path().join("temp/pending");
 		fs::write(&pending, "keep").into_report()?;
 
-		let result = replace_validated(&root, "new", &CancellationToken::new(), |_| true);
+		let result = replace_validated(&root, "old", "new", &CancellationToken::new(), |_| true);
 
 		assert!(matches!(
 			result,
@@ -144,7 +160,7 @@ mod tests {
 	fn failed_staged_validation_preserves_operation_state() -> Result<()> {
 		let (fixture, root) = fixture()?;
 
-		let result = replace_validated(&root, "invalid", &CancellationToken::new(), |_| false);
+		let result = replace_validated(&root, "old", "invalid", &CancellationToken::new(), |_| false);
 
 		assert!(matches!(
 			result,
@@ -159,12 +175,31 @@ mod tests {
 	}
 
 	#[test]
+	fn edit_after_staging_is_not_overwritten() -> Result<()> {
+		let (fixture, root) = fixture()?;
+		let result = replace_validated(&root, "old", "new", &CancellationToken::new(), |_| {
+			fs::write(fixture.path().join(MANIFEST), "concurrent").is_ok()
+		});
+
+		assert!(result.is_err());
+		assert_eq!(
+			fs::read_to_string(fixture.path().join(MANIFEST)).into_report()?,
+			"concurrent"
+		);
+		assert_eq!(
+			fs::read_to_string(fixture.path().join("temp").join(OPERATION).join(MANIFEST)).into_report()?,
+			"new"
+		);
+		Ok(())
+	}
+
+	#[test]
 	fn final_cancellation_preserves_the_validated_stage() -> Result<()> {
 		let (fixture, root) = fixture()?;
 		let cancellation = CancellationToken::new();
 		let cancel_during_validation = cancellation.clone();
 
-		let result = replace_validated(&root, "new", &cancellation, |candidate| {
+		let result = replace_validated(&root, "old", "new", &cancellation, |candidate| {
 			cancel_during_validation.cancel();
 			candidate == "new"
 		});
@@ -187,7 +222,7 @@ mod tests {
 		let operation_path = fixture.path().join("temp").join(OPERATION);
 		let validation_calls = Cell::new(0);
 
-		replace_validated(&root, "new", &CancellationToken::new(), |candidate| {
+		replace_validated(&root, "old", "new", &CancellationToken::new(), |candidate| {
 			validation_calls.set(validation_calls.get() + 1);
 			fs::write(operation_path.join("leftover"), "keep").is_ok() && candidate == "new"
 		})?;
@@ -198,7 +233,7 @@ mod tests {
 			fs::read_to_string(operation_path.join("leftover")).into_report()?,
 			"keep"
 		);
-		let later = replace_validated(&root, "later", &CancellationToken::new(), |_| true);
+		let later = replace_validated(&root, "old", "later", &CancellationToken::new(), |_| true);
 		assert!(matches!(
 			later,
 			Err(report) if report.current_context().code() == ErrorCode::ManualCleanupRequired

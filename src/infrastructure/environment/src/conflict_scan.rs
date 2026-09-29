@@ -1,5 +1,4 @@
 use crate::hashing::sha256;
-use crate::manifest::manifest_game_binding;
 use crate::profile::MAX_PROFILE_BYTES;
 use crate::safe_fs::EntryBudget;
 use crate::safe_fs::MAX_TRAVERSAL_DEPTH;
@@ -19,6 +18,7 @@ use cap_fs_ext::MetadataExt;
 use domain::ConflictProblem;
 use domain::ConflictProblemKind;
 use domain::DataRelativePath;
+use domain::GameBinding;
 use domain::InstalledMod;
 use domain::ModName;
 use domain::ModPriority;
@@ -49,7 +49,11 @@ const WINDOWS_ERROR_SHARING_VIOLATION: i32 = 32;
 #[cfg(windows)]
 const WINDOWS_ERROR_LOCK_VIOLATION: i32 = 33;
 
-pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result<EnvironmentConflictScan, ErrorMarker> {
+pub(crate) fn scan(
+	root_path: &Path,
+	binding: &GameBinding,
+	cancellation: &CancellationToken,
+) -> Result<EnvironmentConflictScan, ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 	}
@@ -89,8 +93,7 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 	}
 
 	let mut providers = Vec::new();
-	let game_binding = manifest_game_binding(&root, cancellation)?;
-	let game = SafeDir::open_absolute(game_binding.game_directory().as_path())
+	let game = SafeDir::open_absolute(binding.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(Some("game_binding")))?;
 	match game.open_dir("Data") {
 		Ok(data) => providers.push(scan_provider(&data, ProviderIdentity::SteamData, true, cancellation)?),
@@ -152,6 +155,7 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 
 pub(crate) fn read_content(
 	root_path: &Path,
+	binding: &GameBinding,
 	id: &IndexedConflictFileId,
 	cancellation: &CancellationToken,
 ) -> Result<ConflictContentRead, ErrorMarker> {
@@ -162,7 +166,6 @@ pub(crate) fn read_content(
 	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 	let provider = match id.identity() {
 		ProviderIdentity::SteamData => {
-			let binding = manifest_game_binding(&root, cancellation)?;
 			let game = SafeDir::open_absolute(binding.game_directory().as_path())
 				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
 			game.open_dir("Data")
@@ -770,7 +773,6 @@ mod tests {
 	use domain::GameInstallationPath;
 	use domain::ParticipationReason;
 	use domain::ProviderIdentity;
-	use domain::SteamBuildId;
 	use domain::TombstoneScope;
 	use std::env::current_dir;
 	use std::error::Error;
@@ -784,7 +786,7 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	fn fixture() -> Result<(TempDir, EnvironmentRoot), Box<dyn Error>> {
+	fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding), Box<dyn Error>> {
 		let temp = TempDir::new_in(current_dir()?)?;
 		let root = EnvironmentRoot::new(temp.path().join("environment"))
 			.map_err(|_| "invalid environment root")?;
@@ -793,7 +795,6 @@ mod tests {
 		let plan = InitializationPlan {
 			game_binding: GameBinding::new(
 				GameInstallationPath::new(game).map_err(|_| "invalid game path")?,
-				SteamBuildId::new(1).map_err(|_| "invalid build ID")?,
 			),
 			profile_sources: InitializationProfileSources {
 				files: PROFILE_FILES
@@ -803,10 +804,11 @@ mod tests {
 				fallout_default_ini: b"[Archive]\r\nsArchiveList=Fallout - Meshes.bsa\r\n".to_vec(),
 			},
 		};
+		let binding = plan.game_binding.clone();
 		EnvironmentAdapter
 			.publish(&root, plan, &CancellationToken::new())
 			.expect("environment must publish");
-		Ok((temp, root))
+		Ok((temp, root, binding))
 	}
 
 	fn write_provider(
@@ -828,9 +830,41 @@ mod tests {
 		Ok(())
 	}
 
+	#[tokio::test]
+	async fn composed_scan_ports_keep_distinct_supplied_bindings() -> Result<(), Box<dyn Error>> {
+		let (temp, root, first) = fixture()?;
+		let second_path = temp.path().join("second-game");
+		fs::create_dir_all(second_path.join("Data"))?;
+		fs::write(first.game_directory().as_path().join("Data/first.txt"), b"first")?;
+		fs::write(second_path.join("Data/second.txt"), b"second")?;
+		let second =
+			GameBinding::new(GameInstallationPath::new(second_path).map_err(|_| "invalid second game")?);
+		let first_scan = EnvironmentAdapter.scan_environment_conflicts_port(root.clone(), first);
+		let second_scan = EnvironmentAdapter.scan_environment_conflicts_port(root.clone(), second);
+		fs::write(root.as_path().join("mods.toml"), "not a settings source anymore")?;
+
+		let first = first_scan
+			.call((CancellationToken::new(),))
+			.await
+			.map_err(|_| "first scan failed")?;
+		let second = second_scan
+			.call((CancellationToken::new(),))
+			.await
+			.map_err(|_| "second scan failed")?;
+		assert!(first.providers[0]
+			.files
+			.iter()
+			.any(|file| file.id.path().as_str() == "first.txt"));
+		assert!(second.providers[0]
+			.files
+			.iter()
+			.any(|file| file.id.path().as_str() == "second.txt"));
+		Ok(())
+	}
+
 	#[test]
 	fn scan_enumerates_base_mods_disabled_state_overwrite_and_tombstones() -> Result<(), Box<dyn Error>> {
-		let (temp, root) = fixture()?;
+		let (temp, root, binding) = fixture()?;
 		fs::write(temp.path().join("game/Data/Textures/Shared.dds"), b"base").or_else(|error| {
 			if error.kind() == ErrorKind::NotFound {
 				fs::create_dir_all(temp.path().join("game/Data/Textures"))?;
@@ -864,7 +898,7 @@ mod tests {
 			b"+Low\r\n-Disabled\n+High\r\n",
 		)?;
 
-		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
 
 		assert!(completed.problems.is_empty());
 		assert_eq!(completed.providers.len(), 5);
@@ -892,7 +926,7 @@ mod tests {
 
 	#[test]
 	fn missing_metadata_has_no_tombstones_or_metadata_problem() -> Result<(), Box<dyn Error>> {
-		let (_temp, root) = fixture()?;
+		let (_temp, root, binding) = fixture()?;
 		write_provider(
 			root.as_path(),
 			"Plain",
@@ -902,7 +936,7 @@ mod tests {
 		fs::remove_file(root.as_path().join("mods/Plain/meta.toml"))?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Plain\n")?;
 
-		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
 		let provider = completed
 			.providers
 			.iter()
@@ -918,11 +952,12 @@ mod tests {
 	#[test]
 	fn present_invalid_metadata_is_reported() -> Result<(), Box<dyn Error>> {
 		for metadata in ["not = [", "schema_version = 2\n"] {
-			let (_temp, root) = fixture()?;
+			let (_temp, root, binding) = fixture()?;
 			write_provider(root.as_path(), "Broken", &[], metadata)?;
 			fs::write(root.as_path().join("profile/modlist.txt"), b"+Broken\n")?;
 
-			let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+			let completed =
+				scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
 			let provider = completed
 				.providers
 				.iter()
@@ -960,7 +995,7 @@ mod tests {
 
 	#[test]
 	fn modlist_matching_is_case_insensitive_and_directory_spelling_is_canonical() -> Result<(), Box<dyn Error>> {
-		let (_temp, root) = fixture()?;
+		let (_temp, root, binding) = fixture()?;
 		write_provider(
 			root.as_path(),
 			"Visuals",
@@ -969,7 +1004,7 @@ mod tests {
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+visuals\n")?;
 
-		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
 		let provider = completed
 			.providers
 			.iter()
@@ -983,7 +1018,7 @@ mod tests {
 
 	#[test]
 	fn completed_semantic_failures_are_typed_invalid_problems() -> Result<(), Box<dyn Error>> {
-		let (_temp, root) = fixture()?;
+		let (_temp, root, binding) = fixture()?;
 		write_provider(
 			root.as_path(),
 			"Broken",
@@ -992,7 +1027,7 @@ mod tests {
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Broken\n+broken\n")?;
 
-		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
 		let kinds = completed
 			.problems
 			.iter()
@@ -1008,7 +1043,7 @@ mod tests {
 
 	#[test]
 	fn root_metadata_is_excluded_by_windows_case_insensitive_name() -> Result<(), Box<dyn Error>> {
-		let (_temp, root) = fixture()?;
+		let (_temp, root, binding) = fixture()?;
 		write_provider(
 			root.as_path(),
 			"Aliased",
@@ -1021,7 +1056,7 @@ mod tests {
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Aliased\n")?;
 
-		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
 		let provider = completed
 			.providers
 			.iter()
@@ -1041,10 +1076,10 @@ mod tests {
 
 	#[test]
 	fn modlist_access_failure_aborts_the_whole_scan_as_io_failure() -> Result<(), Box<dyn Error>> {
-		let (_temp, root) = fixture()?;
+		let (_temp, root, binding) = fixture()?;
 		fs::remove_file(root.as_path().join("profile/modlist.txt"))?;
 
-		let error = scan(root.as_path(), &CancellationToken::new())
+		let error = scan(root.as_path(), &binding, &CancellationToken::new())
 			.expect_err("missing modlist must abort the scan");
 
 		assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
@@ -1054,7 +1089,7 @@ mod tests {
 	#[test]
 	fn indexed_content_reads_hash_once_opened_and_report_namespace_replacements_as_failures()
 	-> Result<(), Box<dyn Error>> {
-		let (_temp, root) = fixture()?;
+		let (_temp, root, binding) = fixture()?;
 		write_provider(
 			root.as_path(),
 			"Hashable",
@@ -1062,7 +1097,7 @@ mod tests {
 			"schema_version = 1\n",
 		)?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Hashable\n")?;
-		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
 		let id = completed
 			.providers
 			.iter()
@@ -1071,7 +1106,7 @@ mod tests {
 			.map(|file| &file.id)
 			.ok_or("indexed mod file")?;
 
-		let read = read_content(root.as_path(), id, &CancellationToken::new())
+		let read = read_content(root.as_path(), &binding, id, &CancellationToken::new())
 			.expect("content read must complete");
 		let ConflictContentRead::Sha256(digest) = read else {
 			return Err("stable content must hash".into());
@@ -1082,7 +1117,7 @@ mod tests {
 		);
 
 		fs::remove_file(root.as_path().join("mods/Hashable/file.txt"))?;
-		let error = read_content(root.as_path(), id, &CancellationToken::new())
+		let error = read_content(root.as_path(), &binding, id, &CancellationToken::new())
 			.expect_err("deleted indexed content must invalidate the complete query");
 		assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
 
@@ -1090,7 +1125,7 @@ mod tests {
 		{
 			fs::write(root.as_path().join("mods/Hashable/replacement.txt"), b"replacement")?;
 			symlink("replacement.txt", root.as_path().join("mods/Hashable/file.txt"))?;
-			let error = read_content(root.as_path(), id, &CancellationToken::new())
+			let error = read_content(root.as_path(), &binding, id, &CancellationToken::new())
 				.expect_err("reparse replacement must invalidate the complete query");
 			assert_eq!(error.current_context().code(), ErrorCode::IoFailure);
 		}

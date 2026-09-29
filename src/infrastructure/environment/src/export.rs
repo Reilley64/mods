@@ -433,7 +433,6 @@ mod tests {
 	use application::ports::InitializationProfileSources;
 	use application::ports::ProfileSource;
 	use domain::GameInstallationPath;
-	use domain::SteamBuildId;
 	use std::cell::Cell;
 	use std::fs;
 	use std::io;
@@ -543,10 +542,8 @@ mod tests {
 		let game = parent.join("game");
 		fs::create_dir_all(game.join("Data")).context(ErrorMarker::io_failure())?;
 		fs::write(game.join("Data/FalloutNV.esm"), b"base").context(ErrorMarker::io_failure())?;
-		let binding = GameBinding::new(
-			GameInstallationPath::new(game).context(ErrorMarker::game_install_invalid())?,
-			SteamBuildId::new(1).context(ErrorMarker::game_install_invalid())?,
-		);
+		let binding =
+			GameBinding::new(GameInstallationPath::new(game).context(ErrorMarker::game_install_invalid())?);
 		EnvironmentAdapter.publish(
 			&root,
 			InitializationPlan {

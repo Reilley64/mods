@@ -14,7 +14,6 @@ use application::installation::ProjectedModState;
 use application::installation::TombstoneScope;
 use application::installation::WinnerReason;
 use application::settings::SetGameDirectoryOutput;
-use application::settings::SetGameDirectoryWarning;
 use application::settings::SettingRecord;
 use application::settings::SettingSource;
 use application::settings::SettingValue;
@@ -60,17 +59,8 @@ pub(crate) fn setting(record: &SettingRecord) -> String {
 	)
 }
 
-pub(crate) fn set_game_directory(output: &SetGameDirectoryOutput) -> (String, String) {
-	let stderr = output
-		.warnings
-		.iter()
-		.map(|warning| match warning {
-			SetGameDirectoryWarning::EffectiveGameBindingInvalid { .. } => {
-				"warning: MODS_GAME_DIR build does not match observed-build-id\n"
-			}
-		})
-		.collect();
-	(String::new(), stderr)
+pub(crate) fn set_game_directory(_output: &SetGameDirectoryOutput) -> (String, String) {
+	(String::new(), String::new())
 }
 
 pub(crate) fn additional_selections(output: &AdditionalSelectionsRequired) -> (String, String) {
@@ -461,7 +451,6 @@ mod tests {
 	use application::installation::VisibleOption;
 	use application::settings::EffectiveBinding;
 	use application::settings::SetGameDirectoryOutput;
-	use application::settings::SetGameDirectoryWarning;
 	use application::settings::SettingKey;
 	use application::settings::SettingRecord;
 	use application::settings::SettingSource;
@@ -475,7 +464,6 @@ mod tests {
 	use domain::ModName;
 	use domain::ResolvedOptionType;
 	use domain::Sha256Digest;
-	use domain::SteamBuildId;
 	use std::env::current_dir;
 	use std::error::Error;
 
@@ -572,21 +560,18 @@ mod tests {
 	fn mutation_output_is_quiet_except_for_actionable_warnings() -> Result<(), Box<dyn Error>> {
 		let game_directory = GameInstallationPath::new(current_dir()?.join("game"))
 			.map_err(|_| "test game path must be valid")?;
-		let build_id = SteamBuildId::new(1).map_err(|_| "test build ID must be valid")?;
-		let binding = GameBinding::new(game_directory.clone(), build_id);
+		let binding = GameBinding::new(game_directory.clone());
 		let mut initialize_output = InitializeEnvironmentOutput {
 			game_binding: binding,
 			profile_files: Vec::new(),
 			warnings: Vec::new(),
 		};
-		let mut set_output = SetGameDirectoryOutput {
+		let set_output = SetGameDirectoryOutput {
 			stored_value: game_directory.clone(),
-			stored_observed_build_id: build_id,
 			effective_value: game_directory,
 			source: SettingSource::Manifest,
 			shadowed: false,
 			effective_binding: EffectiveBinding::Valid,
-			warnings: Vec::new(),
 		};
 
 		assert_eq!(initialization(&initialize_output), (String::new(), String::new()));
@@ -595,13 +580,6 @@ mod tests {
 		initialize_output
 			.warnings
 			.push(InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed);
-		set_output
-			.warnings
-			.push(SetGameDirectoryWarning::EffectiveGameBindingInvalid {
-				variable: "MODS_GAME_DIR",
-				expected_build_id: 1,
-				actual_build_id: 2,
-			});
 		assert_eq!(
 			initialization(&initialize_output),
 			(
@@ -609,13 +587,7 @@ mod tests {
 				"warning: Bethesda registry fallback was used\n".to_owned()
 			)
 		);
-		assert_eq!(
-			set_game_directory(&set_output),
-			(
-				String::new(),
-				"warning: MODS_GAME_DIR build does not match observed-build-id\n".to_owned(),
-			)
-		);
+		assert_eq!(set_game_directory(&set_output), (String::new(), String::new()));
 
 		Ok(())
 	}

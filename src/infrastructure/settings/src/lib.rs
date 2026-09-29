@@ -1,5 +1,3 @@
-#![cfg_attr(test, feature(fn_traits))]
-
 mod config_source;
 mod fs_access;
 mod layout;
@@ -7,7 +5,6 @@ mod manifest_writer;
 
 use application::ErrorMarker;
 use application::ports::CheckSettingsReadiness;
-use application::ports::LoadSettings;
 use application::ports::PortFuture;
 use application::ports::PreviewGameBinding;
 use application::ports::ReadInitializationGameOverride;
@@ -25,8 +22,6 @@ use domain::EnvironmentRoot;
 use domain::EnvironmentSchemaVersion;
 use domain::GameBinding;
 use domain::GameInstallationPath;
-use domain::SteamAppId;
-use domain::SteamBuildId;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -37,13 +32,34 @@ use std::io::ErrorKind;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 use toml::from_str;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsLoadMode {
+	Inspection,
+	ReadOnly,
+	Mutation,
+	Execution,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedSettings {
+	pub resolved: ResolvedSettings,
+	manifest: RawManifest,
+	source: String,
+}
 
 #[derive(Clone)]
 pub struct SettingsAdapter {
 	root: EnvironmentRoot,
 	environment: Arc<Vec<(OsString, OsString)>>,
+	#[cfg(test)]
+	source_loads: Arc<AtomicUsize>,
 }
 
 impl SettingsAdapter {
@@ -51,6 +67,8 @@ impl SettingsAdapter {
 		Self {
 			root,
 			environment: Arc::new(env::vars_os().collect()),
+			#[cfg(test)]
+			source_loads: Arc::new(AtomicUsize::new(0)),
 		}
 	}
 
@@ -59,6 +77,7 @@ impl SettingsAdapter {
 		Self {
 			root,
 			environment: Arc::new(environment),
+			source_loads: Arc::new(AtomicUsize::new(0)),
 		}
 	}
 
@@ -76,43 +95,77 @@ impl SettingsAdapter {
 		Ok(())
 	}
 
-	/// Reads the effective binding while execution owns Profile State validation.
+	/// Loads one command snapshot. Downstream operations receive its typed values.
 	///
 	/// # Errors
-	/// Refuses pending work, invalid manifests or overrides, unsafe roots, and cancellation.
-	pub fn load_execution_binding(&self, cancellation: &CancellationToken) -> Result<GameBinding, ErrorMarker> {
+	/// Refuses unsafe roots, pending work, invalid settings, and cancellation.
+	pub fn load_command(
+		&self,
+		mode: SettingsLoadMode,
+		cancellation: &CancellationToken,
+	) -> Result<LoadedSettings, ErrorMarker> {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation)?;
-		let (root, text) = open_manifest_root(&self.root)?;
-		refuse_unfinished_operation(&root, SettingsAccess::Mutation)?;
+		let access = if matches!(mode, SettingsLoadMode::ReadOnly | SettingsLoadMode::Inspection) {
+			SettingsAccess::ReadOnly
+		} else {
+			SettingsAccess::Mutation
+		};
+		refuse_unfinished_operation_before_layout(&self.root, access)?;
+		let (root, source) = open_manifest_root(&self.root)?;
+		if matches!(mode, SettingsLoadMode::ReadOnly | SettingsLoadMode::Mutation) {
+			layout::validate(&root)?;
+		}
+		refuse_unfinished_operation(&root, access)?;
 
+		#[cfg(test)]
+		self.source_loads.fetch_add(1, Ordering::Relaxed);
 		let (manifest, effective, shadowed) = config_source::read_sources(
-			&text,
+			&source,
 			&self.environment,
 			ErrorMarker::settings_environment_invalid(),
 		)?;
-		let settings = resolved_settings(manifest, effective, shadowed)?;
-
+		let resolved = resolved_settings(manifest.clone(), effective, shadowed)?;
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		Ok(settings.effective_binding)
+		Ok(LoadedSettings {
+			resolved,
+			manifest,
+			source,
+		})
 	}
 
+	/// Checks source bytes without resolving configuration again.
+	///
+	/// # Errors
+	/// Returns a source-change error, safe-read error, or cancellation.
+	pub fn verify_source(
+		&self,
+		loaded: &LoadedSettings,
+		cancellation: &CancellationToken,
+	) -> Result<(), ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		let (_, source) = open_manifest_root(&self.root)?;
+		if source != loaded.source {
+			return Err(report!(ErrorMarker::environment_invalid(Some("export_source_changed"))));
+		}
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		Ok(())
+	}
+
+	#[cfg(test)]
 	fn load(&self) -> Result<ResolvedSettings, ErrorMarker> {
-		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::ReadOnly)?;
-		let (root, text) = open_bound_root(&self.root)?;
-		refuse_unfinished_operation(&root, SettingsAccess::ReadOnly)?;
-		let (manifest, effective, shadowed) = config_source::read_sources(
-			&text,
-			&self.environment,
-			ErrorMarker::settings_environment_invalid(),
-		)?;
-		resolved_settings(manifest, effective, shadowed)
+		self.load_command(SettingsLoadMode::ReadOnly, &CancellationToken::new())
+			.map(|loaded| loaded.resolved)
 	}
 
 	fn initialization_override(&self) -> Result<Option<GameInstallationPath>, ErrorMarker> {
@@ -123,22 +176,20 @@ impl SettingsAdapter {
 		Ok(Some(path))
 	}
 
-	fn preview_game_binding(&self, binding: GameBinding) -> Result<StoredAndEffectiveBinding, ErrorMarker> {
-		Ok(self.prepare_game_binding(binding)?.outcome)
+	fn preview_game_binding(
+		&self,
+		loaded: &LoadedSettings,
+		binding: GameBinding,
+	) -> Result<StoredAndEffectiveBinding, ErrorMarker> {
+		Ok(self.prepare_game_binding(loaded, binding)?.outcome)
 	}
 
-	fn prepare_game_binding(&self, binding: GameBinding) -> Result<PreparedGameBinding, ErrorMarker> {
-		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation)?;
-		let (root, text) = open_bound_root(&self.root)?;
-		refuse_unfinished_operation(&root, SettingsAccess::Mutation)?;
-
-		let (manifest, _, _) = config_source::read_sources(
-			&text,
-			&self.environment,
-			ErrorMarker::settings_environment_invalid(),
-		)?;
-		validate_manifest(&manifest)?;
-
+	fn prepare_game_binding(
+		&self,
+		loaded: &LoadedSettings,
+		binding: GameBinding,
+	) -> Result<PreparedGameBinding, ErrorMarker> {
+		let manifest = &loaded.manifest;
 		let game_dir = binding
 			.game_directory()
 			.as_path()
@@ -147,17 +198,28 @@ impl SettingsAdapter {
 		let replacement = toml::to_string_pretty(&WritableManifest {
 			schema_version: manifest.schema_version,
 			name: manifest.name.as_deref(),
-			steam_app_id: manifest.steam_app_id,
 			game_dir,
-			observed_build_id: binding.observed_build_id().get(),
 		})
 		.context(ErrorMarker::setting_value_invalid())?;
 
-		let (replacement_manifest, replacement_effective, shadowed) = config_source::read_sources(
-			&replacement,
-			&self.environment,
-			ErrorMarker::settings_environment_invalid(),
-		)?;
+		let shadowed = loaded
+			.resolved
+			.settings
+			.iter()
+			.any(|record| record.key == SettingKey::GameDir && record.shadowed);
+		let mut replacement_manifest = manifest.clone();
+		replacement_manifest.game_dir = game_dir.to_owned();
+		let mut replacement_effective = replacement_manifest.clone();
+		if shadowed {
+			replacement_effective.game_dir = loaded
+				.resolved
+				.effective_binding
+				.game_directory()
+				.as_path()
+				.to_str()
+				.ok_or_else(|| report!(ErrorMarker::setting_value_invalid()))?
+				.to_owned();
+		}
 		let resolved = resolved_settings(replacement_manifest, replacement_effective, shadowed)?;
 		let game_record = resolved
 			.settings
@@ -171,15 +233,12 @@ impl SettingsAdapter {
 			shadowed: game_record.shadowed,
 		};
 
-		Ok(PreparedGameBinding {
-			root,
-			replacement,
-			outcome,
-		})
+		Ok(PreparedGameBinding { replacement, outcome })
 	}
 
 	fn store_game_binding(
 		&self,
+		loaded: &LoadedSettings,
 		binding: GameBinding,
 		cancellation: CancellationToken,
 	) -> Result<StoredAndEffectiveBinding, ErrorMarker> {
@@ -187,14 +246,22 @@ impl SettingsAdapter {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let prepared = self.prepare_game_binding(binding)?;
+		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation)?;
+		let (root, current_source) = open_bound_root(&self.root)?;
+		if current_source != loaded.source {
+			return Err(report!(ErrorMarker::environment_invalid(Some(
+				"settings_source_changed"
+			))));
+		}
+		let prepared = self.prepare_game_binding(loaded, binding)?;
 
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
 		manifest_writer::replace_validated(
-			&prepared.root,
+			&root,
+			&loaded.source,
 			&prepared.replacement,
 			&cancellation,
 			|candidate| {
@@ -215,15 +282,7 @@ impl SettingsAdapter {
 		})
 	}
 
-	pub fn load_port(&self) -> LoadSettings {
-		let adapter = self.clone();
-		Arc::new(move || {
-			let result = adapter.load();
-			Box::pin(async move { result }) as PortFuture<_>
-		})
-	}
-
-	pub fn preview_port(&self) -> PreviewGameBinding {
+	pub fn preview_port(&self, loaded: LoadedSettings) -> PreviewGameBinding {
 		let adapter = self.clone();
 		Arc::new(move |binding, cancellation| {
 			let result = (|| {
@@ -231,7 +290,7 @@ impl SettingsAdapter {
 					return Err(report!(ErrorMarker::operation_cancelled()));
 				}
 
-				let outcome = adapter.preview_game_binding(binding)?;
+				let outcome = adapter.preview_game_binding(&loaded, binding)?;
 
 				if cancellation.is_cancelled() {
 					return Err(report!(ErrorMarker::operation_cancelled()));
@@ -251,17 +310,16 @@ impl SettingsAdapter {
 		})
 	}
 
-	pub fn store_port(&self) -> StoreGameBinding {
+	pub fn store_port(&self, loaded: LoadedSettings) -> StoreGameBinding {
 		let adapter = self.clone();
 		Arc::new(move |binding, cancellation| {
-			let result = adapter.store_game_binding(binding, cancellation);
+			let result = adapter.store_game_binding(&loaded, binding, cancellation);
 			Box::pin(async move { result }) as PortFuture<_>
 		})
 	}
 }
 
 struct PreparedGameBinding {
-	root: Dir,
 	replacement: String,
 	outcome: StoredAndEffectiveBinding,
 }
@@ -271,9 +329,7 @@ struct WritableManifest<'a> {
 	schema_version: u32,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<&'a str>,
-	steam_app_id: u32,
 	game_dir: &'a str,
-	observed_build_id: u64,
 }
 
 fn open_bound_root(root: &EnvironmentRoot) -> Result<(Dir, String), ErrorMarker> {
@@ -382,8 +438,6 @@ fn refuse_unfinished_operation_in_temp(temp: &Dir, access: SettingsAccess) -> Re
 }
 fn validate_manifest(raw: &RawManifest) -> Result<(GameBinding, Option<EnvironmentName>), ErrorMarker> {
 	EnvironmentSchemaVersion::new(raw.schema_version).context(ErrorMarker::environment_schema_unsupported())?;
-	SteamAppId::new(raw.steam_app_id).context(ErrorMarker::environment_invalid(None))?;
-	let build = SteamBuildId::new(raw.observed_build_id).context(ErrorMarker::environment_invalid(None))?;
 	let path = GameInstallationPath::new(raw.game_dir.clone().into())
 		.context(ErrorMarker::environment_invalid(None))?;
 	let name =
@@ -391,7 +445,7 @@ fn validate_manifest(raw: &RawManifest) -> Result<(GameBinding, Option<Environme
 			.map(EnvironmentName::new)
 			.transpose()
 			.context(ErrorMarker::environment_invalid(None))?;
-	Ok((GameBinding::new(path, build), name))
+	Ok((GameBinding::new(path), name))
 }
 
 fn resolved_settings(
@@ -404,16 +458,12 @@ fn resolved_settings(
 	let manifest_values = [
 		SettingValue::UnsignedInteger(u64::from(manifest.schema_version)),
 		manifest.name.clone().map_or(SettingValue::Unset, SettingValue::String),
-		SettingValue::UnsignedInteger(u64::from(manifest.steam_app_id)),
 		SettingValue::Path(manifest_binding.game_directory().as_path().to_path_buf()),
-		SettingValue::UnsignedInteger(manifest.observed_build_id),
 	];
 	let effective_values = [
 		SettingValue::UnsignedInteger(u64::from(effective.schema_version)),
 		effective.name.map_or(SettingValue::Unset, SettingValue::String),
-		SettingValue::UnsignedInteger(u64::from(effective.steam_app_id)),
 		SettingValue::Path(effective_binding.game_directory().as_path().to_path_buf()),
-		SettingValue::UnsignedInteger(effective.observed_build_id),
 	];
 	let settings = SettingKey::ALL
 		.into_iter()
@@ -448,19 +498,17 @@ fn resolved_settings(
 #[cfg(test)]
 mod tests {
 	use super::SettingsAdapter;
+	use super::SettingsLoadMode;
 	use super::fs_access;
 	use super::manifest_writer;
 	use application::ErrorCode;
-	use application::ErrorMarker;
 	use application::settings::SettingKey;
 	use application::settings::SettingSource;
 	use application::settings::SettingValue;
 	use domain::EnvironmentRoot;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
-	use domain::SteamBuildId;
 	use rootcause::Result;
-	use rootcause::report;
 	use std::ffi::OsString;
 	use std::fs;
 	use std::io::Error as IoError;
@@ -472,9 +520,7 @@ mod tests {
 	#[cfg(windows)]
 	use std::os::windows::fs::symlink_file as windows_symlink_file;
 	use std::path::Path;
-	use std::task::Context;
-	use std::task::Poll;
-	use std::task::Waker;
+	use std::sync::atomic::Ordering;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
@@ -526,8 +572,8 @@ mod tests {
 			temp.path().join("mods.toml"),
 			format!(
 				concat!(
-					"schema_version = 1\nname = \"Mojave\"\nsteam_app_id = 22380\n",
-					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n",
+					"schema_version = 1\nname = \"Mojave\"\n",
+					"game_dir = \"{MANIFEST_GAME_DIR}\"\n",
 				),
 				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
 			),
@@ -541,11 +587,14 @@ mod tests {
 		fs::remove_file(temp.path().join("profile/plugins.txt"))?;
 		fs::remove_file(temp.path().join("profile/loadorder.txt"))?;
 		let adapter = SettingsAdapter::with_environment(root, Vec::new());
-		let binding = adapter.load_execution_binding(&CancellationToken::new())?;
+		let binding = adapter
+			.load_command(SettingsLoadMode::Execution, &CancellationToken::new())?
+			.resolved
+			.effective_binding;
 		assert_eq!(binding.game_directory().as_path(), Path::new(MANIFEST_GAME_DIR));
 		assert!(!temp.path().join("profile/plugins.txt").exists());
 		fs::create_dir(temp.path().join("temp/pending"))?;
-		let result = adapter.load_execution_binding(&CancellationToken::new());
+		let result = adapter.load_command(SettingsLoadMode::Execution, &CancellationToken::new());
 		assert!(
 			matches!(result, Err(error) if error.current_context().code() == ErrorCode::ManualCleanupRequired)
 		);
@@ -576,7 +625,7 @@ mod tests {
 			vec![(OsString::from("mods_game_dir"), OsString::from(OVERRIDE_GAME_DIR))],
 		);
 		let resolved = adapter.load()?;
-		let record = &resolved.settings[3];
+		let record = &resolved.settings[2];
 		assert_eq!(record.value, SettingValue::Path(OVERRIDE_GAME_DIR.into()));
 		assert_eq!(record.manifest_value, SettingValue::Path(MANIFEST_GAME_DIR.into()));
 		assert!(record.shadowed);
@@ -584,7 +633,7 @@ mod tests {
 	}
 
 	#[test]
-	fn load_port_refuses_unfinished_pre_manifest_work_without_mutating() -> Result<()> {
+	fn command_load_refuses_unfinished_pre_manifest_work_without_mutating() -> Result<()> {
 		let temp = TempDir::new()?;
 		let root = EnvironmentRoot::new(fs::canonicalize(temp.path())?)?;
 		let operation = temp.path().join("temp/operation");
@@ -593,12 +642,8 @@ mod tests {
 		fs::write(&marker, "pending")?;
 		let before = fs::read(&marker)?;
 
-		let load = SettingsAdapter::with_environment(root, Vec::new()).load_port();
-		let mut future = load.call(());
-		let context = &mut Context::from_waker(Waker::noop());
-		let Poll::Ready(result) = future.as_mut().poll(context) else {
-			return Err(report!(ErrorMarker::environment_invalid(None)).into());
-		};
+		let result = SettingsAdapter::with_environment(root, Vec::new())
+			.load_command(SettingsLoadMode::ReadOnly, &CancellationToken::new());
 
 		assert!(matches!(
 			result,
@@ -630,37 +675,12 @@ mod tests {
 	#[test]
 	fn invalid_flat_manifests_fail_unchanged() -> Result<()> {
 		let invalid = [
-			format!("steam_app_id = 22380\ngame_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n"),
-			format!(
-				concat!(
-					"schema_version = 2\nsteam_app_id = 22380\n",
-					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n",
-				),
-				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
-			),
-			format!(
-				concat!(
-					"schema_version = 1\nsteam_app_id = 1\n",
-					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n",
-				),
-				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
-			),
-			format!(
-				concat!(
-					"schema_version = 1\nsteam_app_id = 22380\n",
-					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 0\n",
-				),
-				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
-			),
-			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = \"relative\"\nobserved_build_id = 42\n"
-				.to_owned(),
-			format!(
-				concat!(
-					"schema_version = 1\nsteam_app_id = 22380\n",
-					"game_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\nunknown = true\n",
-				),
-				MANIFEST_GAME_DIR = MANIFEST_GAME_DIR,
-			),
+			format!("game_dir = \"{MANIFEST_GAME_DIR}\"\n"),
+			format!("schema_version = 2\ngame_dir = \"{MANIFEST_GAME_DIR}\"\n"),
+			format!("schema_version = 1\ngame_dir = \"{MANIFEST_GAME_DIR}\"\nsteam_app_id = 22380\n"),
+			format!("schema_version = 1\ngame_dir = \"{MANIFEST_GAME_DIR}\"\nobserved_build_id = 42\n"),
+			"schema_version = 1\ngame_dir = \"relative\"\n".to_owned(),
+			format!("schema_version = 1\ngame_dir = \"{MANIFEST_GAME_DIR}\"\nunknown = true\n"),
 		];
 		for contents in invalid {
 			let (temp, root) = fixture()?;
@@ -675,11 +695,16 @@ mod tests {
 	#[test]
 	fn failed_manifest_stage_blocks_a_later_store_and_preserves_all_artifacts() -> Result<()> {
 		let (temp, root) = fixture()?;
+		let adapter = SettingsAdapter::with_environment(root.clone(), Vec::new());
+		let loaded = adapter.load_command(SettingsLoadMode::Mutation, &CancellationToken::new())?;
 		let directory = fs_access::open_ambient_dir(root.as_path())?;
-		let first =
-			manifest_writer::replace_validated(&directory, "candidate", &CancellationToken::new(), |_| {
-				false
-			});
+		let first = manifest_writer::replace_validated(
+			&directory,
+			&loaded.source,
+			"candidate",
+			&CancellationToken::new(),
+			|_| false,
+		);
 		assert!(first.is_err());
 
 		let manifest_before = fs::read(temp.path().join("mods.toml"))?;
@@ -688,13 +713,13 @@ mod tests {
 		let operation_path = operations_before[0].path();
 		let staged_path = operation_path.join("mods.toml");
 		let staged_before = fs::read(&staged_path)?;
-		let binding = GameBinding::new(
-			GameInstallationPath::new(STORED_GAME_DIR.into())?,
-			SteamBuildId::new(99)?,
-		);
+		let binding = GameBinding::new(GameInstallationPath::new(STORED_GAME_DIR.into())?);
 
-		let second = SettingsAdapter::with_environment(root, Vec::new())
-			.store_game_binding(binding, CancellationToken::new());
+		let second = SettingsAdapter::with_environment(root, Vec::new()).store_game_binding(
+			&loaded,
+			binding,
+			CancellationToken::new(),
+		);
 
 		assert!(matches!(
 			second,
@@ -711,16 +736,18 @@ mod tests {
 	#[test]
 	fn cancelled_store_preserves_manifest_and_starts_no_operation() -> Result<()> {
 		let (temp, root) = fixture()?;
+		let adapter = SettingsAdapter::with_environment(root.clone(), Vec::new());
+		let loaded = adapter.load_command(SettingsLoadMode::Mutation, &CancellationToken::new())?;
 		let before = fs::read(temp.path().join("mods.toml"))?;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
-		let binding = GameBinding::new(
-			GameInstallationPath::new(STORED_GAME_DIR.into())?,
-			SteamBuildId::new(99)?,
-		);
+		let binding = GameBinding::new(GameInstallationPath::new(STORED_GAME_DIR.into())?);
 
-		let result =
-			SettingsAdapter::with_environment(root, Vec::new()).store_game_binding(binding, cancellation);
+		let result = SettingsAdapter::with_environment(root, Vec::new()).store_game_binding(
+			&loaded,
+			binding,
+			cancellation,
+		);
 
 		assert!(matches!(
 			result,
@@ -732,26 +759,67 @@ mod tests {
 	}
 
 	#[test]
+	fn command_snapshot_is_loaded_once_and_reused_for_preview_and_store() -> Result<()> {
+		let (_temp, root) = fixture()?;
+		let adapter = SettingsAdapter::with_environment(
+			root,
+			vec![("MODS_GAME_DIR".into(), OVERRIDE_GAME_DIR.into())],
+		);
+		let loaded = adapter.load_command(SettingsLoadMode::Mutation, &CancellationToken::new())?;
+		let stored = GameBinding::new(GameInstallationPath::new(STORED_GAME_DIR.into())?);
+
+		adapter.verify_source(&loaded, &CancellationToken::new())?;
+		let preview = adapter.preview_game_binding(&loaded, stored.clone())?;
+		let result = adapter.store_game_binding(&loaded, stored, CancellationToken::new())?;
+
+		assert_eq!(adapter.source_loads.load(Ordering::Relaxed), 1);
+		assert_eq!(preview.effective, result.effective);
+		assert_eq!(
+			result.effective.game_directory().as_path(),
+			Path::new(OVERRIDE_GAME_DIR)
+		);
+		assert!(result.shadowed);
+		Ok(())
+	}
+
+	#[test]
+	fn mutation_snapshot_refuses_changed_source_without_overwriting_it() -> Result<()> {
+		let (temp, root) = fixture()?;
+		let adapter = SettingsAdapter::with_environment(root, Vec::new());
+		let loaded = adapter.load_command(SettingsLoadMode::Mutation, &CancellationToken::new())?;
+		let stored = GameBinding::new(GameInstallationPath::new(STORED_GAME_DIR.into())?);
+		fs::write(temp.path().join("mods.toml"), "concurrent edit")?;
+
+		assert!(adapter.preview_game_binding(&loaded, stored.clone()).is_ok());
+		let error = adapter
+			.store_game_binding(&loaded, stored, CancellationToken::new())
+			.err()
+			.ok_or_else(|| IoError::other("changed source must fail"))?;
+		assert_eq!(error.current_context().phase(), Some("settings_source_changed"));
+		assert_eq!(fs::read_to_string(temp.path().join("mods.toml"))?, "concurrent edit");
+		assert!(fs::read_dir(temp.path().join("temp"))?.next().is_none());
+		assert_eq!(adapter.source_loads.load(Ordering::Relaxed), 1);
+		Ok(())
+	}
+
+	#[test]
 	fn preview_resolves_shadowing_without_mutating_the_manifest() -> Result<()> {
 		let (temp, root) = fixture()?;
 		let adapter = SettingsAdapter::with_environment(
 			root,
 			vec![(OsString::from("MODS_GAME_DIR"), OsString::from(OVERRIDE_GAME_DIR))],
 		);
-		let stored = GameBinding::new(
-			GameInstallationPath::new(STORED_GAME_DIR.into())?,
-			SteamBuildId::new(99)?,
-		);
+		let stored = GameBinding::new(GameInstallationPath::new(STORED_GAME_DIR.into())?);
 		let before = fs::read(temp.path().join("mods.toml"))?;
 
-		let outcome = adapter.preview_game_binding(stored.clone())?;
+		let loaded = adapter.load_command(SettingsLoadMode::Mutation, &CancellationToken::new())?;
+		let outcome = adapter.preview_game_binding(&loaded, stored.clone())?;
 
 		assert_eq!(outcome.stored, stored);
 		assert_eq!(
 			outcome.effective.game_directory().as_path(),
 			Path::new(OVERRIDE_GAME_DIR)
 		);
-		assert_eq!(outcome.effective.observed_build_id(), SteamBuildId::new(99)?);
 		assert!(outcome.shadowed);
 		assert_eq!(fs::read(temp.path().join("mods.toml"))?, before);
 		assert!(fs::read_dir(temp.path().join("temp"))?.next().is_none());
@@ -759,17 +827,15 @@ mod tests {
 	}
 
 	#[test]
-	fn store_replaces_path_and_observed_build_together_under_shadowing() -> Result<()> {
+	fn store_replaces_path_under_shadowing() -> Result<()> {
 		let (temp, root) = fixture()?;
 		let adapter = SettingsAdapter::with_environment(
 			root,
 			vec![(OsString::from("MODS_GAME_DIR"), OsString::from(OVERRIDE_GAME_DIR))],
 		);
-		let stored = GameBinding::new(
-			GameInstallationPath::new(STORED_GAME_DIR.into())?,
-			SteamBuildId::new(99)?,
-		);
-		let outcome = adapter.store_game_binding(stored, CancellationToken::new())?;
+		let stored = GameBinding::new(GameInstallationPath::new(STORED_GAME_DIR.into())?);
+		let loaded = adapter.load_command(SettingsLoadMode::Mutation, &CancellationToken::new())?;
+		let outcome = adapter.store_game_binding(&loaded, stored, CancellationToken::new())?;
 		assert!(outcome.shadowed);
 		assert_eq!(
 			outcome.effective.game_directory().as_path(),
@@ -777,7 +843,8 @@ mod tests {
 		);
 		let text = fs::read_to_string(temp.path().join("mods.toml"))?;
 		assert!(text.contains(&format!("game_dir = \"{STORED_GAME_DIR}\"")));
-		assert!(text.contains("observed_build_id = 99"));
+		assert!(!text.contains("observed_build_id"));
+		assert!(!text.contains("steam_app_id"));
 		Ok(())
 	}
 

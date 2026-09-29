@@ -100,14 +100,7 @@ impl GamePlatformAdapter {
 		expected: GameBinding,
 		root: &EnvironmentRoot,
 	) -> Result<GameBinding, ErrorMarker> {
-		let actual = self.validate_with_root(expected.game_directory().clone(), root)?;
-		if actual.observed_build_id() != expected.observed_build_id() {
-			return Err(report!(ErrorMarker::game_build_mismatch(
-				expected.observed_build_id().get(),
-				actual.observed_build_id().get(),
-			)));
-		}
-		Ok(actual)
+		self.validate_with_root(expected.game_directory().clone(), root)
 	}
 }
 
@@ -180,7 +173,7 @@ mod tests {
 			&CancellationToken::new(),
 		)?;
 		assert_eq!(resolved.source, GameInstallationSource::Steam);
-		assert_eq!(resolved.binding.observed_build_id().get(), 88);
+		assert_eq!(resolved.binding.game_directory().as_path(), steam_game);
 		drop(steam_fixture);
 
 		let fallback = adapter_with_discovery(Vec::new(), vec![bethesda_game]).resolve(

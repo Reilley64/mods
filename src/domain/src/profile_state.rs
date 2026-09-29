@@ -49,7 +49,7 @@ mod tests {
 		assert!(canonical_profile_routing_valid("Fallout.ini", &canonical));
 		assert!(canonical.contains("bInvalidateOlderFiles=0"));
 		let execution = derive_profile_ini(
-			"Fallout.ini",
+			"FalloutCustom.ini",
 			&canonical,
 			ProfileIniPurpose::Execution,
 			"User.bsa, Fallout - Invalidation.bsa",
@@ -212,7 +212,8 @@ pub fn canonical_profile_routing_valid(name: &str, text: &str) -> bool {
 }
 
 /// The archive list must be selected from untouched canonical inputs before
-/// deriving any copies. This function does not create absent optional files.
+/// deriving any copies. Execution callers materialize an absent FalloutCustom.ini.
+/// Execution overrides require JIP LN NVSE; GECK consumption is not supported here.
 pub fn derive_profile_ini(name: &str, text: &str, purpose: ProfileIniPurpose, archive_list: &str) -> String {
 	if !["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"]
 		.iter()
@@ -221,7 +222,11 @@ pub fn derive_profile_ini(name: &str, text: &str, purpose: ProfileIniPurpose, ar
 		return text.to_owned();
 	}
 
-	let fallout = name.eq_ignore_ascii_case("Fallout.ini");
+	if purpose == ProfileIniPurpose::Execution && !name.eq_ignore_ascii_case("FalloutCustom.ini") {
+		return text.to_owned();
+	}
+
+	let fallout = name.eq_ignore_ascii_case("Fallout.ini") || purpose == ProfileIniPurpose::Execution;
 	let archive =
 		purpose != ProfileIniPurpose::Canonical && (fallout || name.eq_ignore_ascii_case("FalloutCustom.ini"));
 	let mut output = filter_ini_keys(text, |key| {
@@ -245,11 +250,17 @@ pub fn derive_profile_ini(name: &str, text: &str, purpose: ProfileIniPurpose, ar
 		newline,
 	);
 	if archive {
-		let mut archives = vec!["Fallout - Invalidation.bsa"];
-		archives.extend(archive_list
+		let mut archives: Vec<_> = archive_list
 			.split(',')
 			.map(str::trim)
-			.filter(|value| !value.is_empty() && case_fold_key(value) != "fallout - invalidation.bsa"));
+			.filter(|value| !value.is_empty() && case_fold_key(value) != "fallout - invalidation.bsa")
+			.collect();
+		if purpose == ProfileIniPurpose::Execution {
+			archives.push("Fallout - Invalidation.bsa");
+		} else {
+			archives.insert(0, "Fallout - Invalidation.bsa");
+		}
+
 		append_ini_section(
 			&mut output,
 			"Archive",

@@ -26,7 +26,6 @@ mod tests {
 	use application::ErrorCode;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
-	use domain::SteamBuildId;
 	use rootcause::Result;
 	use rootcause::report;
 	use std::fs;
@@ -37,7 +36,7 @@ mod tests {
 	use tokio_util::sync::CancellationToken;
 
 	#[test]
-	fn reopening_rejects_a_changed_steam_build() -> Result<()> {
+	fn reopening_ignores_a_changed_steam_build() -> Result<()> {
 		let (_temp, game) = fixture()?;
 		let binding = steam::validate(&game)?;
 		let steamapps = game
@@ -56,10 +55,7 @@ mod tests {
 
 		let result = reopen_bound_game(&binding, &CancellationToken::new());
 
-		assert_eq!(
-			result.as_ref().err().map(|error| error.current_context().code()),
-			Some(ErrorCode::GameBuildMismatch),
-		);
+		assert!(result.is_ok());
 		Ok(())
 	}
 
@@ -71,7 +67,7 @@ mod tests {
 			PathBuf::from("/game-that-must-not-be-opened")
 		};
 		let path = GameInstallationPath::new(missing)?;
-		let binding = GameBinding::new(path, SteamBuildId::new(1)?);
+		let binding = GameBinding::new(path);
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 

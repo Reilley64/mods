@@ -599,7 +599,6 @@ mod tests {
 	use domain::ResolutionStatus;
 	use domain::ResolvedOptionType;
 	use domain::Sha256Digest;
-	use domain::SteamBuildId;
 	use domain::Tombstone;
 	use domain::TombstoneScope;
 	use rootcause::Result;
@@ -634,10 +633,7 @@ mod tests {
 	}
 
 	fn binding() -> GameBinding {
-		GameBinding::new(
-			GameInstallationPath::new(temp_dir().join("fnv-install-test")).expect("game path"),
-			SteamBuildId::new(1).expect("build"),
-		)
+		GameBinding::new(GameInstallationPath::new(temp_dir().join("fnv-install-test")).expect("game path"))
 	}
 
 	fn record(order: &Mutex<Vec<&'static str>>, value: &'static str) {

@@ -22,6 +22,7 @@ use application::installation::InstallPlan;
 use application::installation::InstallWarning;
 use domain::ArchiveIdentity;
 use domain::DataRelativePath;
+use domain::GameBinding;
 use domain::InstalledMod;
 use domain::case_fold_key;
 use rootcause::Result;
@@ -37,6 +38,7 @@ use toml::to_string_pretty;
 
 pub(crate) struct InstallationTransaction {
 	root_path: PathBuf,
+	binding: GameBinding,
 	approved: ApprovedInstallation,
 	remaining: HashSet<String>,
 	in_progress: HashSet<String>,
@@ -47,6 +49,7 @@ pub(crate) struct InstallationTransaction {
 impl InstallationTransaction {
 	pub(crate) fn begin(
 		root_path: &Path,
+		binding: &GameBinding,
 		approved: ApprovedInstallation,
 		cancellation: &CancellationToken,
 	) -> Result<Self, ErrorMarker> {
@@ -75,7 +78,7 @@ impl InstallationTransaction {
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 		}
 
-		let current = load_during_publication(root_path, cancellation)?;
+		let current = load_during_publication(root_path, binding, cancellation)?;
 		validate_intent(&current.installed_mods, &approved.plan)?;
 
 		let stage = operation
@@ -101,6 +104,7 @@ impl InstallationTransaction {
 			.collect();
 		Ok(Self {
 			root_path: root_path.to_owned(),
+			binding: binding.clone(),
 			approved,
 			remaining,
 			in_progress: HashSet::new(),
@@ -230,6 +234,7 @@ impl InstallationTransaction {
 		if self.approved.plan.replacement && self.approved.plan.projected_state.enabled {
 			profile_files = stage_plugin_maintenance(
 				&root,
+				&self.binding,
 				&staged_mod,
 				&staged_profile,
 				&self.approved.plan.mod_name,
@@ -239,7 +244,7 @@ impl InstallationTransaction {
 		}
 		profile_files.sort_by_key(|name| usize::from(name == "modlist.txt"));
 
-		validate_prospective_namespace(&root, &staged_mod, &self.approved.plan, cancellation)?;
+		validate_prospective_namespace(&root, &self.binding, &staged_mod, &self.approved.plan, cancellation)?;
 		sync_tree(
 			&staged_mod,
 			ErrorMarker::transaction_failure().with_phase("publication"),
@@ -282,6 +287,7 @@ impl InstallationTransaction {
 		drop(operation);
 		publish_installation(
 			&self.root_path,
+			&self.binding,
 			&root,
 			&temp,
 			&self.approved.plan,
@@ -460,6 +466,7 @@ struct PublishedProfileFile {
 
 fn publish_installation(
 	root_path: &Path,
+	binding: &GameBinding,
 	root: &SafeDir,
 	temp: &SafeDir,
 	plan: &InstallPlan,
@@ -526,18 +533,20 @@ fn publish_installation(
 	drop(staged_profile);
 	drop(stage);
 	drop(operation);
-	finish_committed_installation(root_path, root, temp, plan, profile_files)
+	finish_committed_installation(root_path, binding, root, temp, plan, profile_files)
 }
 
 fn finish_committed_installation(
 	root_path: &Path,
+	binding: &GameBinding,
 	root: &SafeDir,
 	temp: &SafeDir,
 	plan: &InstallPlan,
 	profile_files: &[PublishedProfileFile],
 ) -> Result<(), ErrorMarker> {
 	let validation_cancellation = CancellationToken::new();
-	let snapshot = load_during_publication(root_path, &validation_cancellation).context(publication_failed())?;
+	let snapshot =
+		load_during_publication(root_path, binding, &validation_cancellation).context(publication_failed())?;
 	let installed = snapshot
 		.installed_mods
 		.iter()
@@ -611,7 +620,6 @@ mod tests {
 	use domain::ModName;
 	use domain::ModPriority;
 	use domain::Sha256Digest;
-	use domain::SteamBuildId;
 	use rootcause::Result;
 	use std::env::current_dir;
 	use std::ffi::OsStr;
@@ -637,7 +645,6 @@ mod tests {
 		InitializationPlan {
 			game_binding: GameBinding::new(
 				GameInstallationPath::new(game.to_path_buf()).expect("test game path must be valid"),
-				SteamBuildId::new(7).expect("test build ID must be valid"),
 			),
 			profile_sources: InitializationProfileSources {
 				files,
@@ -742,8 +749,14 @@ mod tests {
 
 	fn install(root: &EnvironmentRoot, approved: ApprovedInstallation, path: &str, contents: &[u8]) {
 		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(root.as_path(), approved, &cancellation)
-			.expect("fixture transaction must begin");
+		let mut transaction = InstallationTransaction::begin(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			approved,
+			&cancellation,
+		)
+		.expect("fixture transaction must begin");
 		stage_file(&mut transaction, path, contents, &cancellation);
 		transaction
 			.finish(&cancellation)
@@ -768,6 +781,8 @@ mod tests {
 
 		assert_manual_cleanup_required(InstallationTransaction::begin(
 			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
 			approved_installation(&archive, "Blocked", false, false, 0, "blocked.txt"),
 			&CancellationToken::new(),
 		));
@@ -781,9 +796,15 @@ mod tests {
 		fs::write(&archive, b"archive").expect("archive fixture must exist");
 		let approved = approved_installation(&archive, "Invalid", false, false, 1, "file.txt");
 
-		let error = InstallationTransaction::begin(root.as_path(), approved, &CancellationToken::new())
-			.err()
-			.expect("invalid intent must fail after reserving publication");
+		let error = InstallationTransaction::begin(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			approved,
+			&CancellationToken::new(),
+		)
+		.err()
+		.expect("invalid intent must fail after reserving publication");
 
 		assert_eq!(error.current_context().code(), ErrorCode::TransactionFailure);
 		assert!(root.as_path().join("temp/operation").is_dir());
@@ -800,6 +821,8 @@ mod tests {
 
 		assert_manual_cleanup_required(InstallationTransaction::begin(
 			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
 			approved_installation(&archive, "Blocked", false, false, 0, "blocked.txt"),
 			&CancellationToken::new(),
 		));
@@ -830,6 +853,8 @@ mod tests {
 		let cancellation = CancellationToken::new();
 		let mut transaction = InstallationTransaction::begin(
 			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
 			approved_installation(&archive, "Staged", false, false, 0, "file.txt"),
 			&cancellation,
 		)
@@ -994,16 +1019,31 @@ mod tests {
 		fs::write(&archive, b"archive").expect("archive fixture must exist");
 		let approved = approved_installation(&archive, "New", false, false, 0, "file.txt");
 		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(root.as_path(), approved.clone(), &cancellation)
-			.expect("installation must begin");
+		let mut transaction = InstallationTransaction::begin(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			approved.clone(),
+			&cancellation,
+		)
+		.expect("installation must begin");
 		stage_file(&mut transaction, "file.txt", b"contents", &cancellation);
 		fs::write(root.as_path().join("temp/operation/backup/unexpected"), b"keep")
 			.expect("unexpected backup entry must exist");
 		let root_dir = SafeDir::open_absolute(root.as_path()).expect("root must open");
 		let temp = root_dir.open_dir("temp").expect("temp must open");
 
-		let error = publish_installation(root.as_path(), &root_dir, &temp, &approved.plan, &[], &cancellation)
-			.expect_err("unexpected backup entry must stop publication");
+		let error = publish_installation(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			&root_dir,
+			&temp,
+			&approved.plan,
+			&[],
+			&cancellation,
+		)
+		.expect_err("unexpected backup entry must stop publication");
 
 		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentPublicationFailed);
 		assert!(error.iter_reports().any(|report| {
@@ -1021,15 +1061,30 @@ mod tests {
 		fs::write(&archive, b"archive").expect("archive fixture must exist");
 		let approved = approved_installation(&archive, "New", false, false, 0, "file.txt");
 		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(root.as_path(), approved.clone(), &cancellation)
-			.expect("installation must begin");
+		let mut transaction = InstallationTransaction::begin(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			approved.clone(),
+			&cancellation,
+		)
+		.expect("installation must begin");
 		stage_file(&mut transaction, "file.txt", b"contents", &cancellation);
 		let root_dir = SafeDir::open_absolute(root.as_path()).expect("root must open");
 		let temp = root_dir.open_dir("temp").expect("temp must open");
 		cancellation.cancel();
 
-		let error = publish_installation(root.as_path(), &root_dir, &temp, &approved.plan, &[], &cancellation)
-			.expect_err("cancelled backup validation must stop publication");
+		let error = publish_installation(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			&root_dir,
+			&temp,
+			&approved.plan,
+			&[],
+			&cancellation,
+		)
+		.expect_err("cancelled backup validation must stop publication");
 
 		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
 		assert!(root.as_path().join("temp/operation").is_dir());
@@ -1049,8 +1104,14 @@ mod tests {
 		);
 		let approved = approved_installation(&archive, "Replace", true, false, 0, "New.txt");
 		let cancellation = CancellationToken::new();
-		let mut transaction = InstallationTransaction::begin(root.as_path(), approved.clone(), &cancellation)
-			.expect("replacement must begin");
+		let mut transaction = InstallationTransaction::begin(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			approved.clone(),
+			&cancellation,
+		)
+		.expect("replacement must begin");
 		stage_file(&mut transaction, "New.txt", b"new", &cancellation);
 		let root_dir = SafeDir::open_absolute(root.as_path()).expect("root must open");
 		let temp = root_dir.open_dir("temp").expect("temp must open");
@@ -1061,6 +1122,8 @@ mod tests {
 
 		let result = publish_installation(
 			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
 			&root_dir,
 			&temp,
 			&approved.plan,
@@ -1071,11 +1134,15 @@ mod tests {
 		assert!(root.as_path().join("mods/Replace/New.txt").is_file());
 		assert!(root.as_path().join("temp/operation/backup/mod/Old.txt").is_file());
 		assert!(root.as_path().join("temp/operation/backup/modlist.txt").is_file());
-		assert_manual_cleanup_required(EnvironmentAdapter.load_installation_state(
-			&root,
-			InstallationStateAccess::Mutation,
-			&CancellationToken::new(),
-		));
+		assert_manual_cleanup_required(
+			EnvironmentAdapter.load_installation_state(
+				&root,
+				&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+					.game_binding,
+				InstallationStateAccess::Mutation,
+				&CancellationToken::new(),
+			),
+		);
 	}
 
 	#[test]
@@ -1087,6 +1154,8 @@ mod tests {
 		let cancellation = CancellationToken::new();
 		let mut transaction = InstallationTransaction::begin(
 			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
 			approved_installation(&archive, "Cancelled", false, false, 0, "file.txt"),
 			&cancellation,
 		)
@@ -1117,8 +1186,16 @@ mod tests {
 		let root_dir = SafeDir::open_absolute(root.as_path()).expect("root must open");
 		let temp = root_dir.open_dir("temp").expect("temp must open");
 
-		finish_committed_installation(root.as_path(), &root_dir, &temp, &approved.plan, &[])
-			.expect("postcommit work must not observe caller cancellation");
+		finish_committed_installation(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			&root_dir,
+			&temp,
+			&approved.plan,
+			&[],
+		)
+		.expect("postcommit work must not observe caller cancellation");
 		assert!(fs::read_dir(root.as_path().join("temp"))
 			.expect("temp must read")
 			.next()
@@ -1138,13 +1215,25 @@ mod tests {
 		let root_dir = SafeDir::open_absolute(root.as_path()).expect("root must open");
 		let temp = root_dir.open_dir("temp").expect("temp must open");
 
-		finish_committed_installation(root.as_path(), &root_dir, &temp, &approved.plan, &[])
-			.expect("validated commit must succeed despite cleanup failure");
+		finish_committed_installation(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			&root_dir,
+			&temp,
+			&approved.plan,
+			&[],
+		)
+		.expect("validated commit must succeed despite cleanup failure");
 		assert!(root.as_path().join("temp/operation").is_file());
-		assert_manual_cleanup_required(EnvironmentAdapter.load_installation_state(
-			&root,
-			InstallationStateAccess::Mutation,
-			&CancellationToken::new(),
-		));
+		assert_manual_cleanup_required(
+			EnvironmentAdapter.load_installation_state(
+				&root,
+				&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+					.game_binding,
+				InstallationStateAccess::Mutation,
+				&CancellationToken::new(),
+			),
+		);
 	}
 }

@@ -61,9 +61,7 @@ pub(crate) enum SetCommand {
 pub(crate) enum SettingKeyArgument {
 	SchemaVersion,
 	Name,
-	SteamAppId,
 	GameDir,
-	ObservedBuildId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -143,9 +141,7 @@ impl From<SettingKeyArgument> for SettingKey {
 		match value {
 			SettingKeyArgument::SchemaVersion => Self::SchemaVersion,
 			SettingKeyArgument::Name => Self::Name,
-			SettingKeyArgument::SteamAppId => Self::SteamAppId,
 			SettingKeyArgument::GameDir => Self::GameDir,
-			SettingKeyArgument::ObservedBuildId => Self::ObservedBuildId,
 		}
 	}
 }
@@ -169,6 +165,13 @@ mod tests {
 	use super::parse_from;
 	use std::error::Error;
 	use std::ffi::OsString;
+
+	#[test]
+	fn removed_binding_id_keys_are_not_cli_settings() {
+		for key in ["steam-app-id", "observed-build-id"] {
+			assert!(parse_from(["mods", "config", "get", key]).is_err());
+		}
+	}
 
 	#[test]
 	fn parses_environment_log_level_and_issue_twenty_seven_commands() {

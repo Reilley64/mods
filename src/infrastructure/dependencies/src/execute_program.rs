@@ -1,6 +1,7 @@
 use crate::Resources;
 use crate::execution_adapter::ExecutionAdapter;
 use application::execution::ExecuteProgramDependencies;
+use domain::GameBinding;
 use infrastructure_execution::ExecutionCapture;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 impl Resources {
 	pub fn captured_execution_dependencies(
 		&self,
+		binding: GameBinding,
 		startup_directory: PathBuf,
 		force_cancellation: CancellationToken,
 	) -> (ExecuteProgramDependencies, Arc<ExecutionCapture>) {
@@ -16,7 +18,7 @@ impl Resources {
 
 		let dependencies = ExecuteProgramDependencies {
 			report_progress: None,
-			run_managed_program: ExecutionAdapter::new(self.root.clone(), startup_directory)
+			run_managed_program: ExecutionAdapter::new(self.root.clone(), binding, startup_directory)
 				.with_force_cancellation(force_cancellation)
 				.with_capture(capture.clone())
 				.run_port(),
@@ -27,12 +29,13 @@ impl Resources {
 
 	pub fn execute_program_dependencies(
 		&self,
+		binding: GameBinding,
 		startup_directory: PathBuf,
 		force_cancellation: CancellationToken,
 	) -> ExecuteProgramDependencies {
 		ExecuteProgramDependencies {
 			report_progress: None,
-			run_managed_program: ExecutionAdapter::new(self.root.clone(), startup_directory)
+			run_managed_program: ExecutionAdapter::new(self.root.clone(), binding, startup_directory)
 				.with_force_cancellation(force_cancellation)
 				.run_port(),
 		}

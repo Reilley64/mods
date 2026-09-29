@@ -27,7 +27,7 @@ Errors normally begin `error [code]: message`. Optional details include phase, f
 | --- | --- |
 | `environment_already_initialized`, `environment_root_not_empty`, `environment_root_unsafe` | Confirm Environment Root and inspect existing contents; do not wipe it |
 | `environment_invalid`, settings/override errors | Inspect manifest and `config list`; only `MODS_GAME_DIR` is a supported `MODS_*` setting variable; malformed/unknown overrides can fail validation |
-| Game Installation not found/invalid or observed-build mismatch | Check Steam installation and effective/stored Game Binding; ask before updating it |
+| Game Installation not found/invalid | Check Steam installation and effective/stored Game Binding; ask before updating it |
 | `invalid_mod_name`, `mod_already_exists`, `mod_not_found` | Check name and replacement intent; do not silently rename or replace |
 | Unsafe/unsupported archive or installer, unmet dependency | Inspect package provenance/layout and error details; do not bypass validation |
 | `invalid_selection` | Use current returned FOMOD IDs, ordered complete choices, and cardinality |

@@ -15,9 +15,7 @@ use std::ffi::OsString;
 pub(crate) struct RawManifest {
 	pub schema_version: u32,
 	pub name: Option<String>,
-	pub steam_app_id: u32,
 	pub game_dir: String,
-	pub observed_build_id: u64,
 }
 
 pub(crate) fn read_sources(

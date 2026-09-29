@@ -38,19 +38,17 @@ The released surface has no `--json`, MCP command, conflict-resolution command, 
 | --- | --- |
 | `schema-version` | Environment Manifest schema |
 | `name` | Optional Mod Environment display name |
-| `steam-app-id` | Bound game's Steam identity |
 | `game-dir` | Effective Game Installation path |
-| `observed-build-id` | Recorded Steam build |
 
 Only `game-dir` has a CLI setter. Do not infer setters for the other keys.
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' config get observed-build-id
+mods --environment 'D:\Mod Environments\Mojave' config get game-dir
 # After approval:
 mods --environment 'D:\Mod Environments\Mojave' config set game-dir 'E:\SteamLibrary\steamapps\common\Fallout New Vegas'
 ```
 
-Inspect output fields `source`, `manifest_value`, `manifest_path`, `shadowed`, and `writable` as well as the effective value. `MODS_GAME_DIR` can shadow the stored path; changing the manifest does not clear the inherited override. An effective override with a different observed build can produce `warning: MODS_GAME_DIR build does not match observed-build-id`. Ask before changing either the binding or the environment variable.
+Inspect output fields `source`, `manifest_value`, `manifest_path`, `shadowed`, and `writable` as well as the effective value. `MODS_GAME_DIR` can shadow the stored path; changing the manifest does not clear the inherited override. Ask before changing either the binding or the environment variable.
 
 ## Output contract
 

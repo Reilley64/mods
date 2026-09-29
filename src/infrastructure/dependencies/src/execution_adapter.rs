@@ -1,11 +1,10 @@
 use application::ErrorMarker;
 use application::ports::RunManagedProgram;
 use domain::EnvironmentRoot;
+use domain::GameBinding;
 #[cfg(windows)]
 use infrastructure_execution::CallerSnapshot;
 use infrastructure_execution::ExecutionCapture;
-#[cfg(windows)]
-use infrastructure_settings::SettingsAdapter;
 #[cfg(windows)]
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -34,20 +33,20 @@ pub(crate) struct ExecutionAdapter {
 	#[cfg(windows)]
 	caller: CallerSnapshot,
 	#[cfg(windows)]
-	settings: SettingsAdapter,
+	binding: GameBinding,
 	force_cancellation: CancellationToken,
 	capture: Option<Arc<ExecutionCapture>>,
 }
 impl ExecutionAdapter {
-	/// Captures inherited lookup and settings inputs at the caller's startup directory.
-	pub fn new(root: EnvironmentRoot, startup_directory: PathBuf) -> Self {
+	/// Captures inherited lookup and supplied binding at the caller's startup directory.
+	pub fn new(root: EnvironmentRoot, binding: GameBinding, startup_directory: PathBuf) -> Self {
 		#[cfg(not(windows))]
-		let _ = (root, startup_directory);
+		let _ = (root, binding, startup_directory);
 		Self {
 			#[cfg(windows)]
 			caller: CallerSnapshot::new(startup_directory),
 			#[cfg(windows)]
-			settings: SettingsAdapter::new(root.clone()),
+			binding,
 			#[cfg(windows)]
 			root,
 			force_cancellation: CancellationToken::new(),

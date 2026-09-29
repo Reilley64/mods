@@ -12,7 +12,10 @@ mod path_resolution;
 mod publication;
 mod runner;
 
+use commands::Command;
+use commands::ConfigCommand;
 use infrastructure_dependencies::Resources;
+use infrastructure_dependencies::SettingsLoadMode;
 use std::env::args_os;
 use std::ffi::OsString;
 use std::io::stderr;
@@ -25,24 +28,45 @@ const BUILD_COMMIT: &str = env!("BUILD_COMMIT");
 #[tokio::main]
 async fn main() {
 	let arguments: Vec<OsString> = args_os().collect();
-	let result = runner::run_current_process(arguments, |root, startup| {
+	let result = runner::run_current_process(arguments, |root, startup, command| {
 		let resources = Resources::system(root.clone());
-		let install_archive = resources.install_archive_dependencies();
+		if matches!(command, Command::Init { .. }) {
+			return Ok(runner::CommandDependencies::Initialize(
+				resources.initialize_environment_dependencies(),
+			));
+		}
+
+		let mode = match command {
+			Command::Config {
+				command: ConfigCommand::List | ConfigCommand::Get { .. },
+			} => SettingsLoadMode::ReadOnly,
+			Command::Conflicts { .. } => SettingsLoadMode::Inspection,
+			Command::Install(arguments) if arguments.dry_run => SettingsLoadMode::Inspection,
+			Command::Exec(_) | Command::Export(_) | Command::Install(_) => SettingsLoadMode::Execution,
+			_ => SettingsLoadMode::Mutation,
+		};
+		let loaded = resources.load_settings(mode, &operation::ctrl_c_token())?;
+		let binding = loaded.resolved.effective_binding.clone();
+		let install_archive = resources.install_archive_dependencies(binding.clone());
 		let execution_force_cancellation = CancellationToken::new();
-		Ok(runner::Dependencies {
-			execute_program: resources
-				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
+		Ok(runner::CommandDependencies::Existing(Box::new(runner::Dependencies {
+			settings: loaded.resolved.settings.clone(),
+			execute_program: resources.execute_program_dependencies(
+				binding.clone(),
+				startup.to_owned(),
+				execution_force_cancellation.clone(),
+			),
 			execution_force_cancellation,
 			initialize_environment: resources.initialize_environment_dependencies(),
 			list_settings: resources.list_settings_dependencies(),
 			get_setting: resources.get_setting_dependencies(),
-			set_game_directory: resources.set_game_directory_dependencies(),
+			set_game_directory: resources.set_game_directory_dependencies(loaded.clone()),
 			install_archive,
-			export_environment: resources.export_environment_dependencies(),
-			list_effective_conflicts: resources.list_effective_conflicts_dependencies(),
-			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(),
-			explain_path: resources.explain_path_dependencies(),
-		})
+			export_environment: resources.export_environment_dependencies(loaded, binding.clone()),
+			list_effective_conflicts: resources.list_effective_conflicts_dependencies(binding.clone()),
+			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(binding.clone()),
+			explain_path: resources.explain_path_dependencies(binding.clone()),
+		})))
 	})
 	.await;
 	let outcome = match result {

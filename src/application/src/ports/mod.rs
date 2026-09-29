@@ -44,7 +44,6 @@ pub use game_platform::ValidateGameInstallation;
 pub use progress::ProgressEvent;
 pub use progress::ReportProgress;
 pub use settings::CheckSettingsReadiness;
-pub use settings::LoadSettings;
 pub use settings::PreviewGameBinding;
 pub use settings::ReadInitializationGameOverride;
 pub use settings::StoreGameBinding;

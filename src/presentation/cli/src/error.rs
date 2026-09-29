@@ -113,9 +113,7 @@ pub(crate) fn marker(marker: &ErrorMarker) -> String {
 	if let Some(sequence) = marker.supplied_sequence() {
 		text.push_str(&format!("\nsequence = {sequence}"));
 	}
-	if let Some((expected, actual)) = marker.build_ids() {
-		text.push_str(&format!("\nexpected-build-id = {expected}\nactual-build-id = {actual}"));
-	}
+
 	text.push('\n');
 	text
 }

@@ -1,3 +1,5 @@
+#![cfg_attr(test, feature(fn_traits))]
+
 mod active_code_page;
 mod conflict_scan;
 mod derived_profile;
@@ -49,10 +51,13 @@ use application::ports::ReadConflictContent;
 use application::ports::ScanEnvironmentConflicts;
 use domain::DataRelativePath;
 use domain::EnvironmentRoot;
+use domain::GameBinding;
 pub use execution_preparation::ExecutionProfileText;
 pub use execution_preparation::ExecutionProvider;
 pub use execution_preparation::ExecutionVisibleFile;
+pub use execution_preparation::LaunchVisibleFile;
 pub use execution_preparation::PreparedExecution;
+pub use execution_preparation::PreparedLaunch;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -179,10 +184,11 @@ impl EnvironmentAdapter {
 	fn load_installation_state(
 		&self,
 		root: &EnvironmentRoot,
+		binding: &GameBinding,
 		access: InstallationStateAccess,
 		cancellation: &CancellationToken,
 	) -> Result<InstallationState, ErrorMarker> {
-		let snapshot = load_snapshot(root.as_path(), access, cancellation)?;
+		let snapshot = load_snapshot(root.as_path(), binding, access, cancellation)?;
 		Ok(InstallationState {
 			game_binding: snapshot.game_binding,
 			installed_mods: snapshot.installed_mods,
@@ -194,19 +200,21 @@ impl EnvironmentAdapter {
 	fn assess_installation(
 		&self,
 		root: &EnvironmentRoot,
+		binding: &GameBinding,
 		plan: &InstallPlan,
 		cancellation: &CancellationToken,
 	) -> Result<InstallationAssessment, ErrorMarker> {
-		assess_installation_snapshot(root.as_path(), plan, cancellation)
+		assess_installation_snapshot(root.as_path(), binding, plan, cancellation)
 	}
 
 	fn begin_installation(
 		&self,
 		root: &EnvironmentRoot,
+		binding: &GameBinding,
 		approved: ApprovedInstallation,
 		cancellation: &CancellationToken,
 	) -> Result<InstallationChange, ErrorMarker> {
-		let transaction = InstallationTransaction::begin(root.as_path(), approved, cancellation)?;
+		let transaction = InstallationTransaction::begin(root.as_path(), binding, approved, cancellation)?;
 		let transaction = Arc::new(Mutex::new(transaction));
 		let begin_transaction = Arc::clone(&transaction);
 		let begin_file = Arc::new(move |path: DataRelativePath, cancellation: CancellationToken| {
@@ -330,40 +338,48 @@ impl EnvironmentAdapter {
 		Ok(InstallationChange { begin_file, finish })
 	}
 
-	pub fn scan_environment_conflicts_port(&self, root: EnvironmentRoot) -> ScanEnvironmentConflicts {
+	pub fn scan_environment_conflicts_port(
+		&self,
+		root: EnvironmentRoot,
+		binding: GameBinding,
+	) -> ScanEnvironmentConflicts {
 		Arc::new(move |cancellation| {
-			let result = scan_conflicts(root.as_path(), &cancellation);
+			let result = scan_conflicts(root.as_path(), &binding, &cancellation);
 			Box::pin(ready(result)) as PortFuture<_>
 		})
 	}
 
-	pub fn read_conflict_content_port(&self, root: EnvironmentRoot) -> ReadConflictContent {
+	pub fn read_conflict_content_port(&self, root: EnvironmentRoot, binding: GameBinding) -> ReadConflictContent {
 		Arc::new(move |id, cancellation| {
-			let result = read_conflict_content(root.as_path(), &id, &cancellation);
+			let result = read_conflict_content(root.as_path(), &binding, &id, &cancellation);
 			Box::pin(ready(result)) as PortFuture<_>
 		})
 	}
 
-	pub fn load_installation_state_port(&self, root: EnvironmentRoot) -> LoadInstallationState {
+	pub fn load_installation_state_port(
+		&self,
+		root: EnvironmentRoot,
+		binding: GameBinding,
+	) -> LoadInstallationState {
 		let adapter = self.clone();
 		Arc::new(move |access, cancellation| {
-			let result = adapter.load_installation_state(&root, access, &cancellation);
+			let result = adapter.load_installation_state(&root, &binding, access, &cancellation);
 			Box::pin(ready(result)) as PortFuture<_>
 		})
 	}
 
-	pub fn assess_installation_port(&self, root: EnvironmentRoot) -> AssessInstallation {
+	pub fn assess_installation_port(&self, root: EnvironmentRoot, binding: GameBinding) -> AssessInstallation {
 		let adapter = self.clone();
 		Arc::new(move |plan, cancellation| {
-			let result = adapter.assess_installation(&root, &plan, &cancellation);
+			let result = adapter.assess_installation(&root, &binding, &plan, &cancellation);
 			Box::pin(ready(result)) as PortFuture<_>
 		})
 	}
 
-	pub fn begin_installation_port(&self, root: EnvironmentRoot) -> BeginInstallation {
+	pub fn begin_installation_port(&self, root: EnvironmentRoot, binding: GameBinding) -> BeginInstallation {
 		let adapter = self.clone();
 		Arc::new(move |approved, cancellation| {
-			let result = adapter.begin_installation(&root, approved, &cancellation);
+			let result = adapter.begin_installation(&root, &binding, approved, &cancellation);
 			Box::pin(ready(result)) as PortFuture<_>
 		})
 	}
@@ -549,7 +565,6 @@ mod tests {
 	use domain::EnvironmentRoot;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
-	use domain::SteamBuildId;
 	use std::env::current_dir;
 	use std::fs;
 	use std::path::Path;
@@ -573,7 +588,6 @@ mod tests {
 		InitializationPlan {
 			game_binding: GameBinding::new(
 				GameInstallationPath::new(game.to_path_buf()).expect("test game path must be valid"),
-				SteamBuildId::new(7).expect("test build ID must be valid"),
 			),
 			profile_sources: InitializationProfileSources {
 				files,

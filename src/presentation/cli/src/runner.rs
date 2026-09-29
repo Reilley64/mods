@@ -33,6 +33,7 @@ use application::installation::install_archive;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
 use application::settings::SetGameDirectoryDependencies;
+use application::settings::SettingRecord;
 use application::settings::get_setting;
 use application::settings::list_settings;
 use application::settings::set_game_directory;
@@ -58,7 +59,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
+pub(crate) enum CommandDependencies {
+	Initialize(InitializeEnvironmentDependencies),
+	Existing(Box<Dependencies>),
+}
+
 pub(crate) struct Dependencies {
+	pub(crate) settings: Vec<SettingRecord>,
 	pub(crate) execution_force_cancellation: CancellationToken,
 	pub(crate) execute_program: ExecuteProgramDependencies,
 	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
@@ -97,7 +104,7 @@ pub(crate) async fn execute(
 	cli: Cli,
 	startup_directory: PathBuf,
 	local_app_data: Option<PathBuf>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<Dependencies, ErrorMarker>,
+	dependency_factory: impl FnOnce(&EnvironmentRoot, &Command) -> RootResult<CommandDependencies, ErrorMarker>,
 ) -> RunOutcome {
 	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
 		Ok(root) => root,
@@ -142,10 +149,10 @@ pub(crate) async fn execute(
 		};
 
 	let session_id = session.as_ref().map(DiagnosticSession::id);
-	let dependencies = match dependency_factory(&root) {
+	let dependencies = match dependency_factory(&root, &cli.command) {
 		Ok(dependencies) => dependencies,
-		Err(marker) => {
-			let mut stderr = error::marker(&marker);
+		Err(report) => {
+			let mut stderr = error::application_error(&report);
 			stderr.push_str(&diagnostic_warning);
 			if let Some(id) = session_id {
 				stderr.push_str(&format!("diagnostic session: {id}\n"));
@@ -154,14 +161,31 @@ pub(crate) async fn execute(
 				session.finish("failure");
 			}
 			return RunOutcome {
-				status: 1,
+				status: if matches!(cli.command, Command::Exec(_)) {
+					error::execution_exit_status(report.current_context().code())
+				} else {
+					error::exit_status(report.current_context().code())
+				},
 				stdout: String::new(),
 				stderr,
 			};
 		}
 	};
 
-	let work = dispatch(cli.command, dependencies, root, startup_directory);
+	let work = async move {
+		match dependencies {
+			CommandDependencies::Initialize(dependencies) => match cli.command {
+				Command::Init { game_install } => {
+					dispatch_initialization(dependencies, root, game_install, &startup_directory)
+						.await
+				}
+				_ => marker_outcome(ErrorMarker::environment_invalid(None)),
+			},
+			CommandDependencies::Existing(dependencies) => {
+				dispatch(cli.command, *dependencies, root, startup_directory).await
+			}
+		}
+	};
 	let mut result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
@@ -188,52 +212,58 @@ pub(crate) async fn execute(
 	result
 }
 
+async fn dispatch_initialization(
+	dependencies: InitializeEnvironmentDependencies,
+	root: EnvironmentRoot,
+	game_install: Option<PathBuf>,
+	startup: &Path,
+) -> RunOutcome {
+	let Ok(game_install) = game_install
+		.map(|path| resolve_path(&path, startup))
+		.map(GameInstallationPath::new)
+		.transpose()
+	else {
+		return marker_outcome(ErrorMarker::game_install_invalid());
+	};
+	match initialize_environment(dependencies, root, game_install, operation::ctrl_c_token()).await {
+		Ok(output) => {
+			let (stdout, stderr) = output::initialization(&output);
+			RunOutcome {
+				status: 0,
+				stdout,
+				stderr,
+			}
+		}
+		Err(report) => report_outcome(&report),
+	}
+}
+
 async fn dispatch(command: Command, dependencies: Dependencies, root: EnvironmentRoot, startup: PathBuf) -> RunOutcome {
 	match command {
 		Command::Init { game_install } => {
-			let Ok(game_install) = game_install
-				.map(|path| resolve_path(&path, &startup))
-				.map(GameInstallationPath::new)
-				.transpose()
-			else {
-				return marker_outcome(ErrorMarker::game_install_invalid());
-			};
-			match initialize_environment(
-				dependencies.initialize_environment,
-				root,
-				game_install,
-				operation::ctrl_c_token(),
-			)
-			.await
-			{
-				Ok(output) => {
-					let (stdout, stderr) = output::initialization(&output);
-					RunOutcome {
-						status: 0,
-						stdout,
-						stderr,
-					}
-				}
-				Err(report) => report_outcome(&report),
-			}
+			dispatch_initialization(dependencies.initialize_environment, root, game_install, &startup).await
 		}
 		Command::Config { command } => match command {
-			ConfigCommand::List => match list_settings(dependencies.list_settings).await {
-				Ok(output) => RunOutcome {
-					status: 0,
-					stdout: output::settings(&output.settings),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
-			},
-			ConfigCommand::Get { key } => match get_setting(dependencies.get_setting, key.into()).await {
-				Ok(output) => RunOutcome {
-					status: 0,
-					stdout: output::setting(&output.setting),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
-			},
+			ConfigCommand::List => {
+				match list_settings(dependencies.list_settings, dependencies.settings).await {
+					Ok(output) => RunOutcome {
+						status: 0,
+						stdout: output::settings(&output.settings),
+						stderr: String::new(),
+					},
+					Err(report) => report_outcome(&report),
+				}
+			}
+			ConfigCommand::Get { key } => {
+				match get_setting(dependencies.get_setting, dependencies.settings, key.into()).await {
+					Ok(output) => RunOutcome {
+						status: 0,
+						stdout: output::setting(&output.setting),
+						stderr: String::new(),
+					},
+					Err(report) => report_outcome(&report),
+				}
+			}
 			ConfigCommand::Set {
 				command: SetCommand::GameDir { value },
 			} => {
@@ -529,6 +559,7 @@ fn report_outcome<E>(report: &Report<E>) -> RunOutcome {
 	}
 }
 
+#[cfg(test)]
 pub(crate) async fn run(
 	arguments: impl IntoIterator<Item = OsString>,
 	startup_directory: PathBuf,
@@ -536,20 +567,26 @@ pub(crate) async fn run(
 	dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<Dependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let cli = parse_from(arguments)?;
-	Ok(execute(cli, startup_directory, local_app_data, dependency_factory).await)
+	Ok(execute(cli, startup_directory, local_app_data, |root, _| {
+		dependency_factory(root)
+			.map(|dependencies| CommandDependencies::Existing(Box::new(dependencies)))
+			.map_err(|marker| report!(marker))
+	})
+	.await)
 }
 
 pub(crate) async fn run_current_process(
 	arguments: impl IntoIterator<Item = OsString>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot, &Path) -> Result<Dependencies, ErrorMarker>,
+	dependency_factory: impl FnOnce(&EnvironmentRoot, &Path, &Command) -> RootResult<CommandDependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
 	let factory_startup = startup_directory.clone();
-	run(arguments, startup_directory, local_app_data, |root| {
-		dependency_factory(root, &factory_startup)
+	let cli = parse_from(arguments)?;
+	Ok(execute(cli, startup_directory, local_app_data, |root, command| {
+		dependency_factory(root, &factory_startup, command)
 	})
-	.await
+	.await)
 }
 
 #[cfg(test)]
@@ -588,7 +625,6 @@ mod tests {
 	use application::ports::StoredAndEffectiveBinding;
 	use application::settings::GetSettingDependencies;
 	use application::settings::ListSettingsDependencies;
-	use application::settings::ResolvedSettings;
 	use application::settings::SetGameDirectoryDependencies;
 	use application::settings::SettingSource;
 	use clap::Parser;
@@ -602,7 +638,6 @@ mod tests {
 	use domain::ProcessStatus;
 	use domain::ProviderIdentity;
 	use domain::ProviderReference;
-	use domain::SteamBuildId;
 	use rootcause::report;
 	use std::error::Error;
 	use std::ffi::OsString;
@@ -736,13 +771,9 @@ mod tests {
 	}
 
 	fn dependencies_with_list(binding: GameBinding, list_settings: ListSettingsDependencies) -> Dependencies {
-		let resolved = ResolvedSettings {
-			settings: Vec::new(),
-			effective_binding: binding.clone(),
-			manifest_binding: binding.clone(),
-		};
 		let install_archive = unavailable_install_archive_dependencies();
 		Dependencies {
+			settings: Vec::new(),
 			execution_force_cancellation: CancellationToken::new(),
 			execute_program: ExecuteProgramDependencies {
 				report_progress: None,
@@ -781,13 +812,7 @@ mod tests {
 				}),
 			},
 			list_settings,
-			get_setting: GetSettingDependencies {
-				report_progress: None,
-				load_settings: Arc::new(move || {
-					let resolved = resolved.clone();
-					Box::pin(async move { Ok(resolved) }) as PortFuture<_>
-				}),
-			},
+			get_setting: GetSettingDependencies { report_progress: None },
 			set_game_directory: SetGameDirectoryDependencies {
 				report_progress: None,
 				check_settings_readiness: Arc::new(|_| Box::pin(async { Ok(()) }) as PortFuture<_>),
@@ -842,25 +867,73 @@ mod tests {
 	fn successful_dependencies(root: &Path) -> Result<Dependencies, ErrorMarker> {
 		let game = GameInstallationPath::new(root.join("game"))
 			.map_err(|_| ErrorMarker::environment_invalid(None))?;
-		let build = SteamBuildId::new(1).map_err(|_| ErrorMarker::environment_invalid(None))?;
-		let binding = GameBinding::new(game, build);
-		let listed_binding = binding.clone();
+		let binding = GameBinding::new(game);
 		Ok(dependencies_with_list(
 			binding,
-			ListSettingsDependencies {
-				report_progress: None,
-				load_settings: Arc::new(move || {
-					let binding = listed_binding.clone();
-					Box::pin(async move {
-						Ok(ResolvedSettings {
-							settings: Vec::new(),
-							effective_binding: binding.clone(),
-							manifest_binding: binding,
-						})
-					}) as PortFuture<_>
-				}),
-			},
+			ListSettingsDependencies { report_progress: None },
 		))
+	}
+
+	#[tokio::test]
+	async fn help_and_version_never_construct_or_load_command_resources() {
+		for argument in ["--help", "--version"] {
+			let called = AtomicBool::new(false);
+			let result = super::run_current_process(arguments!["mods", argument], |_, _, _| {
+				called.store(true, Ordering::SeqCst);
+				Err(report!(ErrorMarker::environment_invalid(None)))
+			})
+			.await;
+			assert!(result.is_err());
+			assert!(!called.load(Ordering::SeqCst));
+		}
+	}
+
+	#[tokio::test]
+	async fn initialization_composition_does_not_need_an_existing_manifest() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let cli = Cli::try_parse_from(arguments!["mods", "--log-level", "off", "init"])?;
+		let result = super::execute(
+			cli,
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_, command| {
+				assert!(matches!(command, super::Command::Init { .. }));
+				Ok(super::CommandDependencies::Initialize(
+					dependencies.initialize_environment,
+				))
+			},
+		)
+		.await;
+		assert_eq!(result.status, 0);
+		assert!(!temp.path().join("mods.toml").exists());
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn command_load_errors_keep_safe_output_and_execution_status() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for (code, expected) in [
+			(ErrorMarker::environment_invalid(None), 125),
+			(ErrorMarker::operation_cancelled(), 0xC000_013A),
+		] {
+			let cli = Cli::try_parse_from(arguments![
+				"mods",
+				"--log-level",
+				"off",
+				"exec",
+				"--",
+				"tool.exe"
+			])?;
+			let result =
+				super::execute(cli, temp.path().to_owned(), Some(temp.path().to_owned()), |_, _| {
+					Err(report!(std::io::Error::other("private source path")).context(code))
+				})
+				.await;
+			assert_eq!(result.status, expected);
+			assert!(!result.stderr.contains("private source path"));
+		}
+		Ok(())
 	}
 
 	#[tokio::test]

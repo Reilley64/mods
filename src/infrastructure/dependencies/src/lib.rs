@@ -12,6 +12,7 @@ mod list_effective_conflicts;
 mod list_settings;
 mod set_game_directory;
 
+use application::ErrorMarker;
 use domain::EnvironmentRoot;
 use infrastructure_archive::ArchiveAdapter;
 use infrastructure_environment::EnvironmentAdapter;
@@ -19,7 +20,11 @@ pub use infrastructure_execution::CapturedOutput;
 pub use infrastructure_execution::CapturedStream;
 pub use infrastructure_execution::ExecutionCapture;
 use infrastructure_game_platform::GamePlatformAdapter;
+pub use infrastructure_settings::LoadedSettings;
 use infrastructure_settings::SettingsAdapter;
+pub use infrastructure_settings::SettingsLoadMode;
+use rootcause::Result;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct Resources {
@@ -31,6 +36,14 @@ pub struct Resources {
 }
 
 impl Resources {
+	pub fn load_settings(
+		&self,
+		mode: SettingsLoadMode,
+		cancellation: &CancellationToken,
+	) -> Result<LoadedSettings, ErrorMarker> {
+		self.settings.load_command(mode, cancellation)
+	}
+
 	pub fn system(root: EnvironmentRoot) -> Self {
 		let environment = EnvironmentAdapter;
 		let settings = SettingsAdapter::new(root.clone());

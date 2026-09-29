@@ -73,12 +73,10 @@ impl ExecutionAdapter {
 			None
 		};
 
-		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
+		let binding = &self.binding;
 		let platform = GamePlatformAdapter::system();
-		let validate_game = platform.validate_effective_port(self.root.clone());
-		let binding = validate_game.call((effective_binding, cancellation.clone())).await?;
 		let environment = EnvironmentAdapter;
-		let prepared = environment.prepare_execution(&self.root, &binding, &cancellation)?;
+		let prepared = environment.prepare_launch(&self.root, binding, &cancellation)?;
 		let selected_output_mod = if let OutputTarget::DataMod(name) = output_target {
 			let provider = prepared
 				.providers
@@ -113,7 +111,6 @@ impl ExecutionAdapter {
 			.iter()
 			.map(|file| VisibleProfileFile {
 				path: file.path.clone(),
-				modified: file.modified,
 			})
 			.collect();
 		let profile = build_profile_configuration(ProfileConfigurationInput {
@@ -153,12 +150,6 @@ impl ExecutionAdapter {
 			})
 			.collect();
 
-		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
-		let current_binding = validate_game.call((effective_binding, cancellation.clone())).await?;
-		if current_binding != binding {
-			return Err(report!(ErrorMarker::environment_invalid(Some("execution"))));
-		}
-
 		let inis = environment.derive_execution_inis(&self.root, &prepared, &cancellation)?;
 		let retained_path = inis.path().to_owned();
 		let mut inis_retained = true;
@@ -196,15 +187,6 @@ impl ExecutionAdapter {
 
 			let view = VirtualGameView::configure(&configuration)
 				.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
-
-			if let Err(mut failure) =
-				environment.revalidate_execution_with_inis(&self.root, &prepared, &inis, &cancellation)
-			{
-				if let Err(cleanup) = view.close() {
-					failure.children_mut().push(cleanup.into_dynamic().into_cloneable());
-				}
-				return Err(failure);
-			}
 
 			if cancellation.is_cancelled() {
 				view.close().context(ErrorMarker::vfs_failed().with_phase("cleanup"))?;
@@ -286,9 +268,9 @@ impl ExecutionAdapter {
 			let outcome = outcome?;
 
 			if environment
-				.check_execution_with_spool(
+				.check_launch_with_spool(
 					&self.root,
-					&binding,
+					binding,
 					self.capture.as_ref().and_then(|capture| capture.directory()),
 					&CancellationToken::new(),
 				)

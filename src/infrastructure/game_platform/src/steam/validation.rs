@@ -5,7 +5,6 @@ use application::ErrorMarker;
 use cap_std::fs::Dir;
 use domain::GameBinding;
 use domain::GameInstallationPath;
-use domain::SteamBuildId;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -19,12 +18,7 @@ pub(crate) fn validate(path: &Path) -> Result<GameBinding, ErrorMarker> {
 
 pub(crate) fn reopen(expected: &GameBinding) -> Result<Dir, ErrorMarker> {
 	let validated = open_validated(expected.game_directory().as_path())?;
-	if validated.binding.observed_build_id() != expected.observed_build_id() {
-		return Err(report!(ErrorMarker::game_build_mismatch(
-			expected.observed_build_id().get(),
-			validated.binding.observed_build_id().get(),
-		)));
-	}
+
 	Ok(validated.directory)
 }
 
@@ -81,17 +75,16 @@ fn open_validated(path: &Path) -> Result<ValidatedGameInstallation, ErrorMarker>
 	}
 
 	let text = read_required_text(&steamapps, Path::new("appmanifest_22380.acf"))?;
-	let (app_id, install_dir, build) = manifest::fields(&text).context(ErrorMarker::game_install_invalid())?;
+	let (app_id, install_dir) = manifest::fields(&text).context(ErrorMarker::game_install_invalid())?;
 	if app_id != 22_380
 		|| !manifest::is_install_directory_name(&install_dir)
 		|| !os_eq_ignore_ascii_case(game_name, &install_dir)
 	{
 		return Err(report!(ErrorMarker::game_install_invalid()));
 	}
-	let build = SteamBuildId::new(build).context(ErrorMarker::game_install_invalid())?;
 	let game_path = GameInstallationPath::new(canonical_game).context(ErrorMarker::game_install_invalid())?;
 	Ok(ValidatedGameInstallation {
-		binding: GameBinding::new(game_path, build),
+		binding: GameBinding::new(game_path),
 		directory: game,
 	})
 }
@@ -123,16 +116,16 @@ mod tests {
 	use tempfile::TempDir;
 
 	#[test]
-	fn validates_structured_manifest_executable_and_nonzero_build() -> Result<()> {
+	fn validates_structured_manifest_and_executable() -> Result<()> {
 		let (_temp, game) = game_fixture(42)?;
-		assert_eq!(validate(&game)?.observed_build_id().get(), 42);
+		assert_eq!(validate(&game)?.game_directory().as_path(), game);
 		Ok(())
 	}
 
 	#[test]
-	fn rejects_reserved_base_archive_zero_build_and_stray_manifest_keys() -> Result<()> {
+	fn ignores_build_id_and_rejects_reserved_base_archive_and_stray_manifest_keys() -> Result<()> {
 		let (_temp, game) = game_fixture(0)?;
-		assert!(validate(&game).is_err());
+		assert!(validate(&game).is_ok());
 		let manifest = game
 			.parent()
 			.and_then(Path::parent)

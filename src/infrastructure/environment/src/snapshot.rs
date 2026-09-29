@@ -1,4 +1,3 @@
-use crate::manifest::manifest_game_binding;
 use crate::manifest::validate_manifest;
 use crate::profile::MAX_PROFILE_BYTES;
 use crate::profile::is_activatable_plugin_name;
@@ -78,17 +77,26 @@ pub(crate) struct EnvironmentSnapshotData {
 
 pub(crate) fn load(
 	root_path: &Path,
+	binding: &GameBinding,
 	access: InstallationStateAccess,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, SnapshotLoad::Installation(access), None, None, cancellation)
+	load_inner(
+		root_path,
+		binding,
+		SnapshotLoad::Installation(access),
+		false,
+		None,
+		cancellation,
+	)
 }
 
 pub(crate) fn load_during_publication(
 	root_path: &Path,
+	binding: &GameBinding,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, SnapshotLoad::Publication, None, None, cancellation)
+	load_inner(root_path, binding, SnapshotLoad::Publication, false, None, cancellation)
 }
 
 pub(crate) fn load_execution(
@@ -99,8 +107,9 @@ pub(crate) fn load_execution(
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
 	load_inner(
 		root_path,
+		binding,
 		SnapshotLoad::Installation(InstallationStateAccess::Mutation),
-		Some(binding),
+		true,
 		owned_spool,
 		cancellation,
 	)
@@ -114,8 +123,9 @@ enum SnapshotLoad {
 
 fn load_inner(
 	root_path: &Path,
+	binding: &GameBinding,
 	load: SnapshotLoad,
-	effective_binding: Option<&GameBinding>,
+	execution: bool,
 	owned_spool: Option<&TempDir>,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
@@ -209,17 +219,13 @@ fn load_inner(
 	let overwrite = root
 		.open_dir("overwrite")
 		.context(ErrorMarker::environment_invalid(None))?;
-	if effective_binding.is_some() {
+	if execution {
 		validate_execution_profile(&profile_dir, cancellation)?;
 	} else {
 		validate_profile_files(&profile_dir, false, cancellation)?;
 	}
-	let mut overwrite_inventory = collect_provider_inventory(
-		&overwrite,
-		ProviderKind::Overwrite,
-		effective_binding.is_some(),
-		cancellation,
-	)?;
+	let mut overwrite_inventory =
+		collect_provider_inventory(&overwrite, ProviderKind::Overwrite, execution, cancellation)?;
 	let mut provider_metadata = Vec::new();
 	if let Some(bytes) = overwrite_inventory.metadata.take() {
 		provider_metadata.push((root_path.join("overwrite/meta.toml"), bytes));
@@ -267,12 +273,8 @@ fn load_inner(
 		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
-		let mut inventory = collect_provider_inventory(
-			&directory,
-			ProviderKind::DataMod,
-			effective_binding.is_some(),
-			cancellation,
-		)?;
+		let mut inventory =
+			collect_provider_inventory(&directory, ProviderKind::DataMod, execution, cancellation)?;
 		if let Some(bytes) = inventory.metadata.take() {
 			provider_metadata.push((root_path.join("mods").join(name.as_str()).join("meta.toml"), bytes));
 		}
@@ -313,11 +315,7 @@ fn load_inner(
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 
-	let game_binding = if let Some(binding) = effective_binding {
-		binding.clone()
-	} else {
-		manifest_game_binding(&root, cancellation)?
-	};
+	let game_binding = binding.clone();
 	let InventoryWinners {
 		files: current_winners,
 		details: file_details,
@@ -326,11 +324,11 @@ fn load_inner(
 		inventories,
 		overwrite_inventory,
 		&game_binding,
-		effective_binding.is_some(),
+		execution,
 		cancellation,
 	)?;
 	provider_metadata.sort_by(|left, right| left.0.cmp(&right.0));
-	let file_dependencies = if effective_binding.is_some() {
+	let file_dependencies = if execution {
 		HashMap::new()
 	} else {
 		file_dependencies(&profile_dir, &current_winners, cancellation)?
@@ -363,8 +361,8 @@ struct ProviderInventory {
 	metadata: Option<Vec<u8>>,
 }
 
-struct ProviderMetadata {
-	tombstones: Vec<(DataRelativePath, bool)>,
+pub(crate) struct ProviderMetadata {
+	pub(crate) tombstones: Vec<(DataRelativePath, bool)>,
 	bytes: Vec<u8>,
 }
 
@@ -629,6 +627,10 @@ fn read_metadata(provider: &SafeDir, cancellation: &CancellationToken) -> Result
 		ErrorMarker::environment_invalid(None),
 		cancellation,
 	)?;
+	parse_metadata(bytes)
+}
+
+pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMarker> {
 	let text = from_utf8(&bytes).context(ErrorMarker::environment_invalid(None))?;
 	let value: Value = from_str(text).context(ErrorMarker::environment_invalid(None))?;
 	let table = value
@@ -689,6 +691,7 @@ fn read_metadata(provider: &SafeDir, cancellation: &CancellationToken) -> Result
 
 pub(crate) fn validate_prospective_namespace(
 	root: &SafeDir,
+	binding: &GameBinding,
 	staged_mod: &SafeDir,
 	plan: &InstallPlan,
 	cancellation: &CancellationToken,
@@ -706,7 +709,7 @@ pub(crate) fn validate_prospective_namespace(
 	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
 	let mut namespace = HashMap::new();
 	let mut winners = HashMap::new();
-	let game = SafeDir::open_absolute(manifest_game_binding(root, cancellation)?.game_directory().as_path())
+	let game = SafeDir::open_absolute(binding.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(None))?;
 	match game.open_dir("Data") {
 		Ok(data) => {
@@ -1142,15 +1145,16 @@ struct AssessmentTraversal {
 
 pub(crate) fn assess_installation(
 	root_path: &Path,
+	binding: &GameBinding,
 	plan: &InstallPlan,
 	cancellation: &CancellationToken,
 ) -> Result<InstallationAssessment, ErrorMarker> {
-	let current = load(root_path, InstallationStateAccess::Preview, cancellation)?;
+	let current = load(root_path, binding, InstallationStateAccess::Preview, cancellation)?;
 	let root = SafeDir::open_absolute(root_path).context(ErrorMarker::environment_invalid(None))?;
 	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
 	let mut traversal = AssessmentTraversal::default();
 
-	let game = SafeDir::open_absolute(manifest_game_binding(&root, cancellation)?.game_directory().as_path())
+	let game = SafeDir::open_absolute(binding.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(None))?;
 	match game.open_dir("Data") {
 		Ok(data) => {
@@ -1391,6 +1395,7 @@ fn add_proposed_provider(
 
 pub(crate) fn visible_plugins(
 	root: &SafeDir,
+	binding: &GameBinding,
 	replacement: Option<(&ModName, &SafeDir)>,
 	cancellation: &CancellationToken,
 ) -> Result<HashMap<String, String>, ErrorMarker> {
@@ -1412,7 +1417,7 @@ pub(crate) fn visible_plugins(
 	let mods = root.open_dir("mods").context(ErrorMarker::environment_invalid(None))?;
 	let mut visible = HashMap::new();
 	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
-	let game = SafeDir::open_absolute(manifest_game_binding(root, cancellation)?.game_directory().as_path())
+	let game = SafeDir::open_absolute(binding.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(None))?;
 	match game.open_dir("Data") {
 		Ok(data) => add_root_plugins(&data, &mut visible, cancellation, &mut budget)?,
@@ -1625,7 +1630,6 @@ mod tests {
 	use domain::ParticipationReason;
 	use domain::ProviderReference;
 	use domain::Sha256Digest;
-	use domain::SteamBuildId;
 	use std::collections::HashSet;
 	use std::env::current_dir;
 	use std::error::Error;
@@ -1886,6 +1890,7 @@ mod tests {
 
 		let snapshot = load(
 			root.as_path(),
+			&initialization_plan(&fixture.path().join("game")).game_binding,
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
 		)
@@ -1935,8 +1940,13 @@ mod tests {
 				.expect("fixture environment root must canonicalize"),
 		)
 		.expect("fixture environment root must open");
-		let visible = visible_plugins(&safe_root, None, &CancellationToken::new())
-			.expect("visible plugins must load");
+		let visible = visible_plugins(
+			&safe_root,
+			&initialization_plan(&fixture.path().join("game")).game_binding,
+			None,
+			&CancellationToken::new(),
+		)
+		.expect("visible plugins must load");
 		assert_eq!(visible.get("éσ.esp").map(String::as_str), Some("éς.ESP"));
 		let profile = root.as_path().join("profile");
 		fs::write(profile.join("plugins.txt"), b"listed.esp\r\ndEpEnDeNcY.EsL\r\n")?;
@@ -1978,6 +1988,7 @@ mod tests {
 
 		let snapshot = load(
 			root.as_path(),
+			&initialization_plan(&fixture.path().join("game")).game_binding,
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
 		)
@@ -2038,6 +2049,7 @@ mod tests {
 
 		let snapshot = load(
 			root.as_path(),
+			&initialization_plan(&fixture.path().join("game")).game_binding,
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
 		)
@@ -2136,8 +2148,13 @@ mod tests {
 			},
 		};
 
-		let assessment = assess_installation(root.as_path(), &plan, &CancellationToken::new())
-			.expect("installation must be assessed");
+		let assessment = assess_installation(
+			root.as_path(),
+			&initialization_plan(&fixture.path().join("game")).game_binding,
+			&plan,
+			&CancellationToken::new(),
+		)
+		.expect("installation must be assessed");
 
 		assert!(assessment.overlaps.iter().all(|overlap| overlap.path != new_path));
 		assert_eq!(assessment.overlaps.len(), 1);
@@ -2227,8 +2244,13 @@ mod tests {
 			},
 		};
 
-		let assessment = assess_installation(root.as_path(), &plan, &CancellationToken::new())
-			.expect("installation must be assessed");
+		let assessment = assess_installation(
+			root.as_path(),
+			&initialization_plan(&fixture.path().join("game")).game_binding,
+			&plan,
+			&CancellationToken::new(),
+		)
+		.expect("installation must be assessed");
 
 		assert_eq!(assessment.overlaps.len(), 1);
 		let overlap = &assessment.overlaps[0];
@@ -2257,7 +2279,6 @@ mod tests {
 		InitializationPlan {
 			game_binding: GameBinding::new(
 				GameInstallationPath::new(game.to_owned()).expect("fixture game path must be valid"),
-				SteamBuildId::new(7).expect("fixture build ID must be valid"),
 			),
 			profile_sources: InitializationProfileSources {
 				files: PROFILE_FILES
@@ -2282,6 +2303,7 @@ sArchiveList=Fallout - Meshes.bsa
 
 		let result = load(
 			fixture.path(),
+			&initialization_plan(&fixture.path().join("game")).game_binding,
 			InstallationStateAccess::Preview,
 			&CancellationToken::new(),
 		);
@@ -2305,6 +2327,7 @@ sArchiveList=Fallout - Meshes.bsa
 
 		let result = load(
 			fixture.path(),
+			&initialization_plan(&fixture.path().join("game")).game_binding,
 			InstallationStateAccess::Mutation,
 			&CancellationToken::new(),
 		);

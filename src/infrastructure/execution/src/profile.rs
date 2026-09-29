@@ -10,7 +10,6 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
-use std::time::SystemTime;
 
 const PROFILE_FILES: [&str; 8] = [
 	"Fallout.ini",
@@ -32,11 +31,10 @@ pub struct ProfileText<'a> {
 	pub text: &'a str,
 }
 
-/// An analytical Data winner with backing-file modification time, not observed runtime visibility.
+/// An analytical Data winner not observed runtime visibility.
 #[derive(Debug, Clone)]
 pub struct VisibleProfileFile {
 	pub path: DataRelativePath,
-	pub modified: SystemTime,
 }
 
 /// Resolved Fallout-specific directories and decoded state; no save contents.
@@ -114,7 +112,7 @@ impl Error for ProfileConfigurationError {}
 /// # Errors
 ///
 /// Rejects malformed plugin lists, invalid routing/invalidation keys, duplicate
-/// inputs, and a visible provider occupying the reserved invalidation path.
+/// inputs.
 pub fn build_profile_configuration(
 	input: ProfileConfigurationInput<'_>,
 ) -> Result<ProfileConfiguration, ProfileConfigurationError> {
@@ -161,14 +159,12 @@ pub fn build_profile_configuration(
 
 	let mut visible = HashMap::new();
 	for file in input.visible_files {
-		if file.path.comparison_key() == case_fold_key(INVALIDATION_ARCHIVE)
-			|| visible.insert(file.path.comparison_key(), file).is_some()
-		{
+		if visible.insert(file.path.comparison_key(), file).is_some() {
 			return Err(report!(ProfileConfigurationError {
 				file: "Data".into(),
 				line: 0,
 				value: file.path.to_string(),
-				expected: "unique effective Data file outside reserved invalidation path"
+				expected: "unique effective Data file"
 			}));
 		}
 	}
@@ -226,18 +222,13 @@ pub fn build_profile_configuration(
 	}
 
 	let listed: HashSet<_> = ordered_plugins.iter().map(|file| file.path.comparison_key()).collect();
-	let mut unlisted: Vec<_> = input
+	let unlisted: Vec<_> = input
 		.visible_files
 		.iter()
 		.filter(|file| {
 			plugin_path(file.path.as_str()).is_some() && !listed.contains(file.path.comparison_key())
 		})
 		.collect();
-	unlisted.sort_by(|a, b| {
-		a.modified
-			.cmp(&b.modified)
-			.then_with(|| a.path.comparison_key().cmp(b.path.comparison_key()))
-	});
 	for file in &unlisted {
 		warnings.push(ProfileWarning::Unlisted {
 			plugin: file.path.to_string(),
@@ -338,7 +329,6 @@ fn plugin_path(name: &str) -> Option<DataRelativePath> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::time::Duration;
 	const VALID: &str = "[Archive]\r\nbInvalidateOlderFiles=1\r\nSInvalidationFile=\r\nsArchiveList=Fallout - Invalidation.bsa, DLC.bsa\r\n[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n";
 
 	fn build(
@@ -355,10 +345,9 @@ mod tests {
 			cache_directory: Path::new("/environment/cache"),
 		})
 	}
-	fn visible(name: &str, seconds: u64) -> VisibleProfileFile {
+	fn visible(name: &str) -> VisibleProfileFile {
 		VisibleProfileFile {
 			path: DataRelativePath::new(name.to_owned()).unwrap_or_else(|error| unreachable!("{error}")),
-			modified: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
 		}
 	}
 
@@ -386,10 +375,10 @@ mod tests {
 		let output = build(
 			&files,
 			&[
-				visible("A.esp", 1),
-				visible("B.esp", 2),
-				visible("FalloutNV.esm", 3),
-				visible("A.nam", 4),
+				visible("A.esp"),
+				visible("B.esp"),
+				visible("FalloutNV.esm"),
+				visible("A.nam"),
 			],
 		)?;
 		assert_eq!(
@@ -482,26 +471,26 @@ mod tests {
 				name: "Fallout.ini",
 				text: VALID
 			}],
-			&[visible("fallout - INVALIDATION.BSA", 0)]
+			&[visible("fallout - INVALIDATION.BSA")]
 		)
-		.is_err());
+		.is_ok());
 	}
 
 	#[test]
-	fn fallback_order_uses_time_then_case_insensitive_name() -> Result<(), ProfileConfigurationError> {
+	fn unlisted_plugins_keep_input_collection_order() -> Result<(), ProfileConfigurationError> {
 		let output = build(
 			&[ProfileText {
 				name: "Fallout.ini",
 				text: VALID,
 			}],
-			&[visible("z.esp", 1), visible("B.esp", 2), visible("a.esp", 2)],
+			&[visible("z.esp"), visible("B.esp"), visible("a.esp")],
 		)?;
 		assert_eq!(
 			output.plugins
 				.iter()
 				.map(|plugin| plugin.path.as_str())
 				.collect::<Vec<_>>(),
-			["z.esp", "a.esp", "B.esp"]
+			["z.esp", "B.esp", "a.esp"]
 		);
 		assert!(output.plugins.iter().all(|plugin| plugin.activation_sources.is_empty()));
 		Ok(())
@@ -560,11 +549,7 @@ mod tests {
 					text: "[general]\nsTESTfile1=Second.ESP\nsTestFile01=First.esp\n",
 				},
 			],
-			&[
-				visible("First.esp", 1),
-				visible("Second.esp", 2),
-				visible("Light.esl", 3),
-			],
+			&[visible("First.esp"), visible("Second.esp"), visible("Light.esl")],
 		)?;
 		assert_eq!(output.plugins.len(), 2);
 		assert_eq!(

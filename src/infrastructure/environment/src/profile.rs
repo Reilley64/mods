@@ -10,6 +10,7 @@ use application::ErrorMarker;
 use application::ports::InitializationProfileSources;
 use application::ports::ProfileFileDisposition;
 use application::ports::ProfileFileRecord;
+use domain::GameBinding;
 use domain::ModName;
 use domain::ProfileIniPurpose;
 use domain::canonical_profile_routing_valid;
@@ -304,6 +305,7 @@ fn validate_saves_inner(
 
 pub(crate) fn stage_plugin_maintenance(
 	root: &SafeDir,
+	binding: &GameBinding,
 	staged_mod: &SafeDir,
 	staged_profile: &SafeDir,
 	mod_name: &ModName,
@@ -314,8 +316,8 @@ pub(crate) fn stage_plugin_maintenance(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let before = visible_plugins(root, None, cancellation)?;
-	let after = visible_plugins(root, Some((mod_name, staged_mod)), cancellation)?;
+	let before = visible_plugins(root, binding, None, cancellation)?;
+	let after = visible_plugins(root, binding, Some((mod_name, staged_mod)), cancellation)?;
 	let unavailable = before
 		.keys()
 		.filter(|name| !after.contains_key(*name))
@@ -409,6 +411,10 @@ fn validate_plugin_list(
 	} else {
 		decode_active_code_page(&bytes)?
 	};
+	validate_plugin_text(&text, allow_light_plugins)
+}
+
+pub(crate) fn validate_plugin_text(text: &str, allow_light_plugins: bool) -> Result<(), ErrorMarker> {
 	let without_crlf = text.replace("\r\n", "");
 	if without_crlf.contains(['\r', '\n']) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));

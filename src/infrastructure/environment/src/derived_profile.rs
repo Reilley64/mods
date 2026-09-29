@@ -27,6 +27,15 @@ const INI_FILES: [&str; 5] = [
 	"GECKPrefs.ini",
 ];
 
+/// Exec archive list when neither canonical `FalloutCustom.ini` nor `Fallout.ini`
+/// assigns `sArchiveList`, so launch never reads `Fallout_default.ini`.
+///
+/// Copied verbatim from `SArchiveList` on line 706 of the English Steam
+/// `Fallout_default.ini` with SHA-256
+/// `A701C3A96AF26F83BA6399B4A579AF59FA075868949519F4DEC45BF47BF7F95D`, including its
+/// double space before `Fallout - Misc.bsa`. Localized editions were not checked.
+const FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST: &str = "Fallout - Textures.bsa, Fallout - Textures2.bsa, Fallout - Meshes.bsa, Fallout - Voices1.bsa, Fallout - Sound.bsa,  Fallout - Misc.bsa";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProfileIniInputs {
 	pub(crate) files: Vec<(&'static str, Option<Vec<u8>>)>,
@@ -38,6 +47,15 @@ impl ProfileIniInputs {
 	pub(crate) fn read(
 		profile: &SafeDir,
 		game: &Path,
+		cancellation: &CancellationToken,
+	) -> Result<Self, ErrorMarker> {
+		Self::read_mode(profile, game, false, cancellation)
+	}
+
+	fn read_mode(
+		profile: &SafeDir,
+		game: &Path,
+		execution: bool,
 		cancellation: &CancellationToken,
 	) -> Result<Self, ErrorMarker> {
 		let mut files = Vec::new();
@@ -52,13 +70,17 @@ impl ProfileIniInputs {
 				continue;
 			}
 
-			let bytes = read_bounded(
-				profile,
-				name,
-				MAX_PROFILE_BYTES,
-				ErrorMarker::environment_invalid(None),
-				cancellation,
-			)?;
+			let bytes = if execution {
+				profile.read(name).context(ErrorMarker::environment_invalid(None))?
+			} else {
+				read_bounded(
+					profile,
+					name,
+					MAX_PROFILE_BYTES,
+					ErrorMarker::environment_invalid(None),
+					cancellation,
+				)?
+			};
 			let (text, _) = decode(&bytes)?;
 			if !profile_ini_valid(&text) {
 				return Err(report!(ErrorMarker::environment_invalid(Some("profile_ini"))));
@@ -75,6 +97,8 @@ impl ProfileIniInputs {
 		let mut fallback = None;
 		let archive_list = if let Some(list) = custom_list.or(fallout_list) {
 			list
+		} else if execution {
+			FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST.to_owned()
 		} else {
 			let game = SafeDir::open_absolute(game).context(ErrorMarker::game_install_invalid())?;
 			let bytes = read_bounded(
@@ -129,7 +153,7 @@ impl ExecutionInis {
 		cancellation: &CancellationToken,
 	) -> Result<Self, ErrorMarker> {
 		let canonical = SafeDir::open_absolute(profile).context(ErrorMarker::environment_invalid(None))?;
-		let inputs = ProfileIniInputs::read(&canonical, game, cancellation)?;
+		let inputs = ProfileIniInputs::read_mode(&canonical, game, true, cancellation)?;
 
 		SafeDir::open_absolute(temp).context(ErrorMarker::environment_invalid(None))?;
 		let directory = Builder::new()
@@ -151,8 +175,10 @@ impl ExecutionInis {
 				if cancellation.is_cancelled() {
 					return Err(report!(ErrorMarker::operation_cancelled()));
 				}
-				let derived = bytes
-					.as_ref()
+				let source = bytes
+					.as_deref()
+					.or_else(|| (*name == "FalloutCustom.ini").then_some(&[][..]));
+				let derived = source
 					.map(|bytes| owner.inputs.derive(name, bytes, ProfileIniPurpose::Execution))
 					.transpose()?;
 				if let Some(bytes) = &derived {
@@ -178,18 +204,6 @@ impl ExecutionInis {
 		&self.path
 	}
 
-	pub(crate) fn revalidate(&self, game: &Path, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
-		let profile = SafeDir::open_absolute(&self.canonical_directory).context(ErrorMarker::io_failure())?;
-		if ProfileIniInputs::read(&profile, game, cancellation)? != self.inputs {
-			return Err(report!(ErrorMarker::environment_invalid(Some("profile_changed"))));
-		}
-		Ok(())
-	}
-
-	pub(crate) fn directory(&self) -> Option<&TempDir> {
-		self.directory.as_ref()
-	}
-
 	/// Call only after the entire managed Job is known to be empty, regardless of
 	/// its exit status. Publication is ordered, with no rollback or retry.
 	///
@@ -208,19 +222,12 @@ impl ExecutionInis {
 	}
 
 	fn preserve_inner(&mut self) -> Result<(), ErrorMarker> {
-		let cancellation = CancellationToken::new();
 		let canonical = SafeDir::open_absolute(&self.canonical_directory).context(ErrorMarker::io_failure())?;
 		let stage = SafeDir::open_absolute(self.path()).context(ErrorMarker::io_failure())?;
 		let mut updates = Vec::new();
 		for ((name, original), (_, baseline)) in self.inputs.files.iter().zip(&self.baseline) {
 			let current = if canonical.exists(name).context(ErrorMarker::io_failure())? {
-				Some(read_bounded(
-					&canonical,
-					name,
-					MAX_PROFILE_BYTES,
-					ErrorMarker::io_failure(),
-					&cancellation,
-				)?)
+				Some(canonical.read(name).context(ErrorMarker::io_failure())?)
 			} else {
 				None
 			};
@@ -229,13 +236,7 @@ impl ExecutionInis {
 			}
 
 			let child = if stage.exists(name).context(ErrorMarker::io_failure())? {
-				Some(read_bounded(
-					&stage,
-					name,
-					MAX_PROFILE_BYTES,
-					ErrorMarker::io_failure(),
-					&cancellation,
-				)?)
+				Some(stage.read(name).context(ErrorMarker::io_failure())?)
 			} else {
 				None
 			};
@@ -255,6 +256,10 @@ impl ExecutionInis {
 				.transpose()?
 				.unwrap_or_default();
 			let preserved = encode(&preserve_profile_ini_keys(&original_text, &text), encoding)?;
+			if original.is_none() && *name == "FalloutCustom.ini" {
+				continue;
+			}
+
 			updates.push((*name, preserved));
 		}
 
@@ -379,10 +384,7 @@ mod tests {
 		)
 		.context(ErrorMarker::io_failure())?;
 		owner.preserve()?;
-		let created =
-			fs::read_to_string(profile.join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
-		assert!(created.contains("created=yes"));
-		assert!(!created.contains("sArchiveList"));
+		assert!(!profile.join("FalloutCustom.ini").exists());
 		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new())?;
 		let retained = owner.path().to_owned();
 		fs::write(retained.join("Fallout.ini"), b"[malformed").context(ErrorMarker::io_failure())?;
@@ -420,9 +422,10 @@ mod tests {
 		let path = owner.path().to_owned();
 		let ini = path.join("Fallout.ini");
 		let derived = fs::read_to_string(&ini).context(ErrorMarker::io_failure())?;
-		assert!(derived.contains("__mods_saves"));
-		assert!(derived.contains("Fallout - Invalidation.bsa"));
-		assert!(!path.join("FalloutCustom.ini").exists());
+		let custom = fs::read_to_string(path.join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
+		assert!(custom.contains("__mods_saves"));
+		assert!(custom.contains("Fallout - Invalidation.bsa"));
+		assert!(!derived.contains("__mods_saves"));
 		fs::write(&ini, derived.replace("value=original", "value=child")).context(ErrorMarker::io_failure())?;
 		owner.preserve()?;
 		let canonical = fs::read_to_string(profile.join("Fallout.ini")).context(ErrorMarker::io_failure())?;
@@ -457,34 +460,126 @@ mod tests {
 	}
 
 	#[test]
-	fn explicit_empty_precedence_and_required_fallback_are_revalidated() -> Result<(), ErrorMarker> {
+	fn custom_overrides_preserve_effective_archives_and_unrelated_child_edits() -> Result<(), ErrorMarker> {
+		let (_temp, profile, game, staging) = fixture()?;
+		fs::write(
+			profile.join("FalloutCustom.ini"),
+			b"[Archive]\nsArchiveList=Custom.bsa, Fallout - Invalidation.bsa\n[Display]\nvalue=original\n",
+		)
+		.context(ErrorMarker::io_failure())?;
+		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new())?;
+		let custom =
+			fs::read_to_string(owner.path().join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
+		assert_eq!(
+			profile_archive_list(&custom),
+			Some("Custom.bsa, Fallout - Invalidation.bsa")
+		);
+		assert_eq!(custom.matches("Fallout - Invalidation.bsa").count(), 1);
+		assert!(custom.contains("SLocalSavePath=__mods_saves"));
+		fs::write(
+			owner.path().join("FalloutCustom.ini"),
+			custom.replace("value=original", "value=child"),
+		)
+		.context(ErrorMarker::io_failure())?;
+		owner.preserve()?;
+
+		let canonical =
+			fs::read_to_string(profile.join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
+		assert!(canonical.contains("value=child"));
+		assert!(!canonical.contains("__mods_saves"));
+		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new())?;
+		let custom =
+			fs::read_to_string(owner.path().join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
+		assert_eq!(custom.matches("Fallout - Invalidation.bsa").count(), 1);
+		owner.preserve()?;
+		Ok(())
+	}
+
+	#[test]
+	fn absent_archive_lists_use_embedded_defaults_once_and_keep_canonical_files() -> Result<(), ErrorMarker> {
+		let (_temp, profile, game, staging) = fixture()?;
+		let original = b"[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n[Display]\r\nvalue=original\r\n";
+		fs::write(profile.join("Fallout.ini"), original).context(ErrorMarker::io_failure())?;
+		fs::write(
+			game.join("Fallout_default.ini"),
+			b"[Archive]\r\nSArchiveList=Sentinel.bsa\r\n",
+		)
+		.context(ErrorMarker::io_failure())?;
+
+		for _ in 0..2 {
+			let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new())?;
+			let custom = fs::read_to_string(owner.path().join("FalloutCustom.ini"))
+				.context(ErrorMarker::io_failure())?;
+			assert_eq!(
+				profile_archive_list(&custom),
+				Some(
+					"Fallout - Textures.bsa, Fallout - Textures2.bsa, Fallout - Meshes.bsa, Fallout - Voices1.bsa, Fallout - Sound.bsa, Fallout - Misc.bsa, Fallout - Invalidation.bsa"
+				)
+			);
+			assert_eq!(custom.matches("Fallout - Invalidation.bsa").count(), 1);
+
+			owner.preserve()?;
+
+			assert_eq!(
+				fs::read(profile.join("Fallout.ini")).context(ErrorMarker::io_failure())?,
+				original
+			);
+			assert!(!profile.join("FalloutCustom.ini").exists());
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn explicit_empty_archive_lists_take_precedence_over_embedded_defaults() -> Result<(), ErrorMarker> {
+		let without_list = b"[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n".to_vec();
+		let mut empty_fallout_list = without_list.clone();
+		empty_fallout_list.extend_from_slice(b"[Archive]\r\nsArchiveList=\r\n");
+		let empty_custom_list = b"[Archive]\nsArchiveList=\n".to_vec();
+		let cases = [(without_list, Some(empty_custom_list)), (empty_fallout_list, None)];
+
+		for (fallout, custom) in cases {
+			let (_temp, profile, game, staging) = fixture()?;
+			fs::write(profile.join("Fallout.ini"), &fallout).context(ErrorMarker::io_failure())?;
+			if let Some(custom) = &custom {
+				fs::write(profile.join("FalloutCustom.ini"), custom)
+					.context(ErrorMarker::io_failure())?;
+			}
+
+			let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new())?;
+			let derived = fs::read_to_string(owner.path().join("FalloutCustom.ini"))
+				.context(ErrorMarker::io_failure())?;
+			assert_eq!(profile_archive_list(&derived), Some("Fallout - Invalidation.bsa"));
+
+			owner.preserve()?;
+
+			assert_eq!(
+				fs::read(profile.join("Fallout.ini")).context(ErrorMarker::io_failure())?,
+				fallout
+			);
+			let canonical_custom =
+				if profile.join("FalloutCustom.ini").exists() {
+					Some(fs::read(profile.join("FalloutCustom.ini"))
+						.context(ErrorMarker::io_failure())?)
+				} else {
+					None
+				};
+			assert_eq!(canonical_custom, custom);
+		}
+		Ok(())
+	}
+
+	#[test]
+	fn explicit_empty_custom_precedence_does_not_read_game_defaults() -> Result<(), ErrorMarker> {
 		let (_temp, profile, game, staging) = fixture()?;
 		fs::write(profile.join("FalloutCustom.ini"), b"[Archive]\nsArchiveList=\n")
 			.context(ErrorMarker::io_failure())?;
 		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new())?;
-		assert_eq!(owner.inputs.archive_list, "");
-		assert!(owner.inputs.fallback.is_none());
+		let custom =
+			fs::read_to_string(owner.path().join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
+		assert!(!custom.contains("Original.bsa"));
+		assert_eq!(custom.matches("Fallout - Invalidation.bsa").count(), 1);
 		owner.preserve()?;
-		fs::remove_file(profile.join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
-		fs::write(
-			profile.join("Fallout.ini"),
-			b"[General]\nSLocalSavePath=Saves\\\nbUseMyGamesDirectory=1\n",
-		)
-		.context(ErrorMarker::io_failure())?;
-		assert!(ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).is_err());
-		fs::write(
-			game.join("Fallout_default.ini"),
-			b"[Archive]\nsArchiveList=Default.bsa\n",
-		)
-		.context(ErrorMarker::io_failure())?;
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new())?;
-		assert_eq!(owner.inputs.archive_list, "Default.bsa");
-		fs::write(
-			game.join("Fallout_default.ini"),
-			b"[Archive]\nsArchiveList=Changed.bsa\n",
-		)
-		.context(ErrorMarker::io_failure())?;
-		assert!(owner.revalidate(&game, &CancellationToken::new()).is_err());
 		Ok(())
 	}
 }
