@@ -1,8 +1,9 @@
-#![cfg_attr(windows, feature(fn_traits))]
+#![feature(fn_traits)]
 
 mod execute_program;
 mod execution_adapter;
 mod explain_path;
+mod export_environment;
 mod get_setting;
 mod initialize_environment;
 mod inspect_mod_conflicts;

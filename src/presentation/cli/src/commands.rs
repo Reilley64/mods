@@ -36,6 +36,7 @@ pub(crate) enum Command {
 		command: ConflictsCommand,
 	},
 	Exec(ExecArgs),
+	Export(ExportArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -116,6 +117,15 @@ pub(crate) enum ConflictsCommand {
 		#[arg(long)]
 		compare_content: bool,
 	},
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ExportArgs {
+	pub(crate) output: PathBuf,
+	#[arg(long)]
+	pub(crate) include_saves: bool,
+	#[arg(long)]
+	pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -310,6 +320,27 @@ mod tests {
 		};
 		assert_eq!(arguments.command, values.map(OsString::from));
 		assert!(parse_from(["mods", "exec", "--"]).is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn export_accepts_only_the_approved_arguments() -> Result<(), Box<dyn Error>> {
+		let parsed = parse_from([
+			"mods",
+			"--environment",
+			"env",
+			"export",
+			"output",
+			"--include-saves",
+			"--dry-run",
+		])?;
+		let Command::Export(arguments) = parsed.command else {
+			return Err("export command must parse".into());
+		};
+		assert_eq!(arguments.output, std::path::PathBuf::from("output"));
+		assert!(arguments.include_saves && arguments.dry_run);
+		assert!(parse_from(["mods", "export"]).is_err());
+		assert!(parse_from(["mods", "export", "output", "--apply"]).is_err());
 		Ok(())
 	}
 

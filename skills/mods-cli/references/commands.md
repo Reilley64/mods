@@ -14,6 +14,7 @@ mods install ARCHIVE [--name NAME] [--replace] [--choice GROUP=OPTION]... [--dry
 mods conflicts list [--compare-content]
 mods conflicts inspect MOD_NAME [--compare-content]
 mods conflicts explain PATH [--compare-content]
+mods export OUTPUT [--include-saves] [--dry-run]
 mods exec [--output-target NAME] [--cwd PATH] -- PROGRAM [ARGS]...
 ```
 
@@ -55,4 +56,4 @@ Inspect output fields `source`, `manifest_value`, `manifest_path`, `shadowed`, a
 
 CLI query and preview output is line-oriented text (`key = value`, indexed fields and counts). Strings use JSON quoting, but the output is **not a JSON document**. Settings can show `unset`. Successful `init` and `config set game-dir` have empty stdout; warnings can still appear on stderr.
 
-Installation has three distinct successful outcomes; read [installation](installation.md). Conflict reports can contain invalid resolution and scoped problems even on exit zero; read [conflicts and execution](execution.md). Capture stdout, stderr, and status together. [Troubleshooting](troubleshooting.md) defines statuses and diagnostics.
+Installation has three distinct successful outcomes; read [installation](installation.md). Export preview lists paths, providers and byte totals; see [export and manual placement](export.md). Conflict reports can contain invalid resolution and scoped problems even on exit zero; read [conflicts and execution](execution.md). Capture stdout, stderr, and status together. [Troubleshooting](troubleshooting.md) defines statuses and diagnostics.

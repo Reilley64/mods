@@ -1,7 +1,10 @@
 use crate::output::quote;
 use application::ErrorCode;
 use application::ErrorMarker;
+use application::execution::RetainedExecutionInis;
+use application::export::RetainedExport;
 use rootcause::Report;
+use std::path::Path;
 
 pub(crate) fn exit_status(code: ErrorCode) -> u32 {
 	match code {
@@ -20,6 +23,68 @@ pub(crate) fn execution_exit_status(code: ErrorCode) -> u32 {
 		}
 		_ => 125,
 	}
+}
+
+pub(crate) fn execution_error<C>(report: &Report<C>) -> String {
+	let mut text = application_error(report);
+
+	if let Some(retained) = report
+		.iter_reports()
+		.find_map(|entry| entry.downcast_current_context::<RetainedExecutionInis>())
+	{
+		text.push_str(&format!(
+			"retained_execution_inis = {}\n",
+			quote(&retained.path.display().to_string())
+		));
+		text.push_str(
+			"Inspect retained INI edits after all managed processes have stopped. Do not discard them blindly.\n",
+		);
+	}
+
+	text
+}
+
+pub(crate) fn export_error<C>(report: &Report<C>, output: &Path) -> String {
+	let mut text = application_error(report);
+
+	if let Some(retained) = report
+		.iter_reports()
+		.find_map(|entry| entry.downcast_current_context::<RetainedExport>())
+	{
+		text.push_str(&format!(
+			"retained_partial_output = {}\n",
+			quote(&retained.path.display().to_string())
+		));
+		text.push_str(
+			"Inspect the retained staging folder before manual cleanup. The output was not published.\n",
+		);
+	} else {
+		text.push_str(&format!("output = {}\n", quote(&output.display().to_string())));
+	}
+
+	if let Some(marker) = application_marker(report) {
+		let advice = match marker.code() {
+			ErrorCode::EnvironmentAlreadyInitialized => {
+				Some("Choose a new output folder; even an empty existing folder is refused.")
+			}
+			ErrorCode::EnvironmentRootUnsafe => Some(
+				"Check that the destination is outside the Environment Root and Game Installation and that source paths are ordinary files.",
+			),
+			ErrorCode::EnvironmentInvalid if marker.phase() == Some("export_source_changed") => {
+				Some("Stop source writers, inspect changes, then start a new export.")
+			}
+			ErrorCode::InvalidDataPath => {
+				Some("Choose a safe output folder name and inspect the source paths.")
+			}
+			_ => None,
+		};
+		if let Some(advice) = advice {
+			text.push_str(advice);
+			text.push('\n');
+		}
+	}
+
+	text
 }
 
 pub(crate) fn application_error<C>(report: &Report<C>) -> String {
@@ -63,8 +128,56 @@ mod tests {
 	use super::marker;
 	use application::ErrorCode;
 	use application::ErrorMarker;
+	use application::execution::ExecuteProgramError;
+	use application::execution::RetainedExecutionInis;
 	use application::settings::ListSettingsError;
 	use rootcause::report;
+	use std::path::Path;
+	use std::path::PathBuf;
+
+	#[test]
+	fn execution_error_exposes_only_typed_retained_ini_path() {
+		let mut report = report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"))
+			.context(ExecuteProgramError);
+		report.children_mut().push(report!(RetainedExecutionInis {
+			path: PathBuf::from("C:\\private\\inis\\line\n")
+		})
+		.into_dynamic()
+		.into_cloneable());
+
+		let text = super::execution_error(&report);
+		assert!(text.contains("error [execution_supervision_failed]"));
+		assert!(text.contains("phase = profile_retained"));
+		assert!(text.contains("retained_execution_inis = \"C:\\\\private\\\\inis\\\\line\\n\""));
+		assert!(text.contains("after all managed processes have stopped"));
+		assert!(!text.contains("ExecuteProgramError"));
+		assert!(!text.contains("RetainedExecutionInis"));
+	}
+
+	#[test]
+	fn export_error_allowlists_retained_stage_and_never_formats_the_report_tree() {
+		let report = report!(ErrorMarker::io_failure()).context(application::export::ExportEnvironmentError);
+		let mut report = report;
+		report.children_mut().push(report!(application::export::RetainedExport {
+			path: PathBuf::from("C:\\private\\partial")
+		})
+		.into_dynamic()
+		.into_cloneable());
+		let text = super::export_error(&report, Path::new("C:\\private\\output"));
+		assert!(text.contains("error [io_failure]"));
+		assert!(text.contains("retained_partial_output = \"C:\\\\private\\\\partial\""));
+		assert!(!text.contains("ExportEnvironmentError"));
+		assert!(!text.lines().any(|line| line.starts_with("output =")));
+	}
+
+	#[test]
+	fn existing_export_destination_has_specific_safe_next_step() {
+		let report = report!(ErrorMarker::environment_already_initialized())
+			.context(application::export::ExportEnvironmentError);
+		let text = super::export_error(&report, Path::new("/existing"));
+		assert!(text.contains("output = \"/existing\""));
+		assert!(text.contains("Choose a new output folder"));
+	}
 
 	#[test]
 	fn execution_statuses_distinguish_lookup_launch_management_and_cancellation() {

@@ -41,11 +41,14 @@ New Data Mods start disabled. The released CLI has no enable command. Installati
 - `config` reads settings or changes the Game Binding.
 - `install` previews, installs, or replaces a Data Mod.
 - `conflicts` lists File Conflicts, inspects a Data Mod, or explains a Data-relative path.
+- `export` previews or publishes a resolved Data/Profile payload for manual placement. See the [export guide](skills/mods-cli/references/export.md).
 - `exec` runs a game or tool with a Virtual Game View. Overwrite is the default Output Target.
 
 Run `mods <command> --help` for the installed command's options. See the [command reference](skills/mods-cli/references/commands.md) for examples.
 
 Conflict analysis does not inspect BSA members or prove runtime compatibility. Managed execution does not guarantee analytical Tombstone suppression or enforce projected plugin order through virtual timestamps. Read the [conflict and execution guide](skills/mods-cli/references/execution.md) before relying on those results.
+
+Preview before exporting. The output must be a new folder outside the Environment Root and Game Installation. Export does not install into a game or launch it.
 
 ## Install the agent skill
 
