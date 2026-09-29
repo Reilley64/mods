@@ -93,13 +93,7 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 	let game = SafeDir::open_absolute(game_binding.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(Some("game_binding")))?;
 	match game.open_dir("Data") {
-		Ok(data) => providers.push(scan_provider(
-			&data,
-			ProviderIdentity::SteamData,
-			true,
-			false,
-			cancellation,
-		)?),
+		Ok(data) => providers.push(scan_provider(&data, ProviderIdentity::SteamData, true, cancellation)?),
 		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {
 			let mut provider = empty_provider(ProviderIdentity::SteamData, true);
 			provider.problems.push(ConflictProblem {
@@ -137,13 +131,7 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 		let directory = mods
 			.open_dir(&directory_name)
 			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-		providers.push(scan_provider(
-			&directory,
-			identity,
-			installed.enabled,
-			true,
-			cancellation,
-		)?);
+		providers.push(scan_provider(&directory, identity, installed.enabled, cancellation)?);
 	}
 	if !mod_directories.is_empty() {
 		problems.push(ConflictProblem {
@@ -156,7 +144,6 @@ pub(crate) fn scan(root_path: &Path, cancellation: &CancellationToken) -> Result
 		&overwrite,
 		ProviderIdentity::Overwrite,
 		true,
-		false,
 		cancellation,
 	)?);
 
@@ -418,7 +405,6 @@ fn scan_provider(
 	directory: &SafeDir,
 	identity: ProviderIdentity,
 	enabled: bool,
-	require_metadata: bool,
 	cancellation: &CancellationToken,
 ) -> Result<ScannedConflictProvider, ErrorMarker> {
 	let mut provider = empty_provider(identity.clone(), enabled);
@@ -442,12 +428,6 @@ fn scan_provider(
 	let metadata_exists = directory
 		.exists("meta.toml")
 		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-	if require_metadata && !metadata_exists {
-		problems.push(ConflictProblem {
-			kind: ConflictProblemKind::InvalidTombstoneMetadata,
-			scope: ProblemScope::Provider(identity.clone()),
-		});
-	}
 	if metadata_exists {
 		provider.tombstones = read_tombstones(directory, &identity, enabled, &mut problems, cancellation)?;
 	}
@@ -907,6 +887,52 @@ mod tests {
 				.sum::<usize>(),
 			4
 		);
+		Ok(())
+	}
+
+	#[test]
+	fn missing_metadata_has_no_tombstones_or_metadata_problem() -> Result<(), Box<dyn Error>> {
+		let (_temp, root) = fixture()?;
+		write_provider(
+			root.as_path(),
+			"Plain",
+			&[("ordinary.dds", b"content")],
+			"schema_version = 1\n",
+		)?;
+		fs::remove_file(root.as_path().join("mods/Plain/meta.toml"))?;
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+Plain\n")?;
+
+		let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+		let provider = completed
+			.providers
+			.iter()
+			.find(|provider| matches!(provider.identity, ProviderIdentity::DataMod { .. }))
+			.ok_or("Data Mod must be scanned")?;
+		assert!(completed.problems.is_empty());
+		assert!(provider.problems.is_empty());
+		assert!(provider.tombstones.is_empty());
+		assert_eq!(provider.files.len(), 1);
+		Ok(())
+	}
+
+	#[test]
+	fn present_invalid_metadata_is_reported() -> Result<(), Box<dyn Error>> {
+		for metadata in ["not = [", "schema_version = 2\n"] {
+			let (_temp, root) = fixture()?;
+			write_provider(root.as_path(), "Broken", &[], metadata)?;
+			fs::write(root.as_path().join("profile/modlist.txt"), b"+Broken\n")?;
+
+			let completed = scan(root.as_path(), &CancellationToken::new()).expect("scan must complete");
+			let provider = completed
+				.providers
+				.iter()
+				.find(|provider| matches!(provider.identity, ProviderIdentity::DataMod { .. }))
+				.ok_or("Data Mod must be scanned")?;
+			assert!(provider
+				.problems
+				.iter()
+				.any(|problem| problem.kind == ConflictProblemKind::InvalidTombstoneMetadata));
+		}
 		Ok(())
 	}
 
