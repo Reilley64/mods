@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +38,10 @@ const rule = (id: string, section: string, title: string): StyleRule => ({
 const spacing = rule("formatting-and-imports-phase-spacing", "Formatting and imports", "Phase spacing");
 const guards = rule("control-flow-guard-clauses", "Control flow", "Guard clauses");
 const finding = (path: string, style: StyleRule): StyleFinding => ({ file: path, rule: style, probability: 0.9 });
+const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
+const reviewedSource = "// Run the function.\nfn run() {}\n";
+const reviewedHash = sha256(reviewedSource);
+const reviewed = (...paths: string[]) => new Map(paths.map((path) => [path, reviewedSource]));
 
 describe("coding style gate dispositions", () => {
 	test("an absent file accepts nothing and reports nothing", async () => {
@@ -61,9 +66,9 @@ describe("coding style gate dispositions", () => {
 		const root = await projectWith(
 			JSON.stringify({
 				dispositions: [
-					{ file: "src/a.rs", rule: spacing.id, reason: "   " },
-					{ file: "src/b.rs", rule: spacing.id },
-					{ file: "src/c.rs", rule: spacing.id, reason: "Documented reason." },
+					{ file: "src/a.rs", rule: spacing.id, reason: "   ", sha256: reviewedHash },
+					{ file: "src/b.rs", rule: spacing.id, sha256: reviewedHash },
+					{ file: "src/c.rs", rule: spacing.id, reason: "Documented reason.", sha256: reviewedHash },
 				],
 			}),
 		);
@@ -72,6 +77,7 @@ describe("coding style gate dispositions", () => {
 		const outcome = applyDispositions(
 			[finding("src/a.rs", spacing), finding("src/b.rs", spacing), finding("src/c.rs", spacing)],
 			loaded.dispositions,
+			reviewed("src/a.rs", "src/b.rs", "src/c.rs"),
 		);
 
 		expect(loaded.problems).toEqual([
@@ -103,13 +109,13 @@ describe("coding style gate dispositions", () => {
 		expect(linked.problems[0]).toContain("within the project");
 	});
 
-	test("matches the repository-relative path with the rule ID or displayed rule", async () => {
+	test("matches the repository-relative path, including Windows separators, with the rule ID or displayed rule", async () => {
 		const root = await projectWith(
 			JSON.stringify({
 				dispositions: [
-					{ file: "./src/a.rs", rule: spacing.id, reason: "Rule ID." },
-					{ file: "src\\b.rs", rule: "Control flow / Guard clauses", reason: "Displayed rule." },
-					{ file: "src/c.rs", rule: "Phase spacing", reason: "Title alone is ambiguous." },
+					{ file: "./src/a.rs", rule: spacing.id, reason: "Rule ID.", sha256: reviewedHash },
+					{ file: "src\\b.rs", rule: "Control flow / Guard clauses", reason: "Displayed rule.", sha256: reviewedHash },
+					{ file: "src/c.rs", rule: "Phase spacing", reason: "Title alone is ambiguous.", sha256: reviewedHash },
 				],
 			}),
 		);
@@ -125,6 +131,7 @@ describe("coding style gate dispositions", () => {
 				finding("other/src/a.rs", spacing),
 			],
 			loaded.dispositions,
+			reviewed("src/a.rs", "src/b.rs", "src/c.rs", "other/src/a.rs"),
 		);
 
 		expect(loaded.problems).toEqual([]);
@@ -138,5 +145,99 @@ describe("coding style gate dispositions", () => {
 			"src/c.rs formatting-and-imports-phase-spacing",
 			"other/src/a.rs formatting-and-imports-phase-spacing",
 		]);
+	});
+
+	test("an entry with a missing or invalid sha256 accepts nothing", async () => {
+		const root = await projectWith(
+			JSON.stringify({
+				dispositions: [
+					{ file: "src/a.rs", rule: spacing.id, reason: "No hash." },
+					{ file: "src/b.rs", rule: spacing.id, reason: "Uppercase hash.", sha256: reviewedHash.toUpperCase() },
+					{ file: "src/c.rs", rule: spacing.id, reason: "Short hash.", sha256: reviewedHash.slice(1) },
+				],
+			}),
+		);
+
+		const loaded = await loadDispositions(root, file);
+		const outcome = applyDispositions(
+			[finding("src/a.rs", spacing), finding("src/b.rs", spacing), finding("src/c.rs", spacing)],
+			loaded.dispositions,
+			reviewed("src/a.rs", "src/b.rs", "src/c.rs"),
+		);
+
+		expect(loaded.dispositions).toEqual([]);
+		expect(loaded.problems).toEqual(
+			["src/a.rs", "src/b.rs", "src/c.rs"].map(
+				(path, index) =>
+					`${file} entry ${index} has no valid sha256 (the lowercase hex SHA-256 of ${path}); it accepts no findings. Re-review the file and record its current hash.`,
+			),
+		);
+		expect(outcome.accepted).toEqual([]);
+		expect(outcome.unaccepted).toHaveLength(3);
+	});
+
+	test("a matching hash accepts the finding and a changed file makes the disposition stale", async () => {
+		const root = await projectWith(
+			JSON.stringify({
+				dispositions: [
+					{ file: "src/a.rs", rule: spacing.id, reason: "Accepted once.", sha256: reviewedHash },
+					{ file: "src/b.rs", rule: spacing.id, reason: "Accepted once.", sha256: reviewedHash },
+					{ file: "src/c.rs", rule: spacing.id, reason: "Accepted once.", sha256: reviewedHash },
+				],
+			}),
+		);
+		const stacked = `${reviewedSource}// Run it again.\nfn again() {}\n`;
+
+		const loaded = await loadDispositions(root, file);
+		const outcome = applyDispositions(
+			[finding("src/a.rs", spacing), finding("src/b.rs", spacing), finding("src/c.rs", spacing)],
+			loaded.dispositions,
+			new Map([
+				["src/a.rs", reviewedSource],
+				["src/b.rs", stacked],
+			]),
+		);
+
+		expect(loaded.problems).toEqual([]);
+		expect(outcome.accepted.map((accepted) => accepted.file)).toEqual(["src/a.rs"]);
+		expect(outcome.unaccepted.map((unaccepted) => unaccepted.file)).toEqual(["src/b.rs", "src/c.rs"]);
+		expect(outcome.problems).toEqual([
+			`src/b.rs changed since this disposition was recorded (rule ${spacing.id}); re-review and update its sha256.`,
+			`src/c.rs no longer exists (rule ${spacing.id}); its disposition accepts no findings.`,
+		]);
+	});
+
+	test("the stamp script fills and refreshes hashes for existing files only", async () => {
+		const root = await projectWith(
+			JSON.stringify({
+				dispositions: [
+					{ file: "src/a.rs", rule: spacing.id, reason: "New." },
+					{ file: "src\\b.rs", rule: spacing.id, reason: "Stale.", sha256: sha256("fn old() {}\n") },
+					{ file: "src/c.rs", rule: spacing.id, reason: "Current.", sha256: reviewedHash },
+					{ file: "src/deleted.rs", rule: spacing.id, reason: "Deleted.", sha256: reviewedHash },
+				],
+			}),
+		);
+		await Bun.$`git init -q ${root}`;
+		await mkdir(join(root, "src"));
+		for (const name of ["a.rs", "b.rs", "c.rs"]) {
+			await writeFile(join(root, "src", name), reviewedSource);
+		}
+
+		const output = await Bun.$`bun ${join(import.meta.dir, "..", "scripts", "stamp-dispositions.ts")} --file ${file}`.cwd(root).text();
+		const stamped = JSON.parse(await readFile(join(root, file), "utf8"));
+
+		expect(output).toContain(`stamped entry 0 src/a.rs (rule ${spacing.id}): ${reviewedHash}`);
+		expect(output).toContain(`refreshed entry 1 src/b.rs (rule ${spacing.id}): ${reviewedHash}`);
+		expect(output).not.toContain("src/c.rs");
+		expect(output).toContain("skipped entry 3 src/deleted.rs: file does not exist");
+		expect(output).toContain("Updated 2 dispositions");
+		expect(stamped.dispositions.map((entry: { sha256: string }) => entry.sha256)).toEqual([
+			reviewedHash,
+			reviewedHash,
+			reviewedHash,
+			reviewedHash,
+		]);
+		expect((await loadDispositions(root, file)).problems).toEqual([]);
 	});
 });

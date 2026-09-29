@@ -14,7 +14,7 @@ Likely violations are appended to the tool result, so the agent sees them before
 
 Enforcement queues a task-bounded number of correction turns. If the code still fails, the extension asks the user to intervene instead of starting an infinite loop. A user can accept the exact current policy-and-code fingerprint with `/coding-style-gate override <reason>`. Any relevant code, policy, model, or threshold change invalidates that override.
 
-Before handing back, the receiving agent must fix and recheck each finding, or explicitly accept it with the file, rule, and reason. Accepted findings are not a clean review. A disposition recorded in the dispositions file clears the enforce-mode block for its finding; acceptance only in a handoff does not. The existing override mechanism is unchanged. Review failures must be resolved and rechecked, or reported as blocked; they are not findings that can be accepted. This guidance is included in the receiving session's tool results and final-review messages. Advisory mode does not force another agent turn.
+Before handing back, the receiving agent must fix and recheck each finding, or explicitly accept it with the file, rule, reason, and content hash. Accepted findings are not a clean review. A disposition recorded in the dispositions file clears the enforce-mode block for its finding; acceptance only in a handoff does not. The existing override mechanism is unchanged. Review failures must be resolved and rechecked, or reported as blocked; they are not findings that can be accepted. This guidance is included in the receiving session's tool results and final-review messages. Advisory mode does not force another agent turn.
 
 The extension does not revert files. `rustfmt`, rustc, Clippy, and repository tests remain deterministic checks outside Jev.
 
@@ -28,7 +28,8 @@ The dispositions file (default `.prime/agent/coding-style-dispositions.json`) re
     {
       "file": "src/example/src/lib.rs",
       "rule": "formatting-and-imports-phase-spacing",
-      "reason": "Why this finding does not apply or is accepted."
+      "reason": "Why this finding does not apply or is accepted.",
+      "sha256": "0f343b0931126a20f133d67c2b018a3b5e1dfc7a5f1b0d4f8e1e0d1c2b3a4f5e"
     }
   ]
 }
@@ -37,12 +38,21 @@ The dispositions file (default `.prime/agent/coding-style-dispositions.json`) re
 - `file` is the repository-relative path that the gate reports. The gate normalizes a leading `./` and Windows separators. It rejects absolute paths and paths outside the repository.
 - `rule` is the rule ID, such as `formatting-and-imports-phase-spacing`. Every finding carries its ID, and receipts record it. The gate also accepts the displayed `Section / Title` form, such as `Formatting and imports / Phase spacing`. A title without its section does not match.
 - `reason` must be non-empty.
+- `sha256` is the lowercase hex SHA-256 of the file's current content: the working-tree content that the gate reviewed. It must be 64 lowercase hexadecimal characters.
 
-A finding that matches the file and rule of a valid entry is accepted. Enforce mode blocks, and starts correction turns, only for unaccepted findings. If every finding is accepted, the gate does not block and does not start a follow-up. Dispositions do not change the review fingerprint, so they do not invalidate an existing override.
+A finding is accepted only when the file, the rule, and the hash of the reviewed file content all match a valid entry. A disposition therefore covers one version of the file. Any later change to the file, such as new violations stacked on an accepted one, makes the disposition stale: it accepts nothing, and the review reports `<file> changed since this disposition was recorded (rule <id>); re-review and update its sha256.` A deleted file accepts nothing either.
+
+After you re-review a file, record or refresh its hashes with the explicit stamp command:
+
+```text
+bun .prime/agent/extensions/coding-style-gate/scripts/stamp-dispositions.ts [--file <dispositions.json>]
+```
+
+The command fills or refreshes `sha256` on every entry whose file exists, and prints each entry that it changed. It defaults to the configured `dispositionsFile` of the current repository. Stamping accepts the current content of every listed file, so run it only after the review; the gate never stamps automatically. Enforce mode blocks, and starts correction turns, only for unaccepted findings. If every finding is accepted, the gate does not block and does not start a follow-up. Dispositions do not change the review fingerprint, so they do not invalidate an existing override.
 
 Tool-result, final-review, `check`, and `status` messages list only unaccepted findings. They add one line with the number of accepted findings, and state that accepted findings are not a clean review. When every finding is accepted, the tool result and a final-review notice still report that count. Receipts record unaccepted findings in `findings` and `findingCount`, and accepted findings in `acceptedFindings` and `acceptedFindingCount`.
 
-An absent file accepts nothing. A file that is not valid JSON, has no `dispositions` array, or resolves outside the project accepts nothing. An entry with a missing or empty `file`, `rule`, or `reason` accepts nothing; other valid entries still apply. The review messages report each of these problems. They are not review failures.
+An absent file accepts nothing. A file that is not valid JSON, has no `dispositions` array, or resolves outside the project accepts nothing. An entry with a missing or empty `file`, `rule`, or `reason`, or a missing or invalid `sha256`, accepts nothing; other valid entries still apply. A stale hash on an entry that matches a finding's file and rule accepts nothing. The review messages report each of these problems. They are not review failures.
 
 Each watched root reads its own dispositions file.
 
@@ -183,7 +193,7 @@ Completed tool-result, agent-end, and manual `check` reviews record:
 - review fingerprint, model, reviewed files, and finding count;
 - unaccepted finding file, rule ID, and probability;
 - accepted finding count, and each accepted finding's file, rule ID, and probability;
-- the number of dispositions-file problems;
+- the number of dispositions-file problems, including stale hashes;
 - `cachedFiles`, distinguishing reused results from new requests.
 
 `outcome: "reviewed"` with zero findings is an affirmative clean review, not a

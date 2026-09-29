@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -199,7 +200,7 @@ describe("Prime coding style gate", () => {
 			} else {
 				expect(guidance).toContain("fix the code and recheck");
 				expect(guidance).toContain("explicitly accept the finding");
-				expect(guidance).toContain("file, rule, and reason");
+				expect(guidance).toContain("file, rule, reason, and sha256");
 				expect(guidance).toContain("does not clear the block");
 			}
 			await worker.handlers.get("agent_end")?.({ messages: [] }, context);
@@ -930,6 +931,8 @@ for (const local of [{ model: "jev-1.13.0" }, { provider: "typesafe", model: "je
 
 describe("documented dispositions", () => {
 	const ruleId = "comments-and-documentation-reason-comments";
+	const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
+	const editedHash = sha256("// Run the function.\nfn run() {}\n");
 
 	async function enforcedProject(dispositions?: string) {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-dispositions-"));
@@ -963,7 +966,7 @@ describe("documented dispositions", () => {
 
 	test("blocks only unaccepted findings and counts accepted ones", async () => {
 		const project = await enforcedProject(
-			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract." }] }),
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash }] }),
 		);
 
 		const toolText = await editBoth(project);
@@ -989,8 +992,8 @@ describe("documented dispositions", () => {
 		const project = await enforcedProject(
 			JSON.stringify({
 				dispositions: [
-					{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract." },
-					{ file: "src/open.rs", rule: "Comments and documentation / Reason comments", reason: "The comment records a documented contract." },
+					{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash },
+					{ file: "src/open.rs", rule: "Comments and documentation / Reason comments", reason: "The comment records a documented contract.", sha256: editedHash },
 				],
 			}),
 		);
@@ -1011,7 +1014,13 @@ describe("documented dispositions", () => {
 	for (const [name, dispositions, problem] of [
 		["an absent file", undefined, undefined],
 		["a malformed file", "{not json", "is not valid JSON"],
-		["an empty reason", JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: " " }] }), "entry 0 has no non-empty reason"],
+		["an empty reason", JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: " ", sha256: editedHash }] }), "entry 0 has no non-empty reason"],
+		["a missing hash", JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "Documented." }] }), "entry 0 has no valid sha256"],
+		[
+			"a file changed since its disposition",
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "Documented.", sha256: sha256("fn run() {}\n") }] }),
+			"src/accepted.rs changed since this disposition was recorded",
+		],
 	] as const) {
 		test(`accepts nothing from ${name}`, async () => {
 			const project = await enforcedProject(dispositions);
@@ -1024,7 +1033,8 @@ describe("documented dispositions", () => {
 			if (problem === undefined) {
 				expect(toolText).not.toContain("dispositions problem");
 			} else {
-				expect(toolText).toContain(`coding-style-gate dispositions problem: .prime/agent/coding-style-dispositions.json ${problem}`);
+				expect(toolText).toContain("coding-style-gate dispositions problem: ");
+				expect(toolText).toContain(problem);
 			}
 			expect(project.prime.userMessages).toHaveLength(1);
 			expect(project.prime.entries.at(-1)?.data).toMatchObject({ findingCount: 2, acceptedFindingCount: 0 });
@@ -1033,7 +1043,7 @@ describe("documented dispositions", () => {
 
 	test("keeps the override mechanism for unaccepted findings", async () => {
 		const project = await enforcedProject(
-			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract." }] }),
+			JSON.stringify({ dispositions: [{ file: "src/accepted.rs", rule: ruleId, reason: "The comment records a documented contract.", sha256: editedHash }] }),
 		);
 
 		await editBoth(project);

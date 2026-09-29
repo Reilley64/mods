@@ -164,10 +164,15 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 				signal,
 			});
 			const { dispositions, problems } = await loadDispositions(root, config.dispositionsFile);
-			const { accepted, unaccepted } = applyDispositions(report.findings, dispositions);
+			const outcome = applyDispositions(report.findings, dispositions, after);
 			return {
 				fingerprint: prepared.fingerprint,
-				report: { ...report, findings: unaccepted, acceptedFindings: accepted, dispositionProblems: problems },
+				report: {
+					...report,
+					findings: outcome.unaccepted,
+					acceptedFindings: outcome.accepted,
+					dispositionProblems: [...problems, ...outcome.problems],
+				},
 				files: prepared.changes.map((change) => change.path),
 				cachedFiles: report.cachedFiles ?? 0,
 			};

@@ -1,11 +1,13 @@
 import type { StyleFinding, StyleReviewReport } from "./reviewer";
 
 export interface GateReviewReport extends StyleReviewReport {
-	/** Findings cleared by a documented file, rule, and reason. `findings` holds only unaccepted findings. */
+	/** Findings cleared by a documented file, rule, reason, and content hash. `findings` holds only unaccepted findings. */
 	acceptedFindings?: StyleFinding[];
-	/** Dispositions-file errors. An invalid file or entry accepts no findings. */
+	/** Dispositions-file errors, including stale hashes. An invalid file, entry, or hash accepts no findings. */
 	dispositionProblems?: string[];
 }
+
+const STAMP_SCRIPT = ".prime/agent/extensions/coding-style-gate/scripts/stamp-dispositions.ts";
 
 export function formatReviewFailure(message: string): string {
 	return `${message}
@@ -40,7 +42,8 @@ export function formatReview(report: GateReviewReport, dispositionsFile: string)
 		...lines,
 		...(accepted > 0 ? [acceptedLine] : []),
 		...problems,
-		`Before handing back, address every finding: either fix the code and recheck it, or explicitly accept the finding by recording its file, rule, and reason in ${dispositionsFile} (including why a suspected false positive does not apply).`,
+		`Before handing back, address every finding: either fix the code and recheck it, or explicitly accept the finding by recording its file, rule, reason, and sha256 in ${dispositionsFile} (including why a suspected false positive does not apply).`,
+		`The sha256 is the lowercase hex SHA-256 of the file's current content; a disposition accepts nothing after the file changes. Record or refresh it with \`bun ${STAMP_SCRIPT}\` only after you re-review the file.`,
 		"Do not silently ignore findings or describe accepted findings as a clean review. In enforce mode, a disposition recorded in the dispositions file clears the block for that finding; acceptance only in your handoff does not clear the block. The existing /coding-style-gate override <reason> mechanism still applies.",
 	].join("\n");
 }
