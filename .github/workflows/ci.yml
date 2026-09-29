@@ -58,7 +58,7 @@ jobs:
           targets: x86_64-pc-windows-msvc, i686-pc-windows-msvc
       - name: Install cargo-nextest
         if: steps.rust-changes.outputs.changed == 'true'
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-nextest@0.9.145
           fallback: none
