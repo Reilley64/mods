@@ -102,7 +102,11 @@ mod tests {
 	async fn invalid_root_does_not_mask_later_library_discovery_cancellation() -> Result<()> {
 		let temp = TempDir::new()?;
 		let invalid_root = temp.path().join("invalid-root");
-		fs::write(&invalid_root, b"not a directory")?;
+		fs::create_dir_all(invalid_root.join("steamapps"))?;
+		fs::write(
+			invalid_root.join("steamapps/libraryfolders.vdf"),
+			b"\"libraryfolders\"\n{\n\"0\"\n{\n",
+		)?;
 		let cancelling_root = temp.path().join("cancelling-root");
 		let steam_roots = [invalid_root, cancelling_root.clone()];
 
