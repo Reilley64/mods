@@ -10,6 +10,7 @@ export interface GateConfig {
 	model: string;
 	ruleThresholds: Record<string, number>;
 	styleFile: string;
+	dispositionsFile: string;
 	tools: string[];
 	timeoutMs: number;
 	maxConcurrency: number;
@@ -24,6 +25,7 @@ export const DEFAULT_CONFIG: GateConfig = {
 	model: "typesafe/jev-1.13",
 	ruleThresholds: {},
 	styleFile: "CODING_STYLE.md",
+	dispositionsFile: ".prime/agent/coding-style-dispositions.json",
 	tools: ["ipython", "edit", "bash"],
 	timeoutMs: 10_000,
 	maxConcurrency: 4,
@@ -52,7 +54,6 @@ export async function loadConfig(root: string, sessionModel?: string): Promise<G
 	const config = { ...DEFAULT_CONFIG, ...local };
 	config.model = sessionModel ?? config.model;
 	if (config.model === "jev-1.13.0") config.model = DEFAULT_CONFIG.model;
-	const normalizedStyleFile = typeof config.styleFile === "string" ? normalize(config.styleFile) : "";
 	if (config.mode !== "advisory" && config.mode !== "enforce") {
 		throw new Error(`coding-style-gate: invalid mode ${String(config.mode)}`);
 	}
@@ -63,13 +64,18 @@ export async function loadConfig(root: string, sessionModel?: string): Promise<G
 	if (!["typesafe/jev-1.13", "typesafe/jev-1.13-20260917"].includes(config.model)) {
 		throw new Error("coding-style-gate: unsupported OpenRouter model; use typesafe/jev-1.13 or typesafe/jev-1.13-20260917");
 	}
-	if (
-		typeof config.styleFile !== "string" ||
-		!config.styleFile ||
-		isAbsolute(config.styleFile) ||
-		(normalizedStyleFile === ".." || normalizedStyleFile.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
-	) {
-		throw new Error("coding-style-gate: styleFile must stay within the project");
+	for (const field of ["styleFile", "dispositionsFile"] as const) {
+		const path: unknown = config[field];
+		const normalized = typeof path === "string" ? normalize(path) : "";
+		if (
+			typeof path !== "string" ||
+			!path ||
+			isAbsolute(path) ||
+			normalized === ".." ||
+			normalized.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
+		) {
+			throw new Error(`coding-style-gate: ${field} must stay within the project`);
+		}
 	}
 	if (!Number.isInteger(config.timeoutMs) || config.timeoutMs <= 0) {
 		throw new Error("coding-style-gate: timeoutMs must be a positive integer");

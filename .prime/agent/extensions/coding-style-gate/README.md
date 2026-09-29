@@ -14,9 +14,37 @@ Likely violations are appended to the tool result, so the agent sees them before
 
 Enforcement queues a task-bounded number of correction turns. If the code still fails, the extension asks the user to intervene instead of starting an infinite loop. A user can accept the exact current policy-and-code fingerprint with `/coding-style-gate override <reason>`. Any relevant code, policy, model, or threshold change invalidates that override.
 
-Before handing back, the receiving agent must fix and recheck each finding, or explicitly accept it with the file, rule, and reason. Accepted findings are not a clean review. Acceptance in a handoff does not clear enforce-mode blocks or replace the existing override mechanism. Review failures must be resolved and rechecked, or reported as blocked; they are not findings that can be accepted. This guidance is included in the receiving session's tool results and final-review messages. Advisory mode does not force another agent turn.
+Before handing back, the receiving agent must fix and recheck each finding, or explicitly accept it with the file, rule, and reason. Accepted findings are not a clean review. A disposition recorded in the dispositions file clears the enforce-mode block for its finding; acceptance only in a handoff does not. The existing override mechanism is unchanged. Review failures must be resolved and rechecked, or reported as blocked; they are not findings that can be accepted. This guidance is included in the receiving session's tool results and final-review messages. Advisory mode does not force another agent turn.
 
 The extension does not revert files. `rustfmt`, rustc, Clippy, and repository tests remain deterministic checks outside Jev.
+
+## Documented dispositions
+
+The dispositions file (default `.prime/agent/coding-style-dispositions.json`) records accepted findings:
+
+```json
+{
+  "dispositions": [
+    {
+      "file": "src/example/src/lib.rs",
+      "rule": "formatting-and-imports-phase-spacing",
+      "reason": "Why this finding does not apply or is accepted."
+    }
+  ]
+}
+```
+
+- `file` is the repository-relative path that the gate reports. The gate normalizes a leading `./` and Windows separators. It rejects absolute paths and paths outside the repository.
+- `rule` is the rule ID, such as `formatting-and-imports-phase-spacing`. Every finding carries its ID, and receipts record it. The gate also accepts the displayed `Section / Title` form, such as `Formatting and imports / Phase spacing`. A title without its section does not match.
+- `reason` must be non-empty.
+
+A finding that matches the file and rule of a valid entry is accepted. Enforce mode blocks, and starts correction turns, only for unaccepted findings. If every finding is accepted, the gate does not block and does not start a follow-up. Dispositions do not change the review fingerprint, so they do not invalidate an existing override.
+
+Tool-result, final-review, `check`, and `status` messages list only unaccepted findings. They add one line with the number of accepted findings, and state that accepted findings are not a clean review. When every finding is accepted, the tool result and a final-review notice still report that count. Receipts record unaccepted findings in `findings` and `findingCount`, and accepted findings in `acceptedFindings` and `acceptedFindingCount`.
+
+An absent file accepts nothing. A file that is not valid JSON, has no `dispositions` array, or resolves outside the project accepts nothing. An entry with a missing or empty `file`, `rule`, or `reason` accepts nothing; other valid entries still apply. The review messages report each of these problems. They are not review failures.
+
+Each watched root reads its own dispositions file.
 
 ## Setup
 
@@ -58,6 +86,7 @@ The gate submits every item to Jev. Independent rubric questions that share a pa
 - `model`: session-wide OpenRouter model. Defaults to `typesafe/jev-1.13`; the pinned response ID `typesafe/jev-1.13-20260917` is also accepted. Legacy `jev-1.13.0` normalizes to the default. Other session IDs fail configuration validation. Watched-root model values are ignored before validation;
 - `ruleThresholds`: required explicit Noul violation threshold for every rubric rule ID; there is no global fallback. Missing or invalid entries fail the review before an API request. The old scalar `threshold` setting is rejected;
 - `styleFile`: project-relative policy file;
+- `dispositionsFile`: project-relative dispositions file. Defaults to `.prime/agent/coding-style-dispositions.json`. The gate validates it like `styleFile`;
 - `tools`: tool names observed for filesystem changes;
 - `timeoutMs`: timeout for each OpenRouter attempt;
 - `maxConcurrency`: maximum number of file reviews in flight;
@@ -78,7 +107,7 @@ Start in `advisory` mode. Calibrate rules and thresholds with representative goo
 /coding-style-gate override <reason>
 ```
 
-`check` reviews the complete task-local Rust diff. `reset` accepts the current filesystem state as the new task baseline without calling Jev. `override` accepts only the current code and policy fingerprint and records the reason.
+`check` reviews the complete task-local Rust diff. `reset` accepts the current filesystem state as the new task baseline without calling Jev. `override` accepts only the current code and policy fingerprint and records the reason. Use the dispositions file, not `override`, to accept individual findings.
 
 ## Data sent to OpenRouter
 
@@ -152,7 +181,9 @@ Completed tool-result, agent-end, and manual `check` reviews record:
 - schema version and timestamp;
 - trigger, repository root, and tool name/call ID when applicable;
 - review fingerprint, model, reviewed files, and finding count;
-- finding file, rule ID, and probability;
+- unaccepted finding file, rule ID, and probability;
+- accepted finding count, and each accepted finding's file, rule ID, and probability;
+- the number of dispositions-file problems;
 - `cachedFiles`, distinguishing reused results from new requests.
 
 `outcome: "reviewed"` with zero findings is an affirmative clean review, not a

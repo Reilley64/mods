@@ -3,6 +3,7 @@
   "mode": "advisory",
   "model": "typesafe/jev-1.13",
   "styleFile": "CODING_STYLE.md",
+  "dispositionsFile": ".prime/agent/coding-style-dispositions.json",
   "tools": [
     "ipython",
     "edit",

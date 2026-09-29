@@ -5,8 +5,9 @@ import { join } from "node:path";
 
 import { type GateConfig, loadConfig, validateRuleThresholds } from "./config";
 import { reviewFingerprint, snapshotFingerprint } from "./fingerprint";
-import { formatReview, formatReviewFailure } from "./format";
-import { reviewChanges, type StyleReviewReport } from "./reviewer";
+import { applyDispositions, loadDispositions } from "./dispositions";
+import { formatReview, formatReviewFailure, type GateReviewReport } from "./format";
+import { reviewChanges } from "./reviewer";
 import { loadStyleRules } from "./policy";
 import type { StyleRule } from "./rules";
 import {
@@ -41,7 +42,7 @@ interface PreparedReview {
 
 interface CompletedReview {
 	fingerprint: string;
-	report: StyleReviewReport;
+	report: GateReviewReport;
 	files: string[];
 	cachedFiles: number;
 }
@@ -68,7 +69,7 @@ interface GateState {
 	exhaustedNoticeSent?: boolean;
 	followUps?: number;
 	lastError?: string;
-	lastReport?: StyleReviewReport;
+	lastReport?: GateReviewReport;
 	override?: OverrideState;
 	taskBaseline?: RustWorkspaceSnapshot;
 }
@@ -162,9 +163,11 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 				ruleThresholds: config.ruleThresholds,
 				signal,
 			});
+			const { dispositions, problems } = await loadDispositions(root, config.dispositionsFile);
+			const { accepted, unaccepted } = applyDispositions(report.findings, dispositions);
 			return {
 				fingerprint: prepared.fingerprint,
-				report,
+				report: { ...report, findings: unaccepted, acceptedFindings: accepted, dispositionProblems: problems },
 				files: prepared.changes.map((change) => change.path),
 				cachedFiles: report.cachedFiles ?? 0,
 			};
@@ -263,6 +266,15 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 						file: root === after.primaryRoot ? finding.file : join(root, finding.file),
 					})),
 				),
+				acceptedFindings: completed.flatMap(({ root, review }) =>
+					(review.report.acceptedFindings ?? []).map((finding) => ({
+						...finding,
+						file: root === after.primaryRoot ? finding.file : join(root, finding.file),
+					})),
+				),
+				dispositionProblems: completed.flatMap(({ root, review }) =>
+					(review.report.dispositionProblems ?? []).map((problem) => root === after.primaryRoot ? problem : `${root}: ${problem}`),
+				),
 				inputTokens: completed.reduce((total, { review }) => total + review.report.inputTokens, 0),
 				outputTokens: completed.reduce((total, { review }) => total + review.report.outputTokens, 0),
 			},
@@ -320,6 +332,13 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 				rule: finding.rule.id,
 				probability: finding.probability,
 			})),
+			acceptedFindingCount: completed.report.acceptedFindings?.length ?? 0,
+			acceptedFindings: (completed.report.acceptedFindings ?? []).map((finding) => ({
+				file: finding.file,
+				rule: finding.rule.id,
+				probability: finding.probability,
+			})),
+			dispositionProblemCount: completed.report.dispositionProblems?.length ?? 0,
 		});
 	}
 
@@ -442,10 +461,10 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				state.lastError = undefined;
 				state.lastReport = completed.report;
 				recordReview(ctx, trigger, completed);
-				if (completed.report.findings.length === 0) {
+				if (completed.report.findings.length === 0 && !completed.report.acceptedFindings?.length) {
 					return;
 				}
-				return { content: [...event.content, resultMessage(formatReview(completed.report))] };
+				return { content: [...event.content, resultMessage(formatReview(completed.report, config.dispositionsFile))] };
 			} catch (error) {
 				state.lastError = errorText(error);
 				recordFailure(ctx, trigger, stage);
@@ -480,9 +499,12 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 				recordReview(ctx, { trigger: "agent_end" }, completed);
 				if (completed.report.findings.length === 0) {
 					clearBlock();
+					if (completed.report.acceptedFindings?.length) {
+						reportToUser(ctx, formatReview(completed.report, config.dispositionsFile));
+					}
 					return;
 				}
-				const formatted = formatReview(completed.report);
+				const formatted = formatReview(completed.report, config.dispositionsFile);
 				if (config.mode === "enforce") {
 					blockCompletion(completed.fingerprint, formatted, config);
 				} else {
@@ -555,7 +577,7 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 						state.lastError = undefined;
 						state.lastReport = completed.report;
 						recordReview(ctx, { trigger: "check" }, completed);
-						reportToUser(ctx, formatReview(completed.report), completed.report.findings.length ? "warning" : "info");
+						reportToUser(ctx, formatReview(completed.report, config.dispositionsFile), completed.report.findings.length ? "warning" : "info");
 					} catch (error) {
 						state.lastError = errorText(error);
 						recordFailure(ctx, { trigger: "check" }, stage);
@@ -609,7 +631,7 @@ The automatic correction limit was reached. Fix the code or use /coding-style-ga
 			}
 
 			const config = await activeConfig(ctx.cwd);
-			const summary = state.lastReport === undefined ? "No review has run in this session." : formatReview(state.lastReport);
+			const summary = state.lastReport === undefined ? "No review has run in this session." : formatReview(state.lastReport, config.dispositionsFile);
 			const override = state.override ? ` Override: ${state.override.reason}` : "";
 			reportToUser(
 				ctx,
