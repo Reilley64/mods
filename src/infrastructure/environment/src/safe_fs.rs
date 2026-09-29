@@ -616,10 +616,8 @@ mod tests {
 	use super::has_reparse_attribute;
 	use super::identity;
 	use std::fs;
-	use std::fs::FileTimes;
 	use std::io;
 	use std::os::windows::fs::symlink_file;
-	use std::time::SystemTime;
 	use tempfile::TempDir;
 	use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
