@@ -689,6 +689,45 @@ mod tests {
 	}
 
 	#[test]
+	fn launch_keeps_the_game_multi_line_warning_in_derived_and_preserved_inis() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture()?;
+		let warning = concat!(
+			"SMasterMismatchWarning=One of the files that \"%s\" is dependent on has changed since the last save.\r\n",
+			"This may result in errors. Saving again will clear this message\r\n",
+			"but not necessarily fix any errors.\r\n"
+		);
+		let profile = root.as_path().join("profile");
+		let fallout = format!(
+			"[General]\r\n{warning}bUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n[Display]\r\nvalue=original\r\n"
+		);
+		let prefs = format!("[General]\r\n{warning}[Display]\r\nvalue=original\r\n");
+		fs::write(profile.join("Fallout.ini"), &fallout).context(ErrorMarker::io_failure())?;
+		fs::write(profile.join("FalloutPrefs.ini"), &prefs).context(ErrorMarker::io_failure())?;
+
+		let prepared = EnvironmentAdapter.prepare_launch(&root, &binding, &CancellationToken::new())?;
+		let inis = EnvironmentAdapter.derive_execution_inis(&root, &prepared, &CancellationToken::new())?;
+		for (name, canonical) in [("Fallout.ini", &fallout), ("FalloutPrefs.ini", &prefs)] {
+			let child = inis.path().join(name);
+			let derived = fs::read_to_string(&child).context(ErrorMarker::io_failure())?;
+			assert!(derived.contains(warning));
+
+			fs::write(&child, canonical.replace("value=original", "value=child"))
+				.context(ErrorMarker::io_failure())?;
+		}
+		inis.preserve()?;
+
+		for (name, canonical) in [("Fallout.ini", &fallout), ("FalloutPrefs.ini", &prefs)] {
+			assert_eq!(
+				fs::read_to_string(profile.join(name)).context(ErrorMarker::io_failure())?,
+				canonical.replace("value=original", "value=child")
+			);
+		}
+
+		EnvironmentAdapter.check_launch(&root, &binding, &CancellationToken::new())?;
+		Ok(())
+	}
+
+	#[test]
 	fn execution_collects_each_provider_once() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding) = fixture()?;
 		for name in ["Enabled", "Disabled"] {

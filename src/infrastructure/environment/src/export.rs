@@ -637,6 +637,37 @@ mod tests {
 	}
 
 	#[test]
+	fn export_keeps_the_game_multi_line_warning_in_derived_inis() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding, _output) = fixture()?;
+		let warning = concat!(
+			"SMasterMismatchWarning=One of the files that \"%s\" is dependent on has changed since the last save.\r\n",
+			"This may result in errors. Saving again will clear this message\r\n",
+			"but not necessarily fix any errors.\r\n"
+		);
+		let profile = root.as_path().join("profile");
+		let fallout = format!(
+			"[General]\r\n{warning}bUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n[Archive]\r\nsArchiveList=Original.bsa\r\n"
+		);
+		fs::write(profile.join("Fallout.ini"), fallout).context(ErrorMarker::io_failure())?;
+		fs::write(profile.join("FalloutPrefs.ini"), format!("[General]\r\n{warning}"))
+			.context(ErrorMarker::io_failure())?;
+
+		let snapshot = capture(&root, &binding, false, &CancellationToken::new())?;
+
+		for name in ["profile/Fallout.ini", "profile/FalloutPrefs.ini"] {
+			let derived = snapshot
+				.sources
+				.iter()
+				.find(|source| source.entry.path.as_str() == name)
+				.and_then(|source| source.derived.as_ref())
+				.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
+			let derived = String::from_utf8(derived.clone()).context(ErrorMarker::io_failure())?;
+			assert!(derived.contains(warning));
+		}
+		Ok(())
+	}
+
+	#[test]
 	fn changed_sources_and_existing_or_overlapping_destinations_fail() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding, output) = fixture()?;
 		assert!(validate_destination(&root, &binding, &root.as_path().join("export")).is_err());

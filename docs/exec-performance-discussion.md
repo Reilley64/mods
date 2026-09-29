@@ -255,6 +255,47 @@ Read-only lookup of the installed Steam copy `C:\Games\Steam\steamapps\common\Fa
 
 The original value contains a double space before `Fallout - Misc.bsa`. This is the verified source for the embedded fallback: six archives in this order. It comes from the user's English Steam installation; other localized editions were not checked. No game was launched.
 
+### Proposed redesign: application composes exec through ports
+
+The user identified a layering problem: the application `execute_program` use case forwards straight to one `RunManagedProgram` port, and `dependencies/src/execution_adapter/native.rs::execute` composes every infrastructure step itself. The application layer should compose infrastructure through ports. User example order: resolve conflicts, set up the temporary profile, create the VFS, run the managed program. Names and step list are illustrative, not fixed. Work happens in this worktree/branch after `211ad59`.
+
+Current steps inside `native.rs::execute`, in order:
+1. Resolve the launch target from caller PATH/cwd and arguments.
+2. Capture inherited standard streams.
+3. `prepare_launch`: modlist, providers, streaming winners (conflict resolution), profile files.
+4. Validate the `DataMod` output target (exists, enabled). This is a business rule.
+5. Resolve platform profile directories and `build_profile_configuration` (plugin projection, profile mappings, warnings); map warnings to `ExecutionWarning`.
+6. `derive_execution_inis`: temporary profile INIs, retained on failure.
+7. Build `ViewConfiguration` and `VirtualGameView::configure` (usvfs).
+8. Launch inside the view; map native errors.
+9. Report `ExecutionPrepared`; supervise until exit; check the Job drained.
+10. Preserve INIs, finish private streams, post-run profile check (warning only), map forced cancellation.
+
+Proposed application-owned ports (names provisional):
+- `ResolveLaunchTarget`
+- `PrepareLaunchPlan` (step 3; the conflict resolution)
+- `ProjectExecutionProfile` (step 5)
+- `StageExecutionProfile` (step 6), returning a staged-profile handle
+- `CreateVirtualFileSystem` (step 7), returning a VFS handle
+- `LaunchProgram` (step 8), returning a running-program handle
+- `SuperviseProgram` (step 9)
+- `PreserveExecutionProfile` (step 10)
+- `CheckProfileState` (post-run warning)
+
+The application use case then owns the order, the output-target rule, warning mapping, progress events, cancellation checks, and retention of the staged profile on failure.
+
+Key constraint: the usvfs session is thread-affine. `usvfs/mod.rs` marks it `PhantomData<Rc<()>>`, so it is `!Send`. Today `execution_adapter.rs` runs the whole execution on one `spawn_blocking` thread with a current-thread runtime. Application `PortFuture` requires `Send`, so a `!Send` VFS or process handle cannot pass through the existing port type. Options:
+- A. Run the whole exec use case on that dedicated thread. Composition moves the existing `spawn_blocking` plus current-thread runtime up from the adapter. Exec ports use a non-`Send` local future type, and VFS/process handles stay `!Send`, so the compiler enforces thread affinity. This gives the full step-by-step composition.
+- B. Keep one port for VFS create, launch, and supervise (for example `RunInVirtualFileSystem`). Every other step moves to application ports. Smaller change, less granular.
+
+Decision: the user chose A. Implement it on this branch after `211ad59` as a behavior-preserving refactor. Winner resolution stays behind the launch-plan port for now; moving it into a domain accumulator remains a separate open question.
+
+Recommendation was A. Also open: whether winner resolution itself should become domain logic. Infrastructure would stream entries into a domain accumulator, which keeps the approved single-traversal behavior. Status: proposal only, awaiting user choice before implementation.
+
+### Bug: vanilla multi-line INI text rejected
+
+On the user's Windows profile, exec failed before launch with environment_invalid. `profile_ini_valid` rejects lines that are neither comments, section headers, nor `key=value`. The vanilla Fallout.ini and FalloutPrefs.ini contain the game's multi-line `SMasterMismatchWarning` text: two continuation lines without `=` (Fallout.ini lines 696–697, FalloutPrefs.ini lines 764–765). The game's reader ignores such lines. The user approved fixing this on this branch: accept non-assignment text lines and preserve them unchanged. The fix is committed separately, before the port-composition refactor continues.
+
 ## Execution cost map and optimization candidates
 
 The detailed read-only trace below explains the installed revision. Source-derived costs are hypotheses, not measured Windows bottlenecks.

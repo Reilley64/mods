@@ -41,6 +41,29 @@ The user later approved ignoring unrelated root, cache, and profile entries and 
 
 An intermediate version mistakenly routed export through the lightweight inventory. Export fault-injection tests exposed changed source ordering. The final design restores the original strict preparation and DTO for export. Export tests were not changed to accept that regression.
 
+## INI text lines without an assignment
+
+Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.
+
+The derive and preserve editors already kept lines without `=` unchanged, so derived and preserved copies keep the block byte-for-byte. Effect on each `profile_ini_valid` caller:
+
+- Execution INI creation (`ExecutionInis::create` through `ProfileIniInputs::read_mode`): accepts the block. Launch preparation itself does not call the validator.
+- Postrun preservation (`preserve_inner`): accepts child INIs that keep the block. A child `[malformed` header is still rejected.
+- Export (`ProfileIniInputs::read` and its `Fallout_default.ini` fallback): accepts the block in canonical INIs and in the game default.
+- Init staging and settings do not call the validator. Init's `canonical_ini` derivation already kept such lines.
+
+New tests use the exact three-line block in `Fallout.ini` and `FalloutPrefs.ini`: the domain validator and editors, launch preparation with INI creation and preservation plus the postrun check, and export capture of derived INIs. All three failed before the fix with the reported marker (`/tmp/ini-continuation-red.log`). No existing rejection test encoded the wrong behavior, so none changed.
+
+Validation: focused domain and infrastructure-environment nextest passed 139 tests (`/tmp/ini-continuation-focused.log`). Full `bun run check` passed with 444 Rust tests, 2 release-version tests, and 119 tool tests (`/tmp/ini-continuation-check.log`). `git diff --check` passed.
+
+The style gate reported these findings for this fix:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `environment/src/execution_preparation.rs` | Phase spacing | Fixed between the derived-copy check and the child edit, and before the postrun check. Accepted for the remaining fixture setup: the block text, both INI texts, and their writes form one setup phase. |
+| `environment/src/execution_preparation.rs` | Use-case parameters | Accepted as inapplicable. The change adds only a test function; no infrastructure or use-case signature changed. |
+| `environment/src/export.rs` | Use-case parameters | Accepted as inapplicable. The change adds only a test function; no infrastructure or use-case signature changed. |
+
 ## Removed binding IDs
 
 The later approved change removes `steam_app_id` and `observed_build_id` from both manifest schemas and their writers. `GameBinding` now contains only the game directory. No migration or automatic rewrite was added. Both readers retain `deny_unknown_fields`, so old manifests with either key fail as invalid. Tests cover each removed key separately.

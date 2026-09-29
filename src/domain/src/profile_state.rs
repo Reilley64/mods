@@ -39,7 +39,48 @@ mod tests {
 	use super::derive_profile_ini;
 	use super::preserve_profile_ini_keys;
 	use super::profile_archive_list;
+	use super::profile_ini_valid;
 	use super::profile_test_file_slots;
+
+	const MASTER_MISMATCH_WARNING: &str = concat!(
+		"SMasterMismatchWarning=One of the files that \"%s\" is dependent on has changed since the last save.\r\n",
+		"This may result in errors. Saving again will clear this message\r\n",
+		"but not necessarily fix any errors.\r\n"
+	);
+
+	#[test]
+	fn accepts_the_game_multi_line_warning_and_keeps_it_in_every_copy() {
+		let canonical = format!(
+			"[General]\r\n{MASTER_MISMATCH_WARNING}bUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n[Archive]\r\nsArchiveList=User.bsa\r\n"
+		);
+		assert!(profile_ini_valid(&canonical));
+
+		for purpose in [
+			ProfileIniPurpose::Canonical,
+			ProfileIniPurpose::Execution,
+			ProfileIniPurpose::Export,
+		] {
+			for name in ["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"] {
+				let derived = derive_profile_ini(name, &canonical, purpose, "User.bsa");
+				assert!(derived.contains(MASTER_MISMATCH_WARNING));
+			}
+		}
+
+		let child = canonical.replace("User.bsa", "Child.bsa");
+		assert!(preserve_profile_ini_keys(&canonical, &child).contains(MASTER_MISMATCH_WARNING));
+	}
+
+	#[test]
+	fn still_rejects_control_characters_malformed_headers_and_empty_keys() {
+		for text in [
+			"[General]\r\ntext with a \u{1} control\r\n",
+			"[General\r\n",
+			"[ ]\r\n",
+			"[General]\r\n=value\r\n",
+		] {
+			assert!(!profile_ini_valid(text), "{text:?}");
+		}
+	}
 
 	#[test]
 	fn canonical_and_derived_copies_keep_distinct_owned_keys() {
@@ -142,6 +183,11 @@ pub enum ProfileIniPurpose {
 /// Validates the line-oriented INI subset consumed by the game's profile files.
 /// The editor below preserves text because general INI serializers discard
 /// comments, duplicate assignments, spelling, and newline choices.
+///
+/// Text lines without an assignment are valid. The game's INI reader ignores
+/// them, and the game's own `Fallout.ini` and `FalloutPrefs.ini` continue the
+/// `SMasterMismatchWarning` value on such lines. Control characters, empty or
+/// unterminated section headers, and assignments with an empty key stay invalid.
 pub fn profile_ini_valid(text: &str) -> bool {
 	text.lines().all(|line| {
 		let line = line.trim();
@@ -156,7 +202,7 @@ pub fn profile_ini_valid(text: &str) -> bool {
 		if line.starts_with('[') {
 			return ini_section(line).is_some_and(|section| !section.is_empty());
 		}
-		line.split_once('=').is_some_and(|(key, _)| !key.trim().is_empty())
+		line.split_once('=').is_none_or(|(key, _)| !key.trim().is_empty())
 	})
 }
 
