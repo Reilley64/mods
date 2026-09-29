@@ -186,7 +186,13 @@ impl EnvironmentAdapter {
 			.iter()
 			.map(|provider| (provider.identity.clone(), &provider.root))
 			.collect();
-		let winners: Vec<_> = inventory.winners.into_values().collect();
+		// The inventory map has no order; a sorted list keeps later spelling choices deterministic.
+		let mut winners: Vec<_> = inventory.winners.into_values().collect();
+		winners.sort_by(|left, right| {
+			left.original_path()
+				.comparison_key()
+				.cmp(right.original_path().comparison_key())
+		});
 		let mut visible_files = Vec::with_capacity(winners.len());
 		for winner in &winners {
 			if cancellation.is_cancelled() {

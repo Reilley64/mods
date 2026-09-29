@@ -340,7 +340,7 @@ Parent decisions after Part 1: the three exec order changes and the removal of t
 4. `ListExportFiles(&plan, &staged, include_saves)`: Data winners except game Data, the staged INIs, `plugins.txt`, `loadorder.txt`, `Plugins.fnvviewsettings` and `modlist.txt` from the profile, `cache/Fallout - Invalidation.bsa`, and saves when requested. Each file has its size and a source in an opaque `ExportSources` table.
 5. `plan_inventory` (unchanged): folds directory spelling and refuses structural conflicts.
 6. Without `--dry-run`, `WriteExport(sources, files, output)` checks the destination again, creates it, copies each file, and sets its modification time. A staged INI gets the time of its canonical profile file, as before.
-7. `DiscardStagedProfile(staged)` removes the stage on every path: success, `--dry-run`, and failure. If removal fails, the error carries `RetainedProfile`.
+7. `DiscardStagedProfile(staged)` removes the stage on every path after staging: success, `--dry-run`, and failure. If removal fails, the error carries `RetainedProfile`. A failure inside staging is handled by the review repair below.
 
 Deviation from the task text: `WriteExport` does not remove the stage itself. The use case calls the new shared `DiscardStagedProfile` port after the write or after a failure, so one step handles the dry run, success, and every failure. A stage left in `temp` would make the next exec or export refuse with `manual_cleanup_required`.
 
@@ -397,6 +397,29 @@ Windows: `cargo check --target x86_64-pc-windows-msvc` passes for `application`,
 - `skills/mods-cli/SKILL.md` no longer describes `export --dry-run` as free of side effects. Like exec, it creates a missing `meta.toml` for enabled mods and briefly stages derived INIs in `temp`. It can still run without extra confirmation.
 - With the validation wrapper gone, nothing in `infrastructure-dependencies` calls a port any more on any platform (no `.call(` or `.call_once(` in the crate), so its `#![feature(fn_traits)]` is removed. Otherwise the `unused_features` lint fails clippy.
 - Gate: the per-edit review of `infrastructure/dependencies/src/export_environment.rs` reports Use-case parameters (0.20). Accepted as inapplicable: this is a composition method with no parameters beyond the binding.
+
+### Review repair (export on shared ports)
+
+The review is in `/tmp/export-shared-review.md` (range `fafb661..3ba2b95`). This repair covers its findings.
+
+- M1: a failed `StageProfile(Export)` no longer leaves `temp/export-inis-*`. `StagedProfileInis::create` removes the partial export directory on any staging failure, including cancellation, and reports `RetainedProfile` only if the removal fails. A failed execution stage is still kept and reported, as before. The export stage is now removed on every path, before or after staging succeeds. The new test `a_failed_export_stage_is_removed_but_a_failed_execution_stage_is_kept` covers both purposes.
+- Accepted deviation from "Cancellation state preservation": export removes its stage after cancellation, both inside staging and in the use case after staging. The stage contains only derived copies of canonical INIs and no user-authored state, so removing it loses nothing and keeps `temp` empty for the next exec or export.
+- L1: if the write succeeds and only the stage removal fails, the use case attaches the new `CompletedExport` report. The CLI then prints "The export output is complete. Only the temp stage remains." next to `retained_export_stage`. The exit status stays 1.
+- L2: the `retained_partial_output` advice now says it is the partial output folder that export wrote into directly, not a staging folder.
+- L3: `prepare_launch` sorts winners by comparison key, so directory-spelling ties in the export plan no longer depend on hash order. Exec receives the same winners in sorted order. Ignored release measurement `measure_launch_inventory_walk_on_twenty_thousand_files`, medians of 5 runs each: before 26.2, 26.3, 25.8 ms; after 26.9, 26.4, 29.0, 27.4, 28.1, 26.9 ms. That is about 1 ms (4%) slower in the middle, within the spread of the later runs. The machine was not otherwise idle.
+- L4: the `PreparationPorts::new` Rustdoc now says that preparation uses the binding as loaded and does not verify the Steam installation or build.
+- Nit: `export.md` now says the export `sArchiveList` puts the invalidation archive first, followed by the profile list. It also describes the complete-output message.
+- Minor: the export use-case test uses the imported `Report`. `PreparedEnvironment` and its fields are `pub(crate)`; only the application crate uses them.
+
+Gate dispositions for the repair:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/derived_profile.rs` | Cancellation state preservation (0.77) | Accepted deviation, as recorded above. Only the export stage is removed after a cancelled or failed staging. It holds derived copies and no user-authored state. The execution stage is still kept. |
+| `infrastructure/environment/src/derived_profile.rs` | Phase spacing; Test public behavior | Accepted. The failure path separates removal from reporting. The new test uses a test-only thread-local hook, like the existing `CREATE_CONCURRENT_METADATA` hook, because a cancellation between files cannot be triggered from outside. |
+| `application/src/export/export_environment.rs` | Choose the narrow conditional form (0.40, per-edit 0.46) | Fixed. The nested match was flattened into one `match` on the export and removal results, and the final full-branch run no longer reports the rule. |
+| `application/src/export/export_environment.rs` | Import placement and use (0.32) | Accepted as a false positive. After the qualified `rootcause::Report` in the test was replaced, the file has no block-local import and no repeated qualified path. Only standard `fmt::`, `tracing::instrument` and enum-variant paths remain. |
+| `presentation/cli/src/error.rs` | Phase spacing | Accepted. The retained-stage block keeps the lookup, the completed-output line, and the advice together as one output step. |
 
 ## INI text lines without an assignment
 

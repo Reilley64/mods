@@ -16,9 +16,9 @@ pub enum PluginWarning {
 	UnlistedPlugin { name: String },
 }
 
-pub struct PreparedEnvironment {
-	pub plan: EnvironmentPlan,
-	pub warnings: Vec<PluginWarning>,
+pub(crate) struct PreparedEnvironment {
+	pub(crate) plan: EnvironmentPlan,
+	pub(crate) warnings: Vec<PluginWarning>,
 }
 
 /// Prepares the environment plan and projects its profile for any command that

@@ -1,6 +1,7 @@
 use crate::output::quote;
 use application::ErrorCode;
 use application::ErrorMarker;
+use application::export::CompletedExport;
 use application::export::RetainedExport;
 use application::ports::RetainedProfile;
 use rootcause::Report;
@@ -56,7 +57,7 @@ pub(crate) fn export_error<C>(report: &Report<C>, output: &Path) -> String {
 			quote(&retained.path.display().to_string())
 		));
 		text.push_str(
-			"Inspect the retained staging folder before manual cleanup. The output was not published.\n",
+			"This is the partial output folder; export wrote into it directly and did not finish. Inspect it before manual cleanup or a retry.\n",
 		);
 	} else {
 		text.push_str(&format!("output = {}\n", quote(&output.display().to_string())));
@@ -70,6 +71,12 @@ pub(crate) fn export_error<C>(report: &Report<C>, output: &Path) -> String {
 			"retained_export_stage = {}\n",
 			quote(&retained.path.display().to_string())
 		));
+		let completed = report
+			.iter_reports()
+			.any(|entry| entry.downcast_current_context::<CompletedExport>().is_some());
+		if completed {
+			text.push_str("The export output is complete. Only the temp stage remains.\n");
+		}
 		text.push_str(
 			"The stage holds only derived profile copies. Delete it before the next exec or export.\n",
 		);
@@ -192,8 +199,35 @@ mod tests {
 
 		assert!(text.contains("retained_export_stage = \"C:\\\\env\\\\temp\\\\export-inis-1\""));
 		assert!(text.contains("Delete it before the next exec or export"));
+		assert!(!text.contains("The export output is complete"));
 		assert!(!text.contains("retained_execution_inis"));
 		assert!(!text.contains("RetainedProfile"));
+	}
+
+	#[test]
+	fn export_error_says_a_complete_output_when_only_the_stage_remains() {
+		let mut report =
+			report!(ErrorMarker::io_failure()).context(application::export::ExportEnvironmentError);
+		for child in [
+			report!(RetainedProfile {
+				path: PathBuf::from("/env/temp/export-inis-1")
+			})
+			.into_dynamic()
+			.into_cloneable(),
+			report!(application::export::CompletedExport {
+				path: PathBuf::from("/output")
+			})
+			.into_dynamic()
+			.into_cloneable(),
+		] {
+			report.children_mut().push(child);
+		}
+
+		let text = super::export_error(&report, Path::new("/output"));
+
+		assert!(text.contains("retained_export_stage = \"/env/temp/export-inis-1\""));
+		assert!(text.contains("The export output is complete. Only the temp stage remains."));
+		assert!(!text.contains("partial output"));
 	}
 
 	#[test]

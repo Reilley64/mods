@@ -40,7 +40,7 @@ fn foreign_handle() -> Report<ErrorMarker> {
 }
 
 impl PreparationPorts {
-	/// Uses a binding that the caller has already validated.
+	/// Uses the binding as loaded. Preparation does not verify the Steam installation or build.
 	pub fn new(root: EnvironmentRoot, binding: GameBinding) -> Self {
 		let prepare_environment_plan: PrepareEnvironmentPlan = Arc::new({
 			let root = root.clone();

@@ -44,6 +44,18 @@ impl fmt::Display for RetainedExport {
 	}
 }
 
+/// Report attachment for an export whose output folder is complete although a
+/// later cleanup step failed. Presentation may expose this typed path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletedExport {
+	pub path: PathBuf,
+}
+impl fmt::Display for CompletedExport {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str("export output complete")
+	}
+}
+
 /// Requires a new output directory outside the environment.
 pub type ValidateExportDestination = Arc<dyn Fn(PathBuf) -> PortFuture<()> + Send + Sync>;
 /// Lists every file the game sees, except the game's own Data files, with its size.

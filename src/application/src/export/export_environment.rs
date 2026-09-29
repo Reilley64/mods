@@ -3,6 +3,7 @@ use super::ListExportFiles;
 use super::ValidateExportDestination;
 use super::WriteExport;
 use crate::ErrorMarker;
+use crate::export::CompletedExport;
 use crate::export::ExportFile;
 use crate::ports::DiscardStagedProfile;
 use crate::ports::PrepareEnvironmentPlan;
@@ -59,7 +60,8 @@ impl fmt::Display for ExportEnvironmentError {
 ///
 /// Returns [`ExportEnvironmentError`] with the failing step's marker. A failed
 /// write also carries `RetainedExport`, and a stage that cannot be removed
-/// carries [`RetainedProfile`].
+/// carries [`RetainedProfile`]. If only the removal failed after a write, the
+/// error also carries [`CompletedExport`].
 #[tracing::instrument(skip_all)]
 pub async fn export_environment(
 	dependencies: ExportEnvironmentDependencies,
@@ -102,7 +104,7 @@ pub async fn export_environment(
 		if !dry_run {
 			dependencies
 				.write_export
-				.call((listing.sources, files.clone(), output, cancellation))
+				.call((listing.sources, files.clone(), output.clone(), cancellation))
 				.await?;
 		}
 
@@ -110,19 +112,24 @@ pub async fn export_environment(
 	}
 	.await;
 
-	// The stage holds only derived copies, so it is removed on every path. Only a
-	// stage that cannot be removed is reported.
+	// The stage holds only derived copies, so it is removed on every path, also
+	// after cancellation. Only a stage that cannot be removed is reported, and a
+	// complete output is marked as complete.
 	let discarded = dependencies.discard_staged_profile.call((staged,)).await;
-	let exported = match discarded {
-		Ok(()) => exported,
-		Err(discard_error) => {
-			let mut error = match exported {
-				Ok(_) => discard_error,
-				Err(mut error) => {
-					error.children_mut().push(discard_error.into_dynamic().into_cloneable());
-					error
-				}
-			};
+	let exported = match (exported, discarded) {
+		(exported, Ok(())) => exported,
+		(Ok(_), Err(mut error)) => {
+			if !dry_run {
+				error.children_mut().push(report!(CompletedExport { path: output })
+					.into_dynamic()
+					.into_cloneable());
+			}
+			error.children_mut()
+				.push(report!(retained).into_dynamic().into_cloneable());
+			Err(error)
+		}
+		(Err(mut error), Err(discard_error)) => {
+			error.children_mut().push(discard_error.into_dynamic().into_cloneable());
 			error.children_mut()
 				.push(report!(retained).into_dynamic().into_cloneable());
 			Err(error)
@@ -311,7 +318,7 @@ mod tests {
 		.await
 	}
 
-	fn retained_profiles(error: &rootcause::Report<ExportEnvironmentError>) -> Vec<PathBuf> {
+	fn retained_profiles(error: &Report<ExportEnvironmentError>) -> Vec<PathBuf> {
 		error.iter_reports()
 			.filter_map(|cause| cause.downcast_current_context::<RetainedProfile>())
 			.map(|retained| retained.path.clone())
@@ -410,6 +417,10 @@ mod tests {
 			};
 
 			assert_eq!(retained_profiles(&error), [PathBuf::from("stage")]);
+			let completed = error
+				.iter_reports()
+				.any(|cause| cause.downcast_current_context::<CompletedExport>().is_some());
+			assert_eq!(completed, !write_fails);
 		}
 		Ok(())
 	}

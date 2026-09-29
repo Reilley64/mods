@@ -125,19 +125,35 @@ impl StagedProfileInis {
 			baseline: Vec::new(),
 		};
 
-		let staged = owner.stage(cancellation).await;
-		staged.map_err(|mut error| {
-			error.children_mut().push(report!(RetainedProfile {
-				path: owner.path.clone()
-			})
-			.into_dynamic()
-			.into_cloneable());
-			error
-		})?;
-		Ok(owner)
+		let Err(mut error) = owner.stage(cancellation).await else {
+			return Ok(owner);
+		};
+
+		// An export stage holds only derived copies, so a failed one is removed even
+		// after cancellation. An execution stage is kept for manual recovery.
+		if owner.purpose == ProfileIniPurpose::Export
+			&& let Some(directory) = owner.directory.take()
+		{
+			let removed = remove_dir_all(directory.keep()).await;
+			let Err(removal) = removed else {
+				return Err(error);
+			};
+			error.children_mut()
+				.push(report!(removal).into_dynamic().into_cloneable());
+		}
+
+		error.children_mut().push(report!(RetainedProfile {
+			path: owner.path.clone()
+		})
+		.into_dynamic()
+		.into_cloneable());
+		Err(error)
 	}
 
 	async fn stage(&mut self, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+		#[cfg(test)]
+		tests::before_stage()?;
+
 		for (name, bytes) in &self.inputs.files {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
@@ -254,7 +270,20 @@ impl Drop for StagedProfileInis {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::cell::Cell;
 	use std::fs;
+
+	thread_local! {
+		static FAIL_STAGE: Cell<bool> = const { Cell::new(false) };
+	}
+
+	/// Fails staging after the directory exists, as a cancellation between files would.
+	pub(super) fn before_stage() -> Result<(), ErrorMarker> {
+		if FAIL_STAGE.with(|flag| flag.replace(false)) {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+		Ok(())
+	}
 
 	fn fixture() -> Result<(TempDir, PathBuf, PathBuf, PathBuf), ErrorMarker> {
 		let temp = TempDir::new().context(ErrorMarker::io_failure())?;
@@ -297,6 +326,32 @@ mod tests {
 		fs::write(retained.join("Fallout.ini"), b"[malformed").context(ErrorMarker::io_failure())?;
 		assert!(owner.preserve().await.is_err());
 		assert!(retained.exists());
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn a_failed_export_stage_is_removed_but_a_failed_execution_stage_is_kept() -> Result<(), ErrorMarker> {
+		for (purpose, kept) in [(ProfilePurpose::Export, 0), (ProfilePurpose::Execution, 1)] {
+			let (_temp, profile, _game, staging) = fixture()?;
+			FAIL_STAGE.with(|flag| flag.set(true));
+
+			let Err(error) =
+				StagedProfileInis::create(&profile, &staging, purpose, &CancellationToken::new()).await
+			else {
+				return Err(report!(ErrorMarker::io_failure()));
+			};
+
+			assert_eq!(
+				error.current_context().code(),
+				ErrorMarker::operation_cancelled().code()
+			);
+			let retained = error
+				.iter_reports()
+				.filter(|cause| cause.downcast_current_context::<RetainedProfile>().is_some())
+				.count();
+			assert_eq!(retained, kept);
+			assert_eq!(fs::read_dir(&staging).context(ErrorMarker::io_failure())?.count(), kept);
+		}
 		Ok(())
 	}
 

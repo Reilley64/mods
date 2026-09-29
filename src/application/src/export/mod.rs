@@ -4,6 +4,7 @@ pub use export_environment::ExportEnvironmentDependencies;
 pub use export_environment::ExportEnvironmentError;
 pub use export_environment::ExportEnvironmentOutput;
 pub use export_environment::export_environment;
+pub use types::CompletedExport;
 pub use types::ExportFile;
 pub use types::ExportListing;
 pub use types::ExportProvider;
