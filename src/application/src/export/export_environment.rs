@@ -135,6 +135,7 @@ pub async fn export_environment(
 			Err(error)
 		}
 	};
+
 	let (files, total_bytes) = exported.context(ExportEnvironmentError)?;
 
 	Ok(ExportEnvironmentOutput {
