@@ -5,15 +5,17 @@ use crate::ports::CheckProfileState;
 use crate::ports::CreateVirtualFileSystem;
 use crate::ports::FinishProgramOutput;
 use crate::ports::LaunchProgram;
-use crate::ports::PrepareLaunchPlan;
+use crate::ports::PrepareEnvironmentPlan;
 use crate::ports::PreserveExecutionProfile;
-use crate::ports::ProfileWarning;
+use crate::ports::ProfilePurpose;
 use crate::ports::ProgressEvent;
-use crate::ports::ProjectExecutionProfile;
+use crate::ports::ProjectProfile;
 use crate::ports::ReportProgress;
 use crate::ports::ResolveLaunchTarget;
-use crate::ports::StageExecutionProfile;
+use crate::ports::StageProfile;
 use crate::ports::SuperviseProgram;
+use crate::preparation::PreparedEnvironment;
+use crate::preparation::prepare_environment;
 use domain::GameBinding;
 use domain::OutputTarget;
 use domain::ProcessStatus;
@@ -31,9 +33,9 @@ use tokio_util::sync::CancellationToken;
 pub struct ExecuteProgramDependencies {
 	pub report_progress: Option<ReportProgress>,
 	pub resolve_launch_target: ResolveLaunchTarget,
-	pub prepare_launch_plan: PrepareLaunchPlan,
-	pub project_execution_profile: ProjectExecutionProfile,
-	pub stage_execution_profile: StageExecutionProfile,
+	pub prepare_environment_plan: PrepareEnvironmentPlan,
+	pub project_profile: ProjectProfile,
+	pub stage_profile: StageProfile,
 	pub create_virtual_file_system: CreateVirtualFileSystem,
 	pub launch_program: LaunchProgram,
 	pub supervise_program: SuperviseProgram,
@@ -89,13 +91,14 @@ pub async fn execute_program(
 
 	// The game resolves `Data\` and its script-extender loaders relative to its
 	// working directory, so a child without `--cwd` starts in the game directory.
-	let working_directory = if let Some(working_directory) = working_directory {
-		working_directory
-	} else {
-		WorkingDirectory::new(game_binding.game_directory().as_path().to_owned())
-			.context(ErrorMarker::invalid_working_directory())
-			.context(ExecuteProgramError)?
-	};
+	let working_directory = working_directory.map_or_else(
+		|| {
+			WorkingDirectory::new(game_binding.game_directory().as_path().to_owned())
+				.context(ErrorMarker::invalid_working_directory())
+				.context(ExecuteProgramError)
+		},
+		Ok,
+	)?;
 
 	let target = dependencies
 		.resolve_launch_target
@@ -103,19 +106,26 @@ pub async fn execute_program(
 		.await
 		.context(ExecuteProgramError)?;
 
-	let plan = dependencies
-		.prepare_launch_plan
-		.call((cancellation.clone(),))
-		.await
-		.context(ExecuteProgramError)?;
+	let PreparedEnvironment { plan, warnings } = prepare_environment(
+		&dependencies.prepare_environment_plan,
+		&dependencies.project_profile,
+		cancellation.clone(),
+	)
+	.await
+	.context(ExecuteProgramError)?;
+	let mut warnings: Vec<_> = warnings.into_iter().map(ExecutionWarning::Plugin).collect();
 
 	let output_mod = if let OutputTarget::DataMod(name) = output_target {
-		let Some(provider) = plan.providers.iter().find(
-			|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if *mod_name == name),
-		) else {
-			return Err(report!(ErrorMarker::output_target_not_found().with_mod_name(name))
-				.context(ExecuteProgramError));
-		};
+		let provider = plan
+			.providers
+			.iter()
+			.find(
+				|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if *mod_name == name),
+			)
+			.ok_or_else(|| {
+				report!(ErrorMarker::output_target_not_found().with_mod_name(name.clone()))
+					.context(ExecuteProgramError)
+			})?;
 
 		if !provider.enabled {
 			return Err(report!(ErrorMarker::output_target_disabled().with_mod_name(name))
@@ -126,33 +136,9 @@ pub async fn execute_program(
 		None
 	};
 
-	let projection = dependencies
-		.project_execution_profile
-		.call((&plan,))
-		.await
-		.context(ExecuteProgramError)?;
-
-	let mut warnings: Vec<_> = projection
-		.warnings
-		.into_iter()
-		.map(|warning| match warning {
-			ProfileWarning::LoadOrderNotEnforced => ExecutionWarning::LoadOrderNotEnforced,
-			ProfileWarning::Unavailable { file, plugin } if file.eq_ignore_ascii_case("plugins.txt") => {
-				ExecutionWarning::StalePluginEntry { name: plugin }
-			}
-			ProfileWarning::Unavailable { plugin, .. } => {
-				ExecutionWarning::StaleLoadOrderEntry { name: plugin }
-			}
-			ProfileWarning::Duplicate { file, plugin } => {
-				ExecutionWarning::DuplicatePluginEntry { file, name: plugin }
-			}
-			ProfileWarning::Unlisted { plugin } => ExecutionWarning::UnlistedPlugin { name: plugin },
-		})
-		.collect();
-
 	let staged = dependencies
-		.stage_execution_profile
-		.call((&plan, cancellation.clone()))
+		.stage_profile
+		.call((&plan, ProfilePurpose::Execution, cancellation.clone()))
 		.await
 		.context(ExecuteProgramError)?;
 	let retained = RetainedExecutionInis {
@@ -164,7 +150,7 @@ pub async fn execute_program(
 	let supervision = async {
 		let file_system = dependencies
 			.create_virtual_file_system
-			.call((plan, projection.profile, &staged, output_mod, cancellation.clone()))
+			.call((plan, &staged, output_mod, cancellation.clone()))
 			.await?;
 
 		if cancellation.is_cancelled() {
@@ -249,19 +235,20 @@ mod tests {
 	use crate::execution::ExecutionWarning;
 	use crate::execution::RetainedExecutionInis;
 	use crate::ports::AdapterState;
-	use crate::ports::ExecutionProfile;
-	use crate::ports::ExecutionProfileProjection;
-	use crate::ports::LaunchPlan;
-	use crate::ports::LaunchProvider;
+	use crate::ports::EnvironmentPlan;
+	use crate::ports::EnvironmentProvider;
 	use crate::ports::LaunchTarget;
 	use crate::ports::PortFuture;
+	use crate::ports::ProfileProjection;
+	use crate::ports::ProfilePurpose;
 	use crate::ports::ProfileWarning;
 	use crate::ports::ProgramExit;
 	use crate::ports::ProgramOutput;
 	use crate::ports::ProgramSupervision;
 	use crate::ports::RunningProgram;
-	use crate::ports::StagedExecutionProfile;
+	use crate::ports::StagedProfile;
 	use crate::ports::VirtualFileSystem;
+	use crate::preparation::PluginWarning;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
 	use domain::ModName;
@@ -296,7 +283,7 @@ mod tests {
 
 	#[derive(Clone)]
 	struct Scenario {
-		providers: Vec<LaunchProvider>,
+		providers: Vec<EnvironmentProvider>,
 		warnings: Vec<ProfileWarning>,
 		cancel_after_file_system: bool,
 		supervision: Supervision,
@@ -319,7 +306,7 @@ mod tests {
 			providers: vec![
 				provider("Target", true)?,
 				provider("Disabled", false)?,
-				LaunchProvider {
+				EnvironmentProvider {
 					identity: ProviderIdentity::Overwrite,
 					enabled: true,
 				},
@@ -332,8 +319,8 @@ mod tests {
 		})
 	}
 
-	fn provider(name: &str, enabled: bool) -> Result<LaunchProvider, ErrorMarker> {
-		Ok(LaunchProvider {
+	fn provider(name: &str, enabled: bool) -> Result<EnvironmentProvider, ErrorMarker> {
+		Ok(EnvironmentProvider {
 			identity: ProviderIdentity::DataMod {
 				mod_name: mod_name(name)?,
 				priority: ModPriority::new(0),
@@ -387,36 +374,34 @@ mod tests {
 				resolved();
 				complete(Ok(LaunchTarget(AdapterState::new("target"))))
 			}),
-			prepare_launch_plan: Arc::new(move |_| {
+			prepare_environment_plan: Arc::new(move |_| {
 				prepared();
-				complete(Ok(LaunchPlan {
+				complete(Ok(EnvironmentPlan {
 					providers: scenario.providers.clone(),
 					state: AdapterState::new("plan"),
 				}))
 			}),
-			project_execution_profile: Arc::new(move |plan: &LaunchPlan| {
+			project_profile: Arc::new(move |plan: &EnvironmentPlan| {
 				assert_eq!(plan.state.downcast_ref::<&str>(), Some(&"plan"));
 				projected();
-				complete(Ok(ExecutionProfileProjection {
-					profile: ExecutionProfile(AdapterState::new("profile")),
+				complete(Ok(ProfileProjection {
 					warnings: scenario.warnings.clone(),
 				}))
 			}),
-			stage_execution_profile: Arc::new(move |_: &LaunchPlan, _| {
+			stage_profile: Arc::new(move |_: &EnvironmentPlan, purpose: ProfilePurpose, _| {
+				assert_eq!(purpose, ProfilePurpose::Execution);
 				staged();
-				complete(Ok(StagedExecutionProfile {
+				complete(Ok(StagedProfile {
 					directory: PathBuf::from("staged-inis"),
 					state: AdapterState::new("staged"),
 				}))
 			}),
 			create_virtual_file_system: Arc::new(
-				move |plan: LaunchPlan,
-				      profile: ExecutionProfile,
-				      staged: &StagedExecutionProfile,
+				move |plan: EnvironmentPlan,
+				      staged: &StagedProfile,
 				      output_mod: Option<ModName>,
 				      cancellation: CancellationToken| {
 					assert_eq!(plan.state.downcast::<&str>(), Some("plan"));
-					assert_eq!(profile.0.downcast::<&str>(), Some("profile"));
 					assert_eq!(staged.directory, PathBuf::from("staged-inis"));
 					let output = output_mod
 						.map_or_else(|| "overwrite".to_owned(), |name| name.to_string());
@@ -475,7 +460,7 @@ mod tests {
 					output: ProgramOutput(AdapterState::new("output")),
 				}))
 			}),
-			preserve_execution_profile: Arc::new(move |staged: StagedExecutionProfile| {
+			preserve_execution_profile: Arc::new(move |staged: StagedProfile| {
 				assert_eq!(staged.state.downcast::<&str>(), Some("staged"));
 				preserved();
 				if scenario.preservation_fails {
@@ -604,20 +589,20 @@ mod tests {
 		assert_eq!(
 			output.warnings,
 			[
-				ExecutionWarning::LoadOrderNotEnforced,
-				ExecutionWarning::StalePluginEntry {
+				ExecutionWarning::Plugin(PluginWarning::LoadOrderNotEnforced),
+				ExecutionWarning::Plugin(PluginWarning::StalePluginEntry {
 					name: "Missing.esp".into()
-				},
-				ExecutionWarning::StaleLoadOrderEntry {
+				}),
+				ExecutionWarning::Plugin(PluginWarning::StaleLoadOrderEntry {
 					name: "Ordered.esp".into()
-				},
-				ExecutionWarning::DuplicatePluginEntry {
+				}),
+				ExecutionWarning::Plugin(PluginWarning::DuplicatePluginEntry {
 					file: "plugins.txt".into(),
 					name: "Duplicate.esp".into()
-				},
-				ExecutionWarning::UnlistedPlugin {
+				}),
+				ExecutionWarning::Plugin(PluginWarning::UnlistedPlugin {
 					name: "Unlisted.esp".into()
-				},
+				}),
 				ExecutionWarning::ProfileStateInvalid,
 			]
 		);
@@ -656,7 +641,10 @@ mod tests {
 			};
 
 			assert!(has_marker(&error, &expected.with_mod_name(mod_name(name)?)));
-			assert_eq!(recorded(&steps), ["progress:PreparingExecution", "resolve", "prepare"]);
+			assert_eq!(
+				recorded(&steps),
+				["progress:PreparingExecution", "resolve", "prepare", "project"]
+			);
 		}
 		Ok(())
 	}

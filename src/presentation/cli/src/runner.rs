@@ -490,15 +490,14 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				Ok(output) => {
 					let mut stderr = String::new();
 					for warning in output.warnings {
-						let message = match warning {
-                            ExecutionWarning::LoadOrderNotEnforced => "warning [load_order_not_enforced]: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.\n".to_owned(),
-                            ExecutionWarning::StalePluginEntry { name } => format!("warning [stale_plugin_entry]: analysis projection: plugins.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", output::quote(&name)),
-                            ExecutionWarning::StaleLoadOrderEntry { name } => format!("warning [stale_load_order_entry]: analysis projection: loadorder.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", output::quote(&name)),
-                            ExecutionWarning::DuplicatePluginEntry { file, name } => format!("warning [duplicate_plugin_entry]: duplicate entry {} in {}; analysis projection uses the first occurrence; canonical file is unchanged.\n", output::quote(&name), output::quote(&file)),
-                            ExecutionWarning::UnlistedPlugin { name } => format!("warning [unlisted_plugin]: analysis projection: {} is absent from loadorder.txt; projected order uses backing-file modification time.\n", output::quote(&name)),
-                            ExecutionWarning::ProfileStateInvalid => "warning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n".to_owned(),
-                        };
-						stderr.push_str(&message);
+						match warning {
+							ExecutionWarning::Plugin(warning) => {
+								stderr.push_str(&output::plugin_warning(&warning))
+							}
+							ExecutionWarning::ProfileStateInvalid => stderr.push_str(
+								"warning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n",
+							),
+						}
 					}
 					RunOutcome {
 						status: output.status.value(),
@@ -629,6 +628,7 @@ mod tests {
 	use application::ports::PortFuture;
 	use application::ports::ResolvedGameInstallation;
 	use application::ports::StoredAndEffectiveBinding;
+	use application::preparation::PluginWarning;
 	use application::settings::GetSettingDependencies;
 	use application::settings::ListSettingsDependencies;
 	use application::settings::SetGameDirectoryDependencies;
@@ -1078,20 +1078,20 @@ mod tests {
 				Ok(ExecuteProgramOutput {
 					status: ProcessStatus::new(259),
 					warnings: vec![
-						ExecutionWarning::LoadOrderNotEnforced,
-						ExecutionWarning::StalePluginEntry {
+						ExecutionWarning::Plugin(PluginWarning::LoadOrderNotEnforced),
+						ExecutionWarning::Plugin(PluginWarning::StalePluginEntry {
 							name: "Missing.esp".into(),
-						},
-						ExecutionWarning::StaleLoadOrderEntry {
+						}),
+						ExecutionWarning::Plugin(PluginWarning::StaleLoadOrderEntry {
 							name: "Ordered.esp".into(),
-						},
-						ExecutionWarning::DuplicatePluginEntry {
+						}),
+						ExecutionWarning::Plugin(PluginWarning::DuplicatePluginEntry {
 							file: "plugins.txt".into(),
 							name: "Duplicate.esp".into(),
-						},
-						ExecutionWarning::UnlistedPlugin {
+						}),
+						ExecutionWarning::Plugin(PluginWarning::UnlistedPlugin {
 							name: "Unlisted.esp".into(),
-						},
+						}),
 						ExecutionWarning::ProfileStateInvalid,
 					],
 				})

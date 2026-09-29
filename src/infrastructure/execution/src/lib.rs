@@ -10,7 +10,6 @@ pub use child_output::ExecutionCapture;
 pub use child_output::PrivateStreams;
 #[cfg(windows)]
 mod process;
-#[cfg(any(windows, test))]
 mod profile;
 #[cfg(windows)]
 mod usvfs;
@@ -47,21 +46,19 @@ pub use managed::ManagedProcess;
 pub use managed::SupervisedExit;
 #[cfg(windows)]
 pub use managed::supervise;
-#[cfg(any(windows, test))]
 pub use profile::ActivationSource;
-#[cfg(any(windows, test))]
 pub use profile::EffectivePlugin;
 #[cfg(any(windows, test))]
-pub use profile::ProfileConfiguration;
+pub use profile::ProfileMappingInput;
 #[cfg(any(windows, test))]
-pub use profile::ProfileConfigurationError;
-#[cfg(any(windows, test))]
-pub use profile::ProfileConfigurationInput;
-#[cfg(any(windows, test))]
+pub use profile::ProfileMappings;
+pub use profile::ProfileProjectionError;
+pub use profile::ProfileProjectionInput;
 pub use profile::ProfileText;
-#[cfg(any(windows, test))]
+pub use profile::ProjectedProfile;
 pub use profile::VisibleProfileFile;
+pub use profile::build_profile_projection;
 #[cfg(any(windows, test))]
-pub use profile::build_profile_configuration;
+pub use profile::profile_mappings;
 #[cfg(any(windows, test))]
 mod launch_inputs;

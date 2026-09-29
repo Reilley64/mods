@@ -1,18 +1,16 @@
 use super::ExecutionAdapter;
+use crate::environment_preparation::PreparationAdapter;
 use application::ErrorMarker;
 use application::execution::ExecuteProgramDependencies;
 use application::ports::AdapterState;
-use application::ports::ExecutionProfile;
-use application::ports::ExecutionProfileProjection;
-use application::ports::LaunchPlan;
-use application::ports::LaunchProvider;
+use application::ports::EnvironmentPlan;
 use application::ports::LaunchTarget;
 use application::ports::PortFuture;
 use application::ports::ProgramExit;
 use application::ports::ProgramOutput;
 use application::ports::ProgramSupervision;
 use application::ports::RunningProgram;
-use application::ports::StagedExecutionProfile;
+use application::ports::StagedProfile;
 use application::ports::VirtualFileSystem;
 use domain::ModName;
 use domain::ProcessStatus;
@@ -20,23 +18,20 @@ use domain::Program;
 use domain::ProgramArgument;
 use domain::WorkingDirectory;
 use infrastructure_environment::EnvironmentAdapter;
-use infrastructure_environment::ExecutionInis;
 use infrastructure_environment::PreparedLaunch;
+use infrastructure_environment::StagedProfileInis;
 use infrastructure_execution::HookedProcess;
 use infrastructure_execution::InheritedStreams;
 use infrastructure_execution::LaunchInputError;
 use infrastructure_execution::LaunchRequest;
 use infrastructure_execution::NativeFailure;
 use infrastructure_execution::PrivateStreams;
-use infrastructure_execution::ProfileConfiguration;
-use infrastructure_execution::ProfileConfigurationInput;
-use infrastructure_execution::ProfileText;
+use infrastructure_execution::ProfileMappingInput;
 use infrastructure_execution::ProviderRoot;
 use infrastructure_execution::ResolvedLaunch;
 use infrastructure_execution::ViewConfiguration;
 use infrastructure_execution::VirtualGameView;
-use infrastructure_execution::VisibleProfileFile;
-use infrastructure_execution::build_profile_configuration;
+use infrastructure_execution::profile_mappings;
 use infrastructure_execution::supervise;
 use infrastructure_game_platform::GamePlatformAdapter;
 use rootcause::Report;
@@ -44,7 +39,6 @@ use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::future::ready;
-use std::mem::take;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -74,6 +68,7 @@ impl ExecutionAdapter {
 	/// thread, so native session calls never overlap.
 	pub(super) fn dependencies(&self) -> ExecuteProgramDependencies {
 		let adapter = Arc::new(self.clone());
+		let preparation = PreparationAdapter::new(self.root.clone(), self.binding.clone());
 
 		ExecuteProgramDependencies {
 			report_progress: None,
@@ -83,42 +78,15 @@ impl ExecutionAdapter {
 					completed(adapter.resolve_launch_target(program, arguments, working_directory))
 				}
 			}),
-			prepare_launch_plan: Arc::new({
-				let adapter = adapter.clone();
-				move |cancellation| {
-					let adapter = adapter.clone();
-					Box::pin(async move { adapter.prepare_launch_plan(cancellation).await })
-						as PortFuture<_>
-				}
-			}),
-			project_execution_profile: Arc::new(|plan: &LaunchPlan| {
-				completed(project_execution_profile(plan))
-			}),
-			stage_execution_profile: Arc::new({
-				let adapter = adapter.clone();
-				move |plan: &LaunchPlan, cancellation| {
-					let adapter = adapter.clone();
-					// The port borrows the plan, so the future owns a copy of the prepared launch.
-					let prepared = plan.state.downcast_ref::<PreparedLaunch>().cloned();
-					Box::pin(async move {
-						let prepared = prepared.ok_or_else(foreign_handle)?;
-						adapter.stage_execution_profile(&prepared, cancellation).await
-					}) as PortFuture<_>
-				}
-			}),
+			prepare_environment_plan: preparation.prepare_environment_plan_port(),
+			project_profile: preparation.project_profile_port(),
+			stage_profile: preparation.stage_profile_port(),
 			create_virtual_file_system: Arc::new(
-				|plan: LaunchPlan,
-				 profile: ExecutionProfile,
-				 staged: &StagedExecutionProfile,
+				|plan: EnvironmentPlan,
+				 staged: &StagedProfile,
 				 output_mod: Option<ModName>,
 				 cancellation: CancellationToken| {
-					completed(create_virtual_file_system(
-						plan,
-						profile,
-						staged,
-						output_mod,
-						cancellation,
-					))
+					completed(create_virtual_file_system(plan, staged, output_mod, cancellation))
 				},
 			),
 			launch_program: Arc::new({
@@ -178,41 +146,6 @@ impl ExecutionAdapter {
 			launch,
 			inherited_streams,
 		})))
-	}
-
-	async fn prepare_launch_plan(&self, cancellation: CancellationToken) -> Result<LaunchPlan, ErrorMarker> {
-		let prepared = EnvironmentAdapter
-			.prepare_launch(&self.root, &self.binding, &cancellation)
-			.await?;
-
-		let providers = prepared
-			.providers
-			.iter()
-			.map(|provider| LaunchProvider {
-				identity: provider.identity.clone(),
-				enabled: provider.enabled,
-			})
-			.collect();
-
-		Ok(LaunchPlan {
-			providers,
-			state: AdapterState::new(prepared),
-		})
-	}
-
-	async fn stage_execution_profile(
-		&self,
-		prepared: &PreparedLaunch,
-		cancellation: CancellationToken,
-	) -> Result<StagedExecutionProfile, ErrorMarker> {
-		let inis = EnvironmentAdapter
-			.derive_execution_inis(&self.root, prepared, &cancellation)
-			.await?;
-
-		Ok(StagedExecutionProfile {
-			directory: inis.path().to_owned(),
-			state: AdapterState::new(inis),
-		})
 	}
 
 	fn launch_program(
@@ -288,59 +221,23 @@ impl ExecutionAdapter {
 	}
 }
 
-fn project_execution_profile(plan: &LaunchPlan) -> Result<ExecutionProfileProjection, ErrorMarker> {
-	let prepared = plan.state.downcast_ref::<PreparedLaunch>().ok_or_else(foreign_handle)?;
+fn create_virtual_file_system(
+	plan: EnvironmentPlan,
+	staged: &StagedProfile,
+	output_mod: Option<ModName>,
+	cancellation: CancellationToken,
+) -> Result<VirtualFileSystem, ErrorMarker> {
+	let prepared: PreparedLaunch = plan.state.downcast().ok_or_else(foreign_handle)?;
 
 	let (documents, local) = GamePlatformAdapter::system().execution_profile_directories()?;
 
-	let profile_files: Vec<_> = prepared
-		.profile_files
-		.iter()
-		.map(|file| ProfileText {
-			name: file.name,
-			text: &file.text,
-		})
-		.collect();
-	let visible_files: Vec<_> = prepared
-		.visible_files
-		.iter()
-		.map(|file| VisibleProfileFile {
-			path: file.path.clone(),
-		})
-		.collect();
-
-	let mut profile = build_profile_configuration(ProfileConfigurationInput {
-		files: &profile_files,
-		visible_files: &visible_files,
+	let profile = profile_mappings(ProfileMappingInput {
 		profile_directory: &prepared.profile_directory,
 		documents_directory: &documents,
 		local_app_data_directory: &local,
 		data_directory: &prepared.data_directory,
 		cache_directory: &prepared.cache_directory,
-	})
-	.context(ErrorMarker::environment_invalid(Some("execution")))?;
-
-	for (order, plugin) in profile.plugins.iter().enumerate() {
-		tracing::info!(plugin = %plugin.path, basis = "analytical_data", runtime_observed = false, projected_order = order, projected_activation_sources = ?plugin.activation_sources, "advisory plugin projection");
-	}
-
-	let warnings = take(&mut profile.warnings);
-
-	Ok(ExecutionProfileProjection {
-		profile: ExecutionProfile(AdapterState::new(profile)),
-		warnings,
-	})
-}
-
-fn create_virtual_file_system(
-	plan: LaunchPlan,
-	profile: ExecutionProfile,
-	staged: &StagedExecutionProfile,
-	output_mod: Option<ModName>,
-	cancellation: CancellationToken,
-) -> Result<VirtualFileSystem, ErrorMarker> {
-	let prepared: PreparedLaunch = plan.state.downcast().ok_or_else(foreign_handle)?;
-	let profile: ProfileConfiguration = profile.0.downcast().ok_or_else(foreign_handle)?;
+	});
 
 	let mut mappings = profile.profile_files;
 	for mapping in &mut mappings {
@@ -408,8 +305,8 @@ async fn supervise_program(
 	})
 }
 
-async fn preserve_execution_profile(staged: StagedExecutionProfile) -> Result<(), ErrorMarker> {
-	let inis: ExecutionInis = staged.state.downcast().ok_or_else(foreign_handle)?;
+async fn preserve_execution_profile(staged: StagedProfile) -> Result<(), ErrorMarker> {
+	let inis: StagedProfileInis = staged.state.downcast().ok_or_else(foreign_handle)?;
 
 	inis.preserve().await
 }

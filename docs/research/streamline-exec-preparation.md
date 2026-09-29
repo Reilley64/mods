@@ -277,6 +277,57 @@ The combinator rule is applied in `finish_committed_installation`, which checks 
 | --- | --- | --- |
 | `settings/src/lib.rs`, `layout.rs`, `manifest_writer.rs`; `environment/src/lib.rs`, `transactions.rs`, `execution_preparation.rs`, `execution_preparation/inventory.rs`, `conflict_scan.rs`, `snapshot.rs`, `derived_profile.rs`, `profile.rs`, `export.rs`, `manifest.rs`; `game_platform/src/steam/validation.rs`, `profile_sources.rs`; `dependencies/src/export_environment.rs`, `execution_adapter.rs`, `execution_adapter/native.rs`; `application/src/execution/execute_program.rs` | Phase spacing (full-branch review, 0.21 to 0.44) | Accepted after one fix pass. Blank lines now separate guards, acquisition, transformation, writes, and output in the changed functions, and the per-edit reviews of these files are clean. The full-branch review gives no line numbers. The remaining finding cannot be traced to a specific block; adding more blank lines would split statements that form one operation. |
 
+## Export shares preparation with exec
+
+The design is in [exec-performance-discussion.md](../exec-performance-discussion.md), section "Design: export shares preparation with exec". It is done in two commits.
+
+### Part 1: neutral shared ports
+
+exec behavior does not change. The changes:
+
+- New capability module `application::ports::preparation` with the shared, single-step ports:
+  - `PrepareEnvironmentPlan` returns `EnvironmentPlan` (was `PrepareLaunchPlan` / `LaunchPlan`). `LaunchProvider` is now `EnvironmentProvider`.
+  - `ProjectProfile` returns `ProfileProjection` (was `ProjectExecutionProfile` / `ExecutionProfileProjection`).
+  - `StageProfile` takes a `ProfilePurpose` (`Execution` or `Export`) and returns `StagedProfile` (was `StageExecutionProfile` / `StagedExecutionProfile`).
+  - `ProfileWarning` moved here. `AdapterState` moved to its own `ports::adapter_state` module, because both port groups use it.
+- `ProfileProjection` holds only `warnings`. The design listed a `profile` handle too. With the Documents and LocalAppData lookup moved into `CreateVirtualFileSystem`, no later step reads that handle, so it is gone. The adapter still logs the projected plugin order.
+- `CreateVirtualFileSystem` now takes `(EnvironmentPlan, &StagedProfile, Option<ModName>, CancellationToken)`. It resolves Documents and LocalAppData and builds the profile mappings itself.
+- New application helper `application::preparation::prepare_environment`. It calls `PrepareEnvironmentPlan` and `ProjectProfile`, then maps each `ProfileWarning` to the new neutral `PluginWarning`. `ExecutionWarning` is now `Plugin(PluginWarning)` or `ProfileStateInvalid`. The CLI renders plugin warnings through `output::plugin_warning`, with the same text as before.
+- `infrastructure-execution`: `build_profile_configuration` is split.
+  - `build_profile_projection` validates the profile and builds the plugin projection. It compiles on every platform.
+  - `profile_mappings` builds the named-file, save, and invalidation-archive mappings. It stays Windows-only (and in tests), with `ProfileMappingInput`.
+  - `ProfileConfigurationError` is now `ProfileProjectionError`.
+- `infrastructure-dependencies`: new platform-neutral `environment_preparation::PreparationAdapter` wires the three shared ports through `prepare_environment_plan_port`, `project_profile_port`, and `stage_profile_port`. `native.rs` keeps only target resolution, the VFS, launch, supervision, output, preservation, and the post-run check. Until export uses the adapter, non-Windows builds mark it `expect(dead_code)`. Part 2 removes that attribute.
+- `infrastructure-environment`: `ExecutionInis` is now `StagedProfileInis`, and `derive_execution_inis` is now `stage_profile_inis(root, prepared, purpose, cancellation)`.
+  - `Execution` stages as before: directory prefix `execution-inis-`, only `FalloutCustom.ini` is rewritten, and it is created when absent.
+  - `Export` uses prefix `export-inis-`, derives with `ProfileIniPurpose::Export`, uses the embedded default archive list, and does not create an absent `FalloutCustom.ini`. Nothing calls it yet. The new test `export_staging_keeps_the_standalone_layout` covers it.
+
+Small order changes in exec:
+
+- The helper projects the profile right after preparing the plan. The output-target check now runs after projection, not between preparation and projection. The step test `data_mod_output_target_must_exist_and_be_enabled` now expects `project` in the recorded steps. A profile that fails projection now reports that error before an unknown output target.
+- The Documents and LocalAppData lookup now runs inside `CreateVirtualFileSystem`, after staging. If it fails, the error now also carries the retained INI path.
+
+The combinator rule was applied to the code this change touched in `execute_program`: the working-directory default uses `map_or_else`, and the missing output-target error uses `ok_or_else`.
+
+Windows-only code: `native.rs` and the Windows parts of `infrastructure-execution` cannot be compiled from macOS. `cargo check --target x86_64-pc-windows-msvc` fails in the `usvfs-sys` build script for `infrastructure-execution`, and in `zstd-sys` for `infrastructure-dependencies`. `application` and `infrastructure-environment` pass the Windows check. `native.rs` was checked by reading: every import is used, every used type is imported, and `profile_mappings` borrows `prepared` only for the call, before `ViewConfiguration::new` moves its fields.
+
+#### Gate dispositions for Part 1
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/ports/adapter_state.rs` | Narrow custom implementations; Use-case parameters | Accepted. The type moved unchanged from `ports/execution.rs`. It is a module now because the preparation and execution ports both use it. |
+| `application/src/ports/preparation.rs`, `ports/execution.rs` | Use-case parameters; Narrow custom implementations | Accepted as inapplicable. These are port type aliases. Each port takes its business values first and `CancellationToken` last. No custom infrastructure is added. |
+| `application/src/preparation/prepare_environment.rs` | Use-case declaration order; Use-case parameters | Accepted as inapplicable. This is a capability helper that two use cases share, not a use case. It takes the two ports first and `CancellationToken` last. |
+| `application/src/execution/execute_program.rs`, `execution/types.rs` | Test public behavior; Use-case parameters; Use-case declaration order | Accepted. The tests call the public use case with fake ports, as before. The signature and declaration order are unchanged. |
+| `infrastructure/execution/src/profile.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure functions that take one input struct, not use cases. |
+| `infrastructure/environment/src/derived_profile.rs`, `execution_preparation.rs` | Use-case parameters | Accepted as inapplicable. `stage_profile_inis` is an infrastructure method; `CancellationToken` stays last. A Choose-the-narrow-conditional finding (two `match` blocks on the purpose) was fixed by mapping the purpose once. A Reason-comments finding on a restating Rustdoc summary was fixed by removing the summary. |
+| `infrastructure/dependencies/src/environment_preparation.rs` | Use-case parameters; Narrow custom implementations; Use-case declaration order; Phase spacing | Accepted. The adapter builds port closures, as the other composition modules do. A Callable-port-invocation finding came from the infrastructure function having the same name as the `project_profile` port field. It was fixed by renaming the function `build_profile_projection`. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable, as recorded earlier for this file. These are composition functions, not use cases. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs`, `environment_preparation.rs` | Callable port invocation (full-branch run, 0.56 and 0.48) | Partly fixed, rest accepted. The adapter methods that build ports had the same names as the port fields, so `preparation.project_profile()` looked like a direct port call. They now end in `_port`, like `prepare_export_port`. The per-edit recheck is clean, but the full-branch run still reports the rule. The remaining matches are private adapter functions such as `create_virtual_file_system(...)` and `preserve_execution_profile(...)`, which share names with port fields. They are the port bodies, not port calls; native.rs had this finding at 0.45 before this change. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs` | Cancellation propagation and checkpoints (full-branch run, 0.41) | Accepted. The token is passed through unchanged. The one checkpoint, after `ViewConfiguration::new` and before `VirtualGameView::configure`, moved with `create_virtual_file_system` from the earlier code. |
+| `infrastructure/environment/src/derived_profile.rs` | Reusable capability ports (full-branch run, 0.50) | Accepted for Part 1. Shared staging still attaches the exec-named `RetainedExecutionInis` when staging fails. Only exec stages in this commit, so the error text stays correct. Part 2 decides how an export stage failure is reported. |
+| `presentation/cli/src/runner.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. The change only renders a nested warning enum. |
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

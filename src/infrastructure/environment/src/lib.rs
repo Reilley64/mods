@@ -5,7 +5,7 @@ mod conflict_scan;
 mod derived_profile;
 mod execution_preparation;
 mod export;
-pub use derived_profile::ExecutionInis;
+pub use derived_profile::StagedProfileInis;
 mod files;
 mod hashing;
 mod manifest;

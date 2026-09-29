@@ -1,5 +1,6 @@
 #![feature(fn_traits)]
 
+mod environment_preparation;
 mod execute_program;
 mod execution_adapter;
 mod explain_path;

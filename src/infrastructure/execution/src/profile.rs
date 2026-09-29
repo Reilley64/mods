@@ -1,3 +1,4 @@
+#[cfg(any(windows, test))]
 use crate::PathMapping;
 use application::ports::ProfileWarning;
 use domain::DataRelativePath;
@@ -10,6 +11,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
+#[cfg(any(windows, test))]
 use std::path::Path;
 
 const PROFILE_FILES: [&str; 8] = [
@@ -22,6 +24,7 @@ const PROFILE_FILES: [&str; 8] = [
 	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
+#[cfg(any(windows, test))]
 const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
 
 /// Decoded canonical text. The caller must reject decoding failures and use the
@@ -38,10 +41,15 @@ pub struct VisibleProfileFile {
 	pub path: DataRelativePath,
 }
 
-/// Resolved Fallout-specific directories and decoded state; no save contents.
-pub struct ProfileConfigurationInput<'a> {
+/// Decoded canonical profile state and the analytical Data winners; no save contents.
+pub struct ProfileProjectionInput<'a> {
 	pub files: &'a [ProfileText<'a>],
 	pub visible_files: &'a [VisibleProfileFile],
+}
+
+/// Resolved Fallout-specific directories for the virtual file system.
+#[cfg(any(windows, test))]
+pub struct ProfileMappingInput<'a> {
 	pub profile_directory: &'a Path,
 	pub documents_directory: &'a Path,
 	pub local_app_data_directory: &'a Path,
@@ -63,50 +71,54 @@ pub struct EffectivePlugin {
 	pub activation_sources: Vec<ActivationSource>,
 }
 
+/// The advisory analytical plugin projection.
 #[derive(Debug)]
-pub struct ProfileConfiguration {
-	pub profile_directories: Vec<PathMapping>,
-	pub profile_files: Vec<PathMapping>,
-	pub saves: PathMapping,
-	pub invalidation_mapping: PathMapping,
+pub struct ProjectedProfile {
 	pub plugins: Vec<EffectivePlugin>,
 	pub warnings: Vec<ProfileWarning>,
 }
 
+/// Named profile mappings, the save route, and the reserved archive mapping.
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+pub struct ProfileMappings {
+	pub profile_directories: Vec<PathMapping>,
+	pub profile_files: Vec<PathMapping>,
+	pub saves: PathMapping,
+	pub invalidation_mapping: PathMapping,
+}
+
 /// A canonical file diagnostic. Line zero identifies a missing key or input.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileConfigurationError {
+pub struct ProfileProjectionError {
 	pub file: String,
 	pub line: usize,
 	pub value: String,
 	pub expected: &'static str,
 }
 
-impl fmt::Display for ProfileConfigurationError {
+impl fmt::Display for ProfileProjectionError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "{}:{}: expected {}", self.file, self.line, self.expected)
 	}
 }
-impl Error for ProfileConfigurationError {}
+impl Error for ProfileProjectionError {}
 
-/// Builds canonical profile mappings and an advisory analytical plugin projection.
-/// The projection does not establish runtime visibility, activation, or order and
-/// does not edit canonical state or select the files used by profile mappings.
+/// Validates canonical profile state and builds an advisory analytical plugin
+/// projection. The projection does not establish runtime visibility,
+/// activation, or order, and it does not edit canonical state.
 ///
 /// # Errors
 ///
-/// Rejects malformed plugin lists, invalid routing/invalidation keys, duplicate
-/// inputs.
-pub fn build_profile_configuration(
-	input: ProfileConfigurationInput<'_>,
-) -> Result<ProfileConfiguration, ProfileConfigurationError> {
+/// Rejects malformed plugin lists, invalid routing keys, and duplicate inputs.
+pub fn build_profile_projection(input: ProfileProjectionInput<'_>) -> Result<ProjectedProfile, ProfileProjectionError> {
 	let mut profile_texts = HashMap::new();
 	for file in input.files {
 		let key = case_fold_key(file.name);
 		if !PROFILE_FILES.iter().any(|name| name.eq_ignore_ascii_case(file.name))
 			|| profile_texts.insert(key, file.text).is_some()
 		{
-			return Err(report!(ProfileConfigurationError {
+			return Err(report!(ProfileProjectionError {
 				file: file.name.into(),
 				line: 0,
 				value: file.name.into(),
@@ -121,7 +133,7 @@ pub fn build_profile_configuration(
 		if ["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"].contains(name)
 			&& !canonical_profile_routing_valid(name, text)
 		{
-			return Err(report!(ProfileConfigurationError {
+			return Err(report!(ProfileProjectionError {
 				file: (*name).into(),
 				line: 0,
 				value: String::new(),
@@ -144,7 +156,7 @@ pub fn build_profile_configuration(
 	let mut visible = HashMap::new();
 	for file in input.visible_files {
 		if visible.insert(file.path.comparison_key(), file).is_some() {
-			return Err(report!(ProfileConfigurationError {
+			return Err(report!(ProfileProjectionError {
 				file: "Data".into(),
 				line: 0,
 				value: file.path.to_string(),
@@ -159,7 +171,7 @@ pub fn build_profile_configuration(
 	for name in ["plugins.txt", "loadorder.txt"] {
 		let text = profile_texts.get(name).copied().unwrap_or_default();
 		if text.replace("\r\n", "").contains(['\r', '\n']) {
-			return Err(report!(ProfileConfigurationError {
+			return Err(report!(ProfileProjectionError {
 				file: name.into(),
 				line: 0,
 				value: String::new(),
@@ -173,7 +185,7 @@ pub fn build_profile_configuration(
 				continue;
 			}
 			let Some(path) = plugin_path(line) else {
-				return Err(report!(ProfileConfigurationError {
+				return Err(report!(ProfileProjectionError {
 					file: name.into(),
 					line: index + 1,
 					value: line.into(),
@@ -253,6 +265,13 @@ pub fn build_profile_configuration(
 	}
 	warnings.push(ProfileWarning::LoadOrderNotEnforced);
 
+	Ok(ProjectedProfile { plugins, warnings })
+}
+
+/// Maps named profile files, saves, and the reserved invalidation archive into
+/// the game's Documents, LocalAppData, and Data directories.
+#[cfg(any(windows, test))]
+pub fn profile_mappings(input: ProfileMappingInput<'_>) -> ProfileMappings {
 	let profile_files = PROFILE_FILES
 		.iter()
 		.enumerate()
@@ -282,7 +301,7 @@ pub fn build_profile_configuration(
 		});
 	}
 
-	Ok(ProfileConfiguration {
+	ProfileMappings {
 		profile_directories,
 		profile_files,
 		saves: PathMapping {
@@ -293,9 +312,7 @@ pub fn build_profile_configuration(
 			source: input.cache_directory.join(INVALIDATION_ARCHIVE),
 			destination: input.data_directory.join(INVALIDATION_ARCHIVE),
 		},
-		plugins,
-		warnings,
-	})
+	}
 }
 
 fn plugin_path(name: &str) -> Option<DataRelativePath> {
@@ -318,15 +335,10 @@ mod tests {
 	fn build(
 		files: &[ProfileText<'_>],
 		visible: &[VisibleProfileFile],
-	) -> Result<ProfileConfiguration, ProfileConfigurationError> {
-		build_profile_configuration(ProfileConfigurationInput {
+	) -> Result<ProjectedProfile, ProfileProjectionError> {
+		build_profile_projection(ProfileProjectionInput {
 			files,
 			visible_files: visible,
-			profile_directory: Path::new("/environment/profile"),
-			documents_directory: Path::new("/documents/FalloutNV"),
-			local_app_data_directory: Path::new("/local/FalloutNV"),
-			data_directory: Path::new("/game/Data"),
-			cache_directory: Path::new("/environment/cache"),
 		})
 	}
 	fn visible(name: &str) -> VisibleProfileFile {
@@ -336,8 +348,7 @@ mod tests {
 	}
 
 	#[test]
-	fn derives_lenient_order_and_all_activation_sources_without_rewriting() -> Result<(), ProfileConfigurationError>
-	{
+	fn derives_lenient_order_and_all_activation_sources_without_rewriting() -> Result<(), ProfileProjectionError> {
 		let files = [
 			ProfileText {
 				name: "Fallout.ini",
@@ -387,14 +398,15 @@ mod tests {
 	}
 
 	#[test]
-	fn emits_named_mappings_save_route_and_reserved_archive_mapping() -> Result<(), ProfileConfigurationError> {
-		let output = build(
-			&[ProfileText {
-				name: "Fallout.ini",
-				text: VALID,
-			}],
-			&[],
-		)?;
+	fn emits_named_mappings_save_route_and_reserved_archive_mapping() {
+		let output = profile_mappings(ProfileMappingInput {
+			profile_directory: Path::new("/environment/profile"),
+			documents_directory: Path::new("/documents/FalloutNV"),
+			local_app_data_directory: Path::new("/local/FalloutNV"),
+			data_directory: Path::new("/game/Data"),
+			cache_directory: Path::new("/environment/cache"),
+		});
+
 		assert_eq!(
 			output.profile_directories
 				.iter()
@@ -421,7 +433,6 @@ mod tests {
 			output.invalidation_mapping.destination,
 			Path::new("/game/Data/Fallout - Invalidation.bsa")
 		);
-		Ok(())
 	}
 
 	#[test]
@@ -461,7 +472,7 @@ mod tests {
 	}
 
 	#[test]
-	fn unlisted_plugins_keep_input_collection_order() -> Result<(), ProfileConfigurationError> {
+	fn unlisted_plugins_keep_input_collection_order() -> Result<(), ProfileProjectionError> {
 		let output = build(
 			&[ProfileText {
 				name: "Fallout.ini",
@@ -482,7 +493,7 @@ mod tests {
 
 	#[test]
 	fn unavailable_duplicate_warnings_are_distinct_and_include_canonical_line_errors()
-	-> Result<(), ProfileConfigurationError> {
+	-> Result<(), ProfileProjectionError> {
 		let output = build(
 			&[
 				ProfileText {
@@ -520,7 +531,7 @@ mod tests {
 
 	#[test]
 	fn test_file_assignments_settle_independently_before_execution_eligibility()
-	-> Result<(), ProfileConfigurationError> {
+	-> Result<(), ProfileProjectionError> {
 		let fallout = format!("{VALID}sTestFile1=First.esp\nsTestFile2=First.esp\nsTestFile2=Light.esl\n");
 		let output = build(
 			&[

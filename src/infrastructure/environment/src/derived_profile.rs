@@ -3,6 +3,7 @@ use crate::profile::decode;
 use crate::profile::encode;
 use application::ErrorMarker;
 use application::execution::RetainedExecutionInis;
+use application::ports::ProfilePurpose;
 use domain::ProfileIniPurpose;
 use domain::derive_profile_ini;
 use domain::preserve_profile_ini_keys;
@@ -130,26 +131,32 @@ impl ProfileIniInputs {
 
 /// Retains its backing files unless preservation and known process completion
 /// explicitly succeed. Dropping this owner during uncertain drain never removes INIs.
-pub struct ExecutionInis {
+pub struct StagedProfileInis {
 	directory: Option<TempDir>,
 	path: PathBuf,
 	canonical_directory: PathBuf,
+	purpose: ProfileIniPurpose,
 	inputs: ProfileIniInputs,
 	baseline: Vec<(&'static str, Option<Vec<u8>>)>,
 }
 
-impl ExecutionInis {
+impl StagedProfileInis {
 	pub(crate) async fn create(
 		profile: &Path,
 		game: &Path,
 		temp: &Path,
+		purpose: ProfilePurpose,
 		cancellation: &CancellationToken,
 	) -> Result<Self, ErrorMarker> {
 		let inputs = ProfileIniInputs::read_mode(profile, game, true, cancellation).await?;
 
+		let (prefix, purpose) = match purpose {
+			ProfilePurpose::Execution => ("execution-inis-", ProfileIniPurpose::Execution),
+			ProfilePurpose::Export => ("export-inis-", ProfileIniPurpose::Export),
+		};
 		// `tempfile` creates the uniquely named directory synchronously; it is one directory creation.
 		let directory = Builder::new()
-			.prefix("execution-inis-")
+			.prefix(prefix)
 			.tempdir_in(temp)
 			.context(ErrorMarker::io_failure())?;
 
@@ -157,6 +164,7 @@ impl ExecutionInis {
 			path: directory.path().to_owned(),
 			directory: Some(directory),
 			canonical_directory: profile.to_owned(),
+			purpose,
 			inputs,
 			baseline: Vec::new(),
 		};
@@ -179,11 +187,13 @@ impl ExecutionInis {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
 
-			let source = bytes
-				.as_deref()
-				.or_else(|| (*name == "FalloutCustom.ini").then_some(&[][..]));
+			// Only an execution copy needs a `FalloutCustom.ini` to carry its overrides.
+			let source = bytes.as_deref().or_else(|| {
+				(self.purpose == ProfileIniPurpose::Execution && *name == "FalloutCustom.ini")
+					.then_some(&[][..])
+			});
 			let derived = source
-				.map(|bytes| self.inputs.derive(name, bytes, ProfileIniPurpose::Execution))
+				.map(|bytes| self.inputs.derive(name, bytes, self.purpose))
 				.transpose()?;
 
 			if let Some(bytes) = &derived {
@@ -263,7 +273,7 @@ impl ExecutionInis {
 	}
 }
 
-impl Drop for ExecutionInis {
+impl Drop for StagedProfileInis {
 	fn drop(&mut self) {
 		if let Some(directory) = self.directory.take() {
 			let _ = directory.keep();
@@ -292,7 +302,14 @@ mod tests {
 	#[tokio::test]
 	async fn optional_creation_and_invalid_child_edits_follow_preservation_policy() -> Result<(), ErrorMarker> {
 		let (_temp, profile, game, staging) = fixture()?;
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Execution,
+			&CancellationToken::new(),
+		)
+		.await?;
 		fs::write(
 			owner.path().join("FalloutCustom.ini"),
 			b"[Display]\ncreated=yes\n[Archive]\nsArchiveList=injected\n",
@@ -300,11 +317,44 @@ mod tests {
 		.context(ErrorMarker::io_failure())?;
 		owner.preserve().await?;
 		assert!(!profile.join("FalloutCustom.ini").exists());
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Execution,
+			&CancellationToken::new(),
+		)
+		.await?;
 		let retained = owner.path().to_owned();
 		fs::write(retained.join("Fallout.ini"), b"[malformed").context(ErrorMarker::io_failure())?;
 		assert!(owner.preserve().await.is_err());
 		assert!(retained.exists());
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn export_staging_keeps_the_standalone_layout() -> Result<(), ErrorMarker> {
+		let (_temp, profile, game, staging) = fixture()?;
+
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Export,
+			&CancellationToken::new(),
+		)
+		.await?;
+
+		let fallout = fs::read_to_string(owner.path().join("Fallout.ini")).context(ErrorMarker::io_failure())?;
+		assert!(fallout.contains("SLocalSavePath=Saves\\"));
+		assert!(fallout.contains("Fallout - Invalidation.bsa"));
+		assert!(!fallout.contains("__mods_saves"));
+		assert!(owner
+			.path()
+			.file_name()
+			.and_then(|name| name.to_str())
+			.is_some_and(|name| name.starts_with("export-inis-")));
+		assert!(!owner.path().join("FalloutCustom.ini").exists());
 		Ok(())
 	}
 
@@ -317,7 +367,14 @@ mod tests {
 			bytes.extend_from_slice(&value.to_le_bytes());
 		}
 		fs::write(profile.join("Fallout.ini"), &bytes).context(ErrorMarker::io_failure())?;
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Execution,
+			&CancellationToken::new(),
+		)
+		.await?;
 		let derived = fs::read(owner.path().join("Fallout.ini")).context(ErrorMarker::io_failure())?;
 		assert!(derived.starts_with(&[0xff, 0xfe]));
 		let (derived, _) = decode(&derived)?;
@@ -333,7 +390,14 @@ mod tests {
 	#[tokio::test]
 	async fn stopped_child_edits_preserve_keys_and_absent_optional_files() -> Result<(), ErrorMarker> {
 		let (_temp, profile, game, staging) = fixture()?;
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Execution,
+			&CancellationToken::new(),
+		)
+		.await?;
 		let path = owner.path().to_owned();
 		let ini = path.join("Fallout.ini");
 		let derived = fs::read_to_string(&ini).context(ErrorMarker::io_failure())?;
@@ -356,7 +420,14 @@ mod tests {
 	async fn uncertain_drain_deletion_and_concurrent_edits_retain_temporary_files() -> Result<(), ErrorMarker> {
 		for failure in ["uncertain", "deleted"] {
 			let (_temp, profile, game, staging) = fixture()?;
-			let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+			let owner = StagedProfileInis::create(
+				&profile,
+				&game,
+				&staging,
+				ProfilePurpose::Execution,
+				&CancellationToken::new(),
+			)
+			.await?;
 			let path = owner.path().to_owned();
 			if failure == "uncertain" {
 				drop(owner);
@@ -377,7 +448,14 @@ mod tests {
 			b"[Archive]\nsArchiveList=Custom.bsa, Fallout - Invalidation.bsa\n[Display]\nvalue=original\n",
 		)
 		.context(ErrorMarker::io_failure())?;
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Execution,
+			&CancellationToken::new(),
+		)
+		.await?;
 		let custom =
 			fs::read_to_string(owner.path().join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
 		assert_eq!(
@@ -397,7 +475,14 @@ mod tests {
 			fs::read_to_string(profile.join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
 		assert!(canonical.contains("value=child"));
 		assert!(!canonical.contains("__mods_saves"));
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Execution,
+			&CancellationToken::new(),
+		)
+		.await?;
 		let custom =
 			fs::read_to_string(owner.path().join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
 		assert_eq!(custom.matches("Fallout - Invalidation.bsa").count(), 1);
@@ -417,7 +502,14 @@ mod tests {
 		.context(ErrorMarker::io_failure())?;
 
 		for _ in 0..2 {
-			let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+			let owner = StagedProfileInis::create(
+				&profile,
+				&game,
+				&staging,
+				ProfilePurpose::Execution,
+				&CancellationToken::new(),
+			)
+			.await?;
 			let custom = fs::read_to_string(owner.path().join("FalloutCustom.ini"))
 				.context(ErrorMarker::io_failure())?;
 			assert_eq!(
@@ -456,7 +548,14 @@ mod tests {
 					.context(ErrorMarker::io_failure())?;
 			}
 
-			let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+			let owner = StagedProfileInis::create(
+				&profile,
+				&game,
+				&staging,
+				ProfilePurpose::Execution,
+				&CancellationToken::new(),
+			)
+			.await?;
 			let derived = fs::read_to_string(owner.path().join("FalloutCustom.ini"))
 				.context(ErrorMarker::io_failure())?;
 			assert_eq!(profile_archive_list(&derived), Some("Fallout - Invalidation.bsa"));
@@ -484,7 +583,14 @@ mod tests {
 		let (_temp, profile, game, staging) = fixture()?;
 		fs::write(profile.join("FalloutCustom.ini"), b"[Archive]\nsArchiveList=\n")
 			.context(ErrorMarker::io_failure())?;
-		let owner = ExecutionInis::create(&profile, &game, &staging, &CancellationToken::new()).await?;
+		let owner = StagedProfileInis::create(
+			&profile,
+			&game,
+			&staging,
+			ProfilePurpose::Execution,
+			&CancellationToken::new(),
+		)
+		.await?;
 		let custom =
 			fs::read_to_string(owner.path().join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
 		assert!(!custom.contains("Original.bsa"));

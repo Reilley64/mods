@@ -1,6 +1,7 @@
 use crate::execution::ExecuteProgramError;
 use crate::execution::ExecuteProgramOutput;
 use crate::ports::PortFuture;
+use crate::preparation::PluginWarning;
 use domain::OutputTarget;
 use domain::Program;
 use domain::ProgramArgument;
@@ -11,11 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionWarning {
-	LoadOrderNotEnforced,
-	StalePluginEntry { name: String },
-	StaleLoadOrderEntry { name: String },
-	DuplicatePluginEntry { file: String, name: String },
-	UnlistedPlugin { name: String },
+	Plugin(PluginWarning),
 	ProfileStateInvalid,
 }
 

@@ -1,0 +1,64 @@
+use crate::ports::AdapterState;
+use crate::ports::PortFuture;
+use domain::ProviderIdentity;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentProvider {
+	pub identity: ProviderIdentity,
+	pub enabled: bool,
+}
+
+/// Providers, analytical winners, and canonical profile inputs read from one environment.
+pub struct EnvironmentPlan {
+	pub providers: Vec<EnvironmentProvider>,
+	pub state: AdapterState,
+}
+
+/// An advisory analytical plugin-projection diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileWarning {
+	Unavailable {
+		file: String,
+		plugin: String,
+	},
+	Duplicate {
+		file: String,
+		plugin: String,
+	},
+	Unlisted {
+		plugin: String,
+	},
+	/// The analytical projection is advisory; nothing enforces its order.
+	LoadOrderNotEnforced,
+}
+
+/// The validated analytical plugin projection of the canonical profile.
+///
+/// Only its diagnostics cross the port. The adapter logs the projected order.
+pub struct ProfileProjection {
+	pub warnings: Vec<ProfileWarning>,
+}
+
+/// Selects how staged profile INIs route saves and archives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfilePurpose {
+	/// Copies for a program that runs inside the virtual file system.
+	Execution,
+	/// Copies for a standalone exported game layout.
+	Export,
+}
+
+/// Derived profile INIs in a temporary directory. Dropping the handle keeps
+/// `directory` on disk.
+pub struct StagedProfile {
+	pub directory: PathBuf,
+	pub state: AdapterState,
+}
+
+pub type PrepareEnvironmentPlan = Arc<dyn Fn(CancellationToken) -> PortFuture<EnvironmentPlan> + Send + Sync>;
+pub type ProjectProfile = Arc<dyn Fn(&EnvironmentPlan) -> PortFuture<ProfileProjection> + Send + Sync>;
+pub type StageProfile =
+	Arc<dyn Fn(&EnvironmentPlan, ProfilePurpose, CancellationToken) -> PortFuture<StagedProfile> + Send + Sync>;

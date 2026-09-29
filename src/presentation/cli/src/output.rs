@@ -13,6 +13,7 @@ use application::installation::LoserReason;
 use application::installation::ProjectedModState;
 use application::installation::TombstoneScope;
 use application::installation::WinnerReason;
+use application::preparation::PluginWarning;
 use application::settings::SetGameDirectoryOutput;
 use application::settings::SettingRecord;
 use application::settings::SettingSource;
@@ -426,6 +427,17 @@ fn source(source: &SettingSource) -> String {
 		SettingSource::Invocation { argument } => {
 			format!("invocation:{argument}")
 		}
+	}
+}
+
+/// Renders one advisory plugin-projection diagnostic as a stderr line.
+pub(crate) fn plugin_warning(warning: &PluginWarning) -> String {
+	match warning {
+		PluginWarning::LoadOrderNotEnforced => "warning [load_order_not_enforced]: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.\n".to_owned(),
+		PluginWarning::StalePluginEntry { name } => format!("warning [stale_plugin_entry]: analysis projection: plugins.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", quote(name)),
+		PluginWarning::StaleLoadOrderEntry { name } => format!("warning [stale_load_order_entry]: analysis projection: loadorder.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", quote(name)),
+		PluginWarning::DuplicatePluginEntry { file, name } => format!("warning [duplicate_plugin_entry]: duplicate entry {} in {}; analysis projection uses the first occurrence; canonical file is unchanged.\n", quote(name), quote(file)),
+		PluginWarning::UnlistedPlugin { name } => format!("warning [unlisted_plugin]: analysis projection: {} is absent from loadorder.txt; projected order uses backing-file modification time.\n", quote(name)),
 	}
 }
 

@@ -2,7 +2,7 @@ mod inventory;
 
 use self::inventory::ExecutionInventory;
 use crate::EnvironmentAdapter;
-use crate::ExecutionInis;
+use crate::StagedProfileInis;
 use crate::active_code_page::decode as decode_active_code_page;
 use crate::files::read_optional;
 use crate::profile::PROFILE_FILES;
@@ -11,6 +11,7 @@ use crate::profile::validate_plugin_text;
 use crate::snapshot::load_execution;
 use application::ErrorMarker;
 use application::installation::InstallationState;
+use application::ports::ProfilePurpose;
 use domain::DataRelativePath;
 use domain::EffectiveResult;
 use domain::EnvironmentRoot;
@@ -385,17 +386,20 @@ impl EnvironmentAdapter {
 	}
 
 	/// # Errors
-	/// Retains partial INI derivation on failure. Caller owns the files through Job drain.
-	pub async fn derive_execution_inis(
+	/// Retains partial INI derivation on failure. For execution, the caller owns
+	/// the files through Job drain.
+	pub async fn stage_profile_inis(
 		&self,
 		root: &EnvironmentRoot,
 		prepared: &PreparedLaunch,
+		purpose: ProfilePurpose,
 		cancellation: &CancellationToken,
-	) -> Result<ExecutionInis, ErrorMarker> {
-		ExecutionInis::create(
+	) -> Result<StagedProfileInis, ErrorMarker> {
+		StagedProfileInis::create(
 			&prepared.profile_directory,
 			prepared.game_binding.game_directory().as_path(),
 			&root.as_path().join("temp"),
+			purpose,
 			cancellation,
 		)
 		.await
@@ -552,7 +556,7 @@ mod tests {
 			.await?;
 		assert_eq!(prepared.winners.len(), 2);
 		let inis = EnvironmentAdapter
-			.derive_execution_inis(&root, &prepared, &CancellationToken::new())
+			.stage_profile_inis(&root, &prepared, ProfilePurpose::Execution, &CancellationToken::new())
 			.await?;
 		inis.preserve().await?;
 		assert_eq!(
@@ -759,7 +763,7 @@ mod tests {
 			.prepare_launch(&root, &binding, &CancellationToken::new())
 			.await?;
 		let inis = EnvironmentAdapter
-			.derive_execution_inis(&root, &prepared, &CancellationToken::new())
+			.stage_profile_inis(&root, &prepared, ProfilePurpose::Execution, &CancellationToken::new())
 			.await?;
 		for (name, canonical) in [("Fallout.ini", &fallout), ("FalloutPrefs.ini", &prefs)] {
 			let child = inis.path().join(name);

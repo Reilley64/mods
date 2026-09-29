@@ -8,6 +8,7 @@ pub mod execution;
 pub mod export;
 pub mod installation;
 pub mod ports;
+pub mod preparation;
 pub mod settings;
 
 pub use errors::ErrorCode;
