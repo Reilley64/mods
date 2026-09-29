@@ -1,0 +1,1860 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Reilley64/mods/main/docs/cli/schema.json",
+  "title": "mods CLI JSON document",
+  "$defs": {
+    "warning": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "details"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "problem": {
+      "type": "object",
+      "required": [
+        "type",
+        "title",
+        "detail",
+        "exit_code",
+        "code"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^https://github\\.com/Reilley64/mods/blob/main/docs/cli/problems\\.md#[a-z_]+$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "details": {
+          "type": "object"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      },
+      "not": {
+        "required": [
+          "status"
+        ]
+      }
+    },
+    "setting": {
+      "type": "object",
+      "required": [
+        "key",
+        "value",
+        "source",
+        "manifest_value",
+        "manifest_path",
+        "shadowed",
+        "writable"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "manifest"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "kind",
+                "variable"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "environment"
+                },
+                "variable": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "kind",
+                "argument"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "invocation"
+                },
+                "argument": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        },
+        "manifest_value": {
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        },
+        "manifest_path": {
+          "type": "string"
+        },
+        "shadowed": {
+          "type": "boolean"
+        },
+        "writable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "help": {
+      "type": "object",
+      "required": [
+        "help",
+        "warnings"
+      ],
+      "properties": {
+        "help": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "version": {
+      "type": "object",
+      "required": [
+        "version",
+        "warnings"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "config_list": {
+      "type": "object",
+      "required": [
+        "settings",
+        "warnings"
+      ],
+      "properties": {
+        "settings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/setting"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "config_get": {
+      "type": "object",
+      "required": [
+        "setting",
+        "warnings"
+      ],
+      "properties": {
+        "setting": {
+          "$ref": "#/$defs/setting"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "mutation": {
+      "type": "object",
+      "required": [
+        "warnings"
+      ],
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "conflict_problem": {
+      "type": "object",
+      "required": [
+        "kind",
+        "scope"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "modlist_invalid",
+            "provider_missing",
+            "internal_key_collision",
+            "file_directory_collision",
+            "ordinary_tombstone_collision",
+            "directory_tombstone_descendant_collision",
+            "invalid_tombstone_metadata",
+            "invalid_tombstone_path",
+            "reparse_point",
+            "hard_link",
+            "unsupported_entry_type",
+            "containment_escape",
+            "non_lossless_name",
+            "reserved_path"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/problem_scope"
+        }
+      }
+    },
+    "conflict_row": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "normalized_key",
+            "display_path",
+            "participation",
+            "effective_file",
+            "losing_files",
+            "content_comparisons"
+          ],
+          "properties": {
+            "kind": {
+              "const": "ordinary_conflict"
+            },
+            "normalized_key": {
+              "type": "string"
+            },
+            "display_path": {
+              "type": "string"
+            },
+            "participation": {
+              "enum": [
+                "active",
+                "inactive",
+                "hypothetical"
+              ]
+            },
+            "effective_file": {
+              "$ref": "#/$defs/provider"
+            },
+            "losing_files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/provider"
+              }
+            },
+            "content_comparisons": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/comparison"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "normalized_key",
+            "display_path",
+            "participation",
+            "controlling_tombstone",
+            "suppressed_entries"
+          ],
+          "properties": {
+            "kind": {
+              "const": "tombstone"
+            },
+            "normalized_key": {
+              "type": "string"
+            },
+            "display_path": {
+              "type": "string"
+            },
+            "participation": {
+              "enum": [
+                "active",
+                "inactive",
+                "hypothetical"
+              ]
+            },
+            "controlling_tombstone": {
+              "$ref": "#/$defs/tombstone"
+            },
+            "suppressed_entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/provider"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "conflicts_list": {
+      "type": "object",
+      "required": [
+        "resolution_status",
+        "rows",
+        "problems",
+        "warnings"
+      ],
+      "properties": {
+        "resolution_status": {
+          "enum": [
+            "exact",
+            "invalid"
+          ]
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conflict_row"
+          }
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conflict_problem"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "mod_name"
+            ]
+          },
+          {
+            "required": [
+              "normalized_key"
+            ]
+          }
+        ]
+      }
+    },
+    "conflicts_inspect": {
+      "type": "object",
+      "required": [
+        "resolution_status",
+        "rows",
+        "problems",
+        "warnings",
+        "mod_name",
+        "participation",
+        "provider_summary"
+      ],
+      "properties": {
+        "resolution_status": {
+          "enum": [
+            "exact",
+            "invalid"
+          ]
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conflict_row"
+          }
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conflict_problem"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        },
+        "mod_name": {
+          "type": "string"
+        },
+        "participation": {
+          "enum": [
+            "active",
+            "inactive",
+            "hypothetical"
+          ]
+        },
+        "provider_summary": {
+          "$ref": "#/$defs/provider_summary"
+        }
+      }
+    },
+    "conflicts_explain": {
+      "type": "object",
+      "required": [
+        "normalized_key",
+        "display_path",
+        "resolution_status",
+        "effective_result",
+        "provider_stack",
+        "tombstone_effects",
+        "content_comparisons",
+        "reasons",
+        "problems",
+        "warnings"
+      ],
+      "properties": {
+        "normalized_key": {
+          "type": "string"
+        },
+        "display_path": {
+          "type": "string"
+        },
+        "resolution_status": {
+          "enum": [
+            "exact",
+            "invalid"
+          ]
+        },
+        "effective_result": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "kind",
+                "provider"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "file"
+                },
+                "provider": {
+                  "$ref": "#/$defs/provider"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "kind",
+                "controlling_tombstone"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "absent"
+                },
+                "controlling_tombstone": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/tombstone"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "provider_stack": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/provider"
+          }
+        },
+        "tombstone_effects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tombstone_effect"
+          }
+        },
+        "content_comparisons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/comparison"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conflict_problem"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "install_additional": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "archive_identity",
+        "mod_name",
+        "accepted_choices",
+        "groups",
+        "warnings"
+      ],
+      "properties": {
+        "outcome": {
+          "const": "additional_selections_required"
+        },
+        "archive_identity": {
+          "$ref": "#/$defs/archive_identity"
+        },
+        "mod_name": {
+          "type": "string"
+        },
+        "accepted_choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/accepted_choice"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fomod_group"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "install_preview": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "plan",
+        "hypothetical_enabled_conflicts",
+        "warnings"
+      ],
+      "properties": {
+        "outcome": {
+          "const": "preview"
+        },
+        "plan": {
+          "$ref": "#/$defs/install_plan"
+        },
+        "hypothetical_enabled_conflicts": {
+          "type": "object",
+          "required": [
+            "resolution_status",
+            "rows",
+            "problems"
+          ],
+          "properties": {
+            "resolution_status": {
+              "enum": [
+                "exact",
+                "invalid"
+              ]
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/conflict_row"
+              }
+            },
+            "problems": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/conflict_problem"
+              }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "install_installed": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "warnings"
+      ],
+      "properties": {
+        "outcome": {
+          "const": "installed"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
+    },
+    "provider_rank": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "base"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "priority"
+          ],
+          "properties": {
+            "kind": {
+              "const": "regular"
+            },
+            "priority": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "overwrite"
+            }
+          }
+        }
+      ]
+    },
+    "provider": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "priority",
+            "original_path",
+            "participation_reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "steam_data"
+            },
+            "priority": {
+              "$ref": "#/$defs/provider_rank"
+            },
+            "original_path": {
+              "type": "string"
+            },
+            "participation_reason": {
+              "const": "steam_base"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "mod_name",
+            "priority",
+            "original_path",
+            "participation_reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "data_mod"
+            },
+            "mod_name": {
+              "type": "string"
+            },
+            "priority": {
+              "$ref": "#/$defs/provider_rank"
+            },
+            "original_path": {
+              "type": "string"
+            },
+            "participation_reason": {
+              "enum": [
+                "enabled_mod",
+                "disabled_mod",
+                "hypothetical_enabled_mod",
+                "projected_disabled_mod",
+                "overwrite",
+                "steam_base"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "priority",
+            "original_path",
+            "participation_reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "overwrite"
+            },
+            "priority": {
+              "$ref": "#/$defs/provider_rank"
+            },
+            "original_path": {
+              "type": "string"
+            },
+            "participation_reason": {
+              "const": "overwrite"
+            }
+          }
+        }
+      ]
+    },
+    "tombstone": {
+      "type": "object",
+      "required": [
+        "scope",
+        "owner"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "exact_file",
+            "directory_subtree"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/provider"
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "required": [
+        "state",
+        "winner",
+        "loser"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "not_compared",
+            "same_sha256",
+            "different_sha256",
+            "unavailable",
+            "unstable"
+          ]
+        },
+        "winner": {
+          "$ref": "#/$defs/provider"
+        },
+        "loser": {
+          "$ref": "#/$defs/provider"
+        },
+        "winner_sha256": {
+          "type": "string"
+        },
+        "loser_sha256": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "same_sha256",
+                  "different_sha256"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "winner_sha256",
+              "loser_sha256"
+            ]
+          }
+        }
+      ]
+    },
+    "provider_summary": {
+      "type": "object",
+      "required": [
+        "ordinary_file_count",
+        "effective_file_count",
+        "file_conflict_win_count",
+        "file_conflict_loss_count",
+        "owned_file_tombstone_count",
+        "owned_directory_tombstone_count",
+        "lower_file_entries_suppressed_count",
+        "own_file_entries_suppressed_count",
+        "state"
+      ],
+      "properties": {
+        "ordinary_file_count": {
+          "type": "integer"
+        },
+        "effective_file_count": {
+          "type": "integer"
+        },
+        "file_conflict_win_count": {
+          "type": "integer"
+        },
+        "file_conflict_loss_count": {
+          "type": "integer"
+        },
+        "owned_file_tombstone_count": {
+          "type": "integer"
+        },
+        "owned_directory_tombstone_count": {
+          "type": "integer"
+        },
+        "lower_file_entries_suppressed_count": {
+          "type": "integer"
+        },
+        "own_file_entries_suppressed_count": {
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "invalid",
+            "inactive",
+            "suppression_only",
+            "empty",
+            "fully_overridden",
+            "mixed",
+            "winning_conflicts",
+            "losing_conflicts",
+            "uncontested"
+          ]
+        }
+      }
+    },
+    "archive_identity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "archive_sha256",
+            "package_root"
+          ],
+          "properties": {
+            "kind": {
+              "const": "data_archive"
+            },
+            "archive_sha256": {
+              "type": "string"
+            },
+            "package_root": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "archive_sha256",
+            "package_root",
+            "config_member",
+            "config_sha256"
+          ],
+          "properties": {
+            "kind": {
+              "const": "fomod"
+            },
+            "archive_sha256": {
+              "type": "string"
+            },
+            "package_root": {
+              "type": "string"
+            },
+            "config_member": {
+              "type": "string"
+            },
+            "config_sha256": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "accepted_choice": {
+      "type": "object",
+      "required": [
+        "group_id",
+        "option_id"
+      ],
+      "properties": {
+        "group_id": {
+          "type": "string"
+        },
+        "option_id": {
+          "type": "string"
+        }
+      }
+    },
+    "fomod_option": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "description",
+        "resolved_type",
+        "selectable",
+        "synthetic"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "resolved_type": {
+          "enum": [
+            "required",
+            "not_usable",
+            "recommended",
+            "optional",
+            "could_be_usable"
+          ]
+        },
+        "selectable": {
+          "type": "boolean"
+        },
+        "synthetic": {
+          "type": "boolean"
+        }
+      }
+    },
+    "fomod_group": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "description",
+        "cardinality",
+        "options"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "cardinality": {
+          "enum": [
+            "select_exactly_one",
+            "select_at_most_one",
+            "select_at_least_one",
+            "select_any",
+            "select_all"
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fomod_option"
+          }
+        }
+      }
+    },
+    "install_provider": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "original_path"
+          ],
+          "properties": {
+            "kind": {
+              "const": "steam_data"
+            },
+            "original_path": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "mod_name",
+            "priority",
+            "original_path",
+            "participation_reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "data_mod"
+            },
+            "mod_name": {
+              "type": "string"
+            },
+            "priority": {
+              "type": "integer"
+            },
+            "original_path": {
+              "type": "string"
+            },
+            "participation_reason": {
+              "enum": [
+                "steam_base",
+                "enabled_mod",
+                "disabled_mod",
+                "hypothetical_enabled_mod",
+                "projected_disabled_mod",
+                "overwrite"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "original_path"
+          ],
+          "properties": {
+            "kind": {
+              "const": "overwrite"
+            },
+            "original_path": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "install_tombstone": {
+      "type": "object",
+      "required": [
+        "scope",
+        "owner"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "exact_file",
+            "directory_subtree"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/install_provider"
+        }
+      }
+    },
+    "install_effective_result": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "const": "file"
+            },
+            "provider": {
+              "$ref": "#/$defs/install_provider"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "controlling_tombstone"
+          ],
+          "properties": {
+            "kind": {
+              "const": "absent"
+            },
+            "controlling_tombstone": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/install_tombstone"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "candidate_origin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "required"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "group_id",
+            "option_id",
+            "trigger"
+          ],
+          "properties": {
+            "kind": {
+              "const": "option"
+            },
+            "group_id": {
+              "type": "string"
+            },
+            "option_id": {
+              "type": "string"
+            },
+            "trigger": {
+              "enum": [
+                "selected",
+                "always_install",
+                "install_if_usable"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "pattern_order"
+          ],
+          "properties": {
+            "kind": {
+              "const": "conditional"
+            },
+            "pattern_order": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "candidate_decision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "properties": {
+            "kind": {
+              "const": "winner"
+            },
+            "reason": {
+              "enum": [
+                "only_candidate",
+                "higher_phase",
+                "higher_declared_priority",
+                "later_descriptor_order"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "reason",
+            "winner_candidate_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "loser"
+            },
+            "reason": {
+              "enum": [
+                "lower_phase",
+                "lower_declared_priority",
+                "earlier_descriptor_order"
+              ]
+            },
+            "winner_candidate_id": {
+              "type": "integer"
+            }
+          }
+        }
+      ]
+    },
+    "plan_candidate": {
+      "type": "object",
+      "required": [
+        "candidate_id",
+        "origin",
+        "phase",
+        "declared_priority",
+        "descriptor_order",
+        "source_member",
+        "destination",
+        "current_winner",
+        "proposed_winner",
+        "decision"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "integer"
+        },
+        "origin": {
+          "$ref": "#/$defs/candidate_origin"
+        },
+        "phase": {
+          "enum": [
+            "required",
+            "selected_or_forced",
+            "conditional"
+          ]
+        },
+        "declared_priority": {
+          "type": "integer"
+        },
+        "descriptor_order": {
+          "type": "integer"
+        },
+        "source_member": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "current_winner": {
+          "$ref": "#/$defs/install_effective_result"
+        },
+        "proposed_winner": {
+          "type": "object",
+          "required": [
+            "candidate_id",
+            "source_member"
+          ],
+          "properties": {
+            "candidate_id": {
+              "type": "integer"
+            },
+            "source_member": {
+              "type": "string"
+            }
+          }
+        },
+        "decision": {
+          "$ref": "#/$defs/candidate_decision"
+        }
+      }
+    },
+    "install_overlap": {
+      "type": "object",
+      "required": [
+        "path",
+        "proposed_provider",
+        "overlapping_physical_files",
+        "before",
+        "after_operation",
+        "hypothetical_enabled"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "proposed_provider": {
+          "$ref": "#/$defs/install_provider"
+        },
+        "overlapping_physical_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/install_provider"
+          }
+        },
+        "before": {
+          "$ref": "#/$defs/install_effective_result"
+        },
+        "after_operation": {
+          "$ref": "#/$defs/install_effective_result"
+        },
+        "hypothetical_enabled": {
+          "$ref": "#/$defs/install_effective_result"
+        }
+      }
+    },
+    "projected_state": {
+      "type": "object",
+      "required": [
+        "mode",
+        "mod_name",
+        "priority",
+        "list_position",
+        "enabled",
+        "overlaps"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "new_install",
+            "replacement"
+          ]
+        },
+        "mod_name": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "list_position": {
+          "type": "integer"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "overlaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/install_overlap"
+          }
+        }
+      }
+    },
+    "install_plan": {
+      "type": "object",
+      "required": [
+        "archive_identity",
+        "mod_name",
+        "replacement",
+        "accepted_choices",
+        "warnings",
+        "candidates",
+        "projected_state"
+      ],
+      "properties": {
+        "archive_identity": {
+          "$ref": "#/$defs/archive_identity"
+        },
+        "mod_name": {
+          "type": "string"
+        },
+        "replacement": {
+          "type": "boolean"
+        },
+        "accepted_choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/accepted_choice"
+          }
+        },
+        "warnings": {
+          "$ref": "#/$defs/warning_list"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/plan_candidate"
+          }
+        },
+        "projected_state": {
+          "$ref": "#/$defs/projected_state"
+        }
+      }
+    },
+    "warning_list": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/warning"
+      }
+    },
+    "provider_identity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "priority"
+          ],
+          "properties": {
+            "kind": {
+              "const": "steam_data"
+            },
+            "priority": {
+              "$ref": "#/$defs/provider_rank"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "mod_name",
+            "priority"
+          ],
+          "properties": {
+            "kind": {
+              "const": "data_mod"
+            },
+            "mod_name": {
+              "type": "string"
+            },
+            "priority": {
+              "$ref": "#/$defs/provider_rank"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "priority"
+          ],
+          "properties": {
+            "kind": {
+              "const": "overwrite"
+            },
+            "priority": {
+              "$ref": "#/$defs/provider_rank"
+            }
+          }
+        }
+      ]
+    },
+    "problem_scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "global"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "modlist"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "const": "provider"
+            },
+            "provider": {
+              "$ref": "#/$defs/provider_identity"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "normalized_key",
+            "display_path"
+          ],
+          "properties": {
+            "kind": {
+              "const": "path"
+            },
+            "normalized_key": {
+              "type": "string"
+            },
+            "display_path": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "normalized_key",
+            "display_path"
+          ],
+          "properties": {
+            "kind": {
+              "const": "subtree"
+            },
+            "normalized_key": {
+              "type": "string"
+            },
+            "display_path": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "tombstone_effect": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "tombstone",
+            "suppressed_entries"
+          ],
+          "properties": {
+            "kind": {
+              "const": "controlling"
+            },
+            "tombstone": {
+              "$ref": "#/$defs/tombstone"
+            },
+            "suppressed_entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/provider"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "tombstone",
+            "controlling_tombstone"
+          ],
+          "properties": {
+            "kind": {
+              "const": "shadowed_by_tombstone"
+            },
+            "tombstone": {
+              "$ref": "#/$defs/tombstone"
+            },
+            "controlling_tombstone": {
+              "$ref": "#/$defs/tombstone"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "tombstone",
+            "overriding_file"
+          ],
+          "properties": {
+            "kind": {
+              "const": "overridden_by_file"
+            },
+            "tombstone": {
+              "$ref": "#/$defs/tombstone"
+            },
+            "overriding_file": {
+              "$ref": "#/$defs/provider"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "tombstone"
+          ],
+          "properties": {
+            "kind": {
+              "const": "orphan"
+            },
+            "tombstone": {
+              "$ref": "#/$defs/tombstone"
+            }
+          }
+        }
+      ]
+    },
+    "reason": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "provider"
+          ],
+          "properties": {
+            "kind": {
+              "const": "effective_file"
+            },
+            "provider": {
+              "$ref": "#/$defs/provider"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "provider",
+            "winner"
+          ],
+          "properties": {
+            "kind": {
+              "const": "lower_priority_file"
+            },
+            "provider": {
+              "$ref": "#/$defs/provider"
+            },
+            "winner": {
+              "$ref": "#/$defs/provider"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "provider",
+            "controlling_tombstone"
+          ],
+          "properties": {
+            "kind": {
+              "const": "suppressed_by_tombstone"
+            },
+            "provider": {
+              "$ref": "#/$defs/provider"
+            },
+            "controlling_tombstone": {
+              "$ref": "#/$defs/tombstone"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "absent_no_entry"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "controlling_tombstone"
+          ],
+          "properties": {
+            "kind": {
+              "const": "absent_by_tombstone"
+            },
+            "controlling_tombstone": {
+              "$ref": "#/$defs/tombstone"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "tombstone",
+            "controlling_tombstone"
+          ],
+          "properties": {
+            "kind": {
+              "const": "shadowed_tombstone"
+            },
+            "tombstone": {
+              "$ref": "#/$defs/tombstone"
+            },
+            "controlling_tombstone": {
+              "$ref": "#/$defs/tombstone"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "tombstone",
+            "overriding_file"
+          ],
+          "properties": {
+            "kind": {
+              "const": "tombstone_overridden_by_file"
+            },
+            "tombstone": {
+              "$ref": "#/$defs/tombstone"
+            },
+            "overriding_file": {
+              "$ref": "#/$defs/provider"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "namespace_invalid"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/problem"
+    },
+    {
+      "$ref": "#/$defs/help"
+    },
+    {
+      "$ref": "#/$defs/version"
+    },
+    {
+      "$ref": "#/$defs/config_list"
+    },
+    {
+      "$ref": "#/$defs/config_get"
+    },
+    {
+      "$ref": "#/$defs/mutation"
+    },
+    {
+      "$ref": "#/$defs/conflicts_list"
+    },
+    {
+      "$ref": "#/$defs/conflicts_inspect"
+    },
+    {
+      "$ref": "#/$defs/conflicts_explain"
+    },
+    {
+      "$ref": "#/$defs/install_additional"
+    },
+    {
+      "$ref": "#/$defs/install_preview"
+    },
+    {
+      "$ref": "#/$defs/install_installed"
+    }
+  ]
+}
