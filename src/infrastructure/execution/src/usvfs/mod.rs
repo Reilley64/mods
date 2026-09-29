@@ -327,7 +327,7 @@ mod tests {
 				};
 				move || -> Result<VirtualGameView, ExecutionError> {
 					let mut view = VirtualGameView::load(Path::new(env!("MODS_USVFS_ARTIFACTS")))?;
-					view.link_directory(&mapping, false)?;
+					view.link_directory(&mapping, true)?;
 					Ok(view)
 				}
 			})
