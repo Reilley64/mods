@@ -301,11 +301,8 @@ pub fn derive_profile_ini(name: &str, text: &str, purpose: ProfileIniPurpose, ar
 			.map(str::trim)
 			.filter(|value| !value.is_empty() && case_fold_key(value) != "fallout - invalidation.bsa")
 			.collect();
-		if purpose == ProfileIniPurpose::Execution {
-			archives.push("Fallout - Invalidation.bsa");
-		} else {
-			archives.insert(0, "Fallout - Invalidation.bsa");
-		}
+		// Mod Organizer 2 also lists its invalidation archive first.
+		archives.insert(0, "Fallout - Invalidation.bsa");
 
 		append_ini_section(
 			&mut output,

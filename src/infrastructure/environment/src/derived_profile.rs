@@ -2,8 +2,8 @@ use crate::files::read_optional;
 use crate::profile::decode;
 use crate::profile::encode;
 use application::ErrorMarker;
-use application::execution::RetainedExecutionInis;
 use application::ports::ProfilePurpose;
+use application::ports::RetainedProfile;
 use domain::ProfileIniPurpose;
 use domain::derive_profile_ini;
 use domain::preserve_profile_ini_keys;
@@ -16,7 +16,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
 use tempfile::TempDir;
-use tokio::fs::read;
 use tokio::fs::remove_dir_all;
 use tokio::fs::write;
 use tokio_util::sync::CancellationToken;
@@ -29,8 +28,8 @@ const INI_FILES: [&str; 5] = [
 	"GECKPrefs.ini",
 ];
 
-/// Exec archive list when neither canonical `FalloutCustom.ini` nor `Fallout.ini`
-/// assigns `sArchiveList`, so launch never reads `Fallout_default.ini`.
+/// Archive list when neither canonical `FalloutCustom.ini` nor `Fallout.ini`
+/// assigns `sArchiveList`, so staging never reads `Fallout_default.ini`.
 ///
 /// Copied verbatim from `SArchiveList` on line 706 of the English Steam
 /// `Fallout_default.ini` with SHA-256
@@ -39,27 +38,13 @@ const INI_FILES: [&str; 5] = [
 const FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST: &str = "Fallout - Textures.bsa, Fallout - Textures2.bsa, Fallout - Meshes.bsa, Fallout - Voices1.bsa, Fallout - Sound.bsa,  Fallout - Misc.bsa";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProfileIniInputs {
-	pub(crate) files: Vec<(&'static str, Option<Vec<u8>>)>,
-	pub(crate) archive_list: String,
-	pub(crate) fallback: Option<Vec<u8>>,
+struct ProfileIniInputs {
+	files: Vec<(&'static str, Option<Vec<u8>>)>,
+	archive_list: String,
 }
 
 impl ProfileIniInputs {
-	pub(crate) async fn read(
-		profile: &Path,
-		game: &Path,
-		cancellation: &CancellationToken,
-	) -> Result<Self, ErrorMarker> {
-		Self::read_mode(profile, game, false, cancellation).await
-	}
-
-	async fn read_mode(
-		profile: &Path,
-		game: &Path,
-		execution: bool,
-		cancellation: &CancellationToken,
-	) -> Result<Self, ErrorMarker> {
+	async fn read(profile: &Path, cancellation: &CancellationToken) -> Result<Self, ErrorMarker> {
 		let mut files = Vec::new();
 		let mut fallout_list = None;
 		let mut custom_list = None;
@@ -88,42 +73,14 @@ impl ProfileIniInputs {
 			files.push((name, Some(bytes)));
 		}
 
-		let mut fallback = None;
-		let archive_list = if let Some(list) = custom_list.or(fallout_list) {
-			list
-		} else if execution {
-			FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST.to_owned()
-		} else {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
+		let archive_list = custom_list
+			.or(fallout_list)
+			.unwrap_or_else(|| FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST.to_owned());
 
-			let bytes = read(game.join("Fallout_default.ini"))
-				.await
-				.context(ErrorMarker::game_install_invalid())?;
-			let (text, _) = decode(&bytes)?;
-			if !profile_ini_valid(&text) {
-				return Err(report!(ErrorMarker::game_install_invalid()));
-			}
-
-			let list = profile_archive_list(&text).unwrap_or_default().to_owned();
-			fallback = Some(bytes);
-			list
-		};
-
-		Ok(Self {
-			files,
-			archive_list,
-			fallback,
-		})
+		Ok(Self { files, archive_list })
 	}
 
-	pub(crate) fn derive(
-		&self,
-		name: &str,
-		bytes: &[u8],
-		purpose: ProfileIniPurpose,
-	) -> Result<Vec<u8>, ErrorMarker> {
+	fn derive(&self, name: &str, bytes: &[u8], purpose: ProfileIniPurpose) -> Result<Vec<u8>, ErrorMarker> {
 		let (text, encoding) = decode(bytes)?;
 		encode(&derive_profile_ini(name, &text, purpose, &self.archive_list), encoding)
 	}
@@ -143,12 +100,11 @@ pub struct StagedProfileInis {
 impl StagedProfileInis {
 	pub(crate) async fn create(
 		profile: &Path,
-		game: &Path,
 		temp: &Path,
 		purpose: ProfilePurpose,
 		cancellation: &CancellationToken,
 	) -> Result<Self, ErrorMarker> {
-		let inputs = ProfileIniInputs::read_mode(profile, game, true, cancellation).await?;
+		let inputs = ProfileIniInputs::read(profile, cancellation).await?;
 
 		let (prefix, purpose) = match purpose {
 			ProfilePurpose::Execution => ("execution-inis-", ProfileIniPurpose::Execution),
@@ -171,7 +127,7 @@ impl StagedProfileInis {
 
 		let staged = owner.stage(cancellation).await;
 		staged.map_err(|mut error| {
-			error.children_mut().push(report!(RetainedExecutionInis {
+			error.children_mut().push(report!(RetainedProfile {
 				path: owner.path.clone()
 			})
 			.into_dynamic()
@@ -218,13 +174,27 @@ impl StagedProfileInis {
 	/// Retains temporary files on child deletion, malformed edits, or any write failure.
 	pub async fn preserve(mut self) -> Result<(), ErrorMarker> {
 		self.preserve_inner().await.map_err(|mut error| {
-			error.children_mut().push(report!(RetainedExecutionInis {
+			error.children_mut().push(report!(RetainedProfile {
 				path: self.path.clone()
 			})
 			.into_dynamic()
 			.into_cloneable());
 			error
 		})
+	}
+
+	/// Removes the staged copies without preserving them. Call only for a stage
+	/// that no program has edited.
+	///
+	/// # Errors
+	/// Retains the directory when it cannot be removed.
+	pub async fn discard(mut self) -> Result<(), ErrorMarker> {
+		if let Some(directory) = self.directory.take() {
+			remove_dir_all(directory.keep())
+				.await
+				.context(ErrorMarker::io_failure())?;
+		}
+		Ok(())
 	}
 
 	async fn preserve_inner(&mut self) -> Result<(), ErrorMarker> {
@@ -301,10 +271,9 @@ mod tests {
 
 	#[tokio::test]
 	async fn optional_creation_and_invalid_child_edits_follow_preservation_policy() -> Result<(), ErrorMarker> {
-		let (_temp, profile, game, staging) = fixture()?;
+		let (_temp, profile, _game, staging) = fixture()?;
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Execution,
 			&CancellationToken::new(),
@@ -319,7 +288,6 @@ mod tests {
 		assert!(!profile.join("FalloutCustom.ini").exists());
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Execution,
 			&CancellationToken::new(),
@@ -334,11 +302,10 @@ mod tests {
 
 	#[tokio::test]
 	async fn export_staging_keeps_the_standalone_layout() -> Result<(), ErrorMarker> {
-		let (_temp, profile, game, staging) = fixture()?;
+		let (_temp, profile, _game, staging) = fixture()?;
 
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Export,
 			&CancellationToken::new(),
@@ -360,7 +327,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn derivation_preserves_encoding_and_newline_style() -> Result<(), ErrorMarker> {
-		let (_temp, profile, game, staging) = fixture()?;
+		let (_temp, profile, _game, staging) = fixture()?;
 		let text = "[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n[Archive]\r\nsArchiveList=Original.bsa\r\n";
 		let mut bytes = vec![0xff, 0xfe];
 		for value in text.encode_utf16() {
@@ -369,7 +336,6 @@ mod tests {
 		fs::write(profile.join("Fallout.ini"), &bytes).context(ErrorMarker::io_failure())?;
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Execution,
 			&CancellationToken::new(),
@@ -389,10 +355,9 @@ mod tests {
 
 	#[tokio::test]
 	async fn stopped_child_edits_preserve_keys_and_absent_optional_files() -> Result<(), ErrorMarker> {
-		let (_temp, profile, game, staging) = fixture()?;
+		let (_temp, profile, _game, staging) = fixture()?;
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Execution,
 			&CancellationToken::new(),
@@ -419,10 +384,9 @@ mod tests {
 	#[tokio::test]
 	async fn uncertain_drain_deletion_and_concurrent_edits_retain_temporary_files() -> Result<(), ErrorMarker> {
 		for failure in ["uncertain", "deleted"] {
-			let (_temp, profile, game, staging) = fixture()?;
+			let (_temp, profile, _game, staging) = fixture()?;
 			let owner = StagedProfileInis::create(
 				&profile,
-				&game,
 				&staging,
 				ProfilePurpose::Execution,
 				&CancellationToken::new(),
@@ -442,7 +406,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn custom_overrides_preserve_effective_archives_and_unrelated_child_edits() -> Result<(), ErrorMarker> {
-		let (_temp, profile, game, staging) = fixture()?;
+		let (_temp, profile, _game, staging) = fixture()?;
 		fs::write(
 			profile.join("FalloutCustom.ini"),
 			b"[Archive]\nsArchiveList=Custom.bsa, Fallout - Invalidation.bsa\n[Display]\nvalue=original\n",
@@ -450,7 +414,6 @@ mod tests {
 		.context(ErrorMarker::io_failure())?;
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Execution,
 			&CancellationToken::new(),
@@ -460,7 +423,7 @@ mod tests {
 			fs::read_to_string(owner.path().join("FalloutCustom.ini")).context(ErrorMarker::io_failure())?;
 		assert_eq!(
 			profile_archive_list(&custom),
-			Some("Custom.bsa, Fallout - Invalidation.bsa")
+			Some("Fallout - Invalidation.bsa, Custom.bsa")
 		);
 		assert_eq!(custom.matches("Fallout - Invalidation.bsa").count(), 1);
 		assert!(custom.contains("SLocalSavePath=__mods_saves"));
@@ -477,7 +440,6 @@ mod tests {
 		assert!(!canonical.contains("__mods_saves"));
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Execution,
 			&CancellationToken::new(),
@@ -504,7 +466,6 @@ mod tests {
 		for _ in 0..2 {
 			let owner = StagedProfileInis::create(
 				&profile,
-				&game,
 				&staging,
 				ProfilePurpose::Execution,
 				&CancellationToken::new(),
@@ -515,7 +476,7 @@ mod tests {
 			assert_eq!(
 				profile_archive_list(&custom),
 				Some(
-					"Fallout - Textures.bsa, Fallout - Textures2.bsa, Fallout - Meshes.bsa, Fallout - Voices1.bsa, Fallout - Sound.bsa, Fallout - Misc.bsa, Fallout - Invalidation.bsa"
+					"Fallout - Invalidation.bsa, Fallout - Textures.bsa, Fallout - Textures2.bsa, Fallout - Meshes.bsa, Fallout - Voices1.bsa, Fallout - Sound.bsa, Fallout - Misc.bsa"
 				)
 			);
 			assert_eq!(custom.matches("Fallout - Invalidation.bsa").count(), 1);
@@ -541,7 +502,7 @@ mod tests {
 		let cases = [(without_list, Some(empty_custom_list)), (empty_fallout_list, None)];
 
 		for (fallout, custom) in cases {
-			let (_temp, profile, game, staging) = fixture()?;
+			let (_temp, profile, _game, staging) = fixture()?;
 			fs::write(profile.join("Fallout.ini"), &fallout).context(ErrorMarker::io_failure())?;
 			if let Some(custom) = &custom {
 				fs::write(profile.join("FalloutCustom.ini"), custom)
@@ -550,7 +511,6 @@ mod tests {
 
 			let owner = StagedProfileInis::create(
 				&profile,
-				&game,
 				&staging,
 				ProfilePurpose::Execution,
 				&CancellationToken::new(),
@@ -580,12 +540,11 @@ mod tests {
 
 	#[tokio::test]
 	async fn explicit_empty_custom_precedence_does_not_read_game_defaults() -> Result<(), ErrorMarker> {
-		let (_temp, profile, game, staging) = fixture()?;
+		let (_temp, profile, _game, staging) = fixture()?;
 		fs::write(profile.join("FalloutCustom.ini"), b"[Archive]\nsArchiveList=\n")
 			.context(ErrorMarker::io_failure())?;
 		let owner = StagedProfileInis::create(
 			&profile,
-			&game,
 			&staging,
 			ProfilePurpose::Execution,
 			&CancellationToken::new(),

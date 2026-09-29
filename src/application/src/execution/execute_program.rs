@@ -1,6 +1,5 @@
 use crate::ErrorMarker;
 use crate::execution::ExecutionWarning;
-use crate::execution::RetainedExecutionInis;
 use crate::ports::CheckProfileState;
 use crate::ports::CreateVirtualFileSystem;
 use crate::ports::FinishProgramOutput;
@@ -12,6 +11,7 @@ use crate::ports::ProgressEvent;
 use crate::ports::ProjectProfile;
 use crate::ports::ReportProgress;
 use crate::ports::ResolveLaunchTarget;
+use crate::ports::RetainedProfile;
 use crate::ports::StageProfile;
 use crate::ports::SuperviseProgram;
 use crate::preparation::PreparedEnvironment;
@@ -70,7 +70,7 @@ impl fmt::Display for ExecuteProgramError {
 ///
 /// Returns [`ExecuteProgramError`] with the failing step's marker. After the
 /// profile is staged, every failure before successful preservation also carries
-/// [`RetainedExecutionInis`].
+/// [`RetainedProfile`].
 #[tracing::instrument(skip_all)]
 pub async fn execute_program(
 	dependencies: ExecuteProgramDependencies,
@@ -141,7 +141,7 @@ pub async fn execute_program(
 		.call((&plan, ProfilePurpose::Execution, cancellation.clone()))
 		.await
 		.context(ExecuteProgramError)?;
-	let retained = RetainedExecutionInis {
+	let retained = RetainedProfile {
 		path: staged.directory.clone(),
 	};
 
@@ -233,7 +233,6 @@ mod tests {
 	use super::execute_program;
 	use crate::ErrorMarker;
 	use crate::execution::ExecutionWarning;
-	use crate::execution::RetainedExecutionInis;
 	use crate::ports::AdapterState;
 	use crate::ports::EnvironmentPlan;
 	use crate::ports::EnvironmentProvider;
@@ -245,6 +244,7 @@ mod tests {
 	use crate::ports::ProgramExit;
 	use crate::ports::ProgramOutput;
 	use crate::ports::ProgramSupervision;
+	use crate::ports::RetainedProfile;
 	use crate::ports::RunningProgram;
 	use crate::ports::StagedProfile;
 	use crate::ports::VirtualFileSystem;
@@ -530,7 +530,7 @@ mod tests {
 
 	fn retained_paths(error: &Report<ExecuteProgramError>) -> Vec<PathBuf> {
 		error.iter_reports()
-			.filter_map(|cause| cause.downcast_current_context::<RetainedExecutionInis>())
+			.filter_map(|cause| cause.downcast_current_context::<RetainedProfile>())
 			.map(|retained| retained.path.clone())
 			.collect()
 	}

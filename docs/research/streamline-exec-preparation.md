@@ -328,6 +328,69 @@ Windows-only code: `native.rs` and the Windows parts of `infrastructure-executio
 | `infrastructure/environment/src/derived_profile.rs` | Reusable capability ports (full-branch run, 0.50) | Accepted for Part 1. Shared staging still attaches the exec-named `RetainedExecutionInis` when staging fails. Only exec stages in this commit, so the error text stays correct. Part 2 decides how an export stage failure is reported. |
 | `presentation/cli/src/runner.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. The change only renders a nested warning enum. |
 
+Parent decisions after Part 1: the three exec order changes and the removal of the `ProfileProjection` handle are accepted.
+
+### Part 2: export on the shared ports
+
+`export_environment` now composes these steps:
+
+1. `ValidateExportDestination(output)`: the path is absolute, it does not exist, and its parent is not inside the Environment Root. Unchanged rules.
+2. `prepare_environment` (shared helper): `PrepareEnvironmentPlan` and `ProjectProfile`, then the plugin warnings. The export composition validates the Steam installation inside its `PrepareEnvironmentPlan` port before it reads the environment, as the old `PrepareExport` port did. exec does not.
+3. `StageProfile(ProfilePurpose::Export)`: derived INIs in `temp/export-inis-*`.
+4. `ListExportFiles(&plan, &staged, include_saves)`: Data winners except game Data, the staged INIs, `plugins.txt`, `loadorder.txt`, `Plugins.fnvviewsettings` and `modlist.txt` from the profile, `cache/Fallout - Invalidation.bsa`, and saves when requested. Each file has its size and a source in an opaque `ExportSources` table.
+5. `plan_inventory` (unchanged): folds directory spelling and refuses structural conflicts.
+6. Without `--dry-run`, `WriteExport(sources, files, output)` checks the destination again, creates it, copies each file, and sets its modification time. A staged INI gets the time of its canonical profile file, as before.
+7. `DiscardStagedProfile(staged)` removes the stage on every path: success, `--dry-run`, and failure. If removal fails, the error carries `RetainedProfile`.
+
+Deviation from the task text: `WriteExport` does not remove the stage itself. The use case calls the new shared `DiscardStagedProfile` port after the write or after a failure, so one step handles the dry run, success, and every failure. A stage left in `temp` would make the next exec or export refuse with `manual_cleanup_required`.
+
+`ExportEnvironmentOutput` has a new `warnings: Vec<PluginWarning>`. The CLI prints them on stderr with the same text as exec, also on success.
+
+Removed:
+
+- `PrepareExport`, `PreparedExport`, `PublishExport`, and the `ExportSnapshot` capture.
+- `prepare_execution`, `PreparedExecution`, `ExecutionVisibleFile`, and the strict snapshot path behind them: `load_execution`, file lengths and times, provider metadata bytes, `ProviderFileDetails`, `validate_execution_profile`, and the owned-spool skip in `snapshot::load_inner`.
+- The runtime `Fallout_default.ini` read: `ProfileIniInputs::read` (non-execution mode) and its `fallback` field. `StagedProfileInis::create` no longer takes the game directory.
+- `RetainedExecutionInis`. The neutral `RetainedProfile` (in `application::ports::preparation`) replaces it on the shared stage. exec still prints `retained_execution_inis` with the same advice. export prints `retained_export_stage` and says the stage holds only derived copies and must be deleted before the next exec or export.
+
+Other changes:
+
+- The projection error phase is now `profile_projection` (was `execution`), because export uses the same port. A foreign handle in the shared ports now reports `environment_invalid` (was `execution_supervision_failed`). This path cannot happen in normal use.
+- The private port-body functions in `native.rs` no longer share names with port fields: `resolve_target`, `build_virtual_file_system`, `start_program`, `supervise_child`, `preserve_inis`, `finish_streams`, `check_retained_state`. The shared adapter's projection function is `project_plan`. In the environment export module, the private functions are `check_destination` and `write_output`.
+- `PreparationAdapter` and its `*_port` factory methods are replaced by `PreparationPorts::new(root, binding)`, a struct whose fields are the four shared ports. Composition moves the fields into the dependency bundles, so no call looks like a direct port call. The non-Windows `expect(dead_code)` is gone, because export uses the ports on every platform.
+
+#### Invalidation archive order
+
+Before `211ad59`, every purpose put `Fallout - Invalidation.bsa` first in `sArchiveList`. That commit changed execution copies to put it last. The discussion record asks to "append the managed invalidation archive once using existing transformation semantics" and to preserve the effective list. This wording is about adding the archive once to the existing list, and the existing transformation at that time put it first. No game, JIP LN NVSE, or usvfs reason for the last position was recorded. Mod Organizer 2 inserts its invalidation archive at index 0 (`m_DataArchives->addArchive(profile, 0, invalidationBSAName())` in `modorganizer-game_gamebryo/src/gamebryo/gamebryobsainvalidation.cpp`). Both purposes now put it first. This changes exec's derived `FalloutCustom.ini`; the tests that expected the last position were updated. This was not checked in game.
+
+#### User-visible export changes
+
+- Export accepts what exec accepts: extra entries in the Environment Root, and a generated BSA that is copied as it is.
+- Export and `export --dry-run` create a missing `meta.toml` for enabled mods, and they briefly create and remove an INI stage in `temp`. A non-empty `temp` now makes export refuse with `manual_cleanup_required`, like exec.
+- Without `sArchiveList` in `FalloutCustom.ini` or `Fallout.ini`, export uses the embedded default list.
+- Export prints plugin warnings.
+- The `LoadOrderNotEnforced` warning text still says the order is not enforced "through virtual timestamps". The text is the same for both commands, as decided.
+
+#### Checks for Part 2
+
+Windows: `cargo check --target x86_64-pc-windows-msvc` passes for `application`, `infrastructure-environment`, `infrastructure-settings`, and `infrastructure-game-platform`. `infrastructure-execution` and `infrastructure-dependencies` cannot build for Windows here (`usvfs-sys`, `zstd-sys`). The `native.rs` change is a rename of private functions only, checked by reading: every definition and call site was renamed by the same rule, and the port field names are unchanged.
+
+#### Gate dispositions for Part 2
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/export/export_environment.rs` | Use-case parameters; Use-case declaration order; Test public behavior | Accepted. The use case keeps its signature and declares Dependencies, Output, Error, then the function. The tests call the public use case with fake ports. |
+| `application/src/export/export_environment.rs` | Callable port invocation (per-edit, 0.44) | Accepted as a false positive. Every port is called with `.call(...)`. The only direct call is the shared helper `prepare_environment(...)`, which is a function, not a port. |
+| `application/src/export/export_environment/inventory.rs` | Preserve causes at owned boundaries | Accepted. The `DataRelativePath` error keeps its cause through `.context`. The byte-total overflow has no source error. The only change is that the function returns `ErrorMarker` reports and the use case adds `ExportEnvironmentError`. |
+| `application/src/export/types.rs`, `application/src/ports/preparation.rs` | Use-case parameters; Custom primitive justification | Accepted. The port aliases take business values first and `CancellationToken` last. `RetainedProfile` is a typed report attachment like `RetainedExport`; its Rustdoc states why it exists. |
+| `infrastructure/environment/src/export.rs` | Use-case parameters; Use-case declaration order; Phase spacing | Accepted as inapplicable for the infrastructure module. A Callable-port-invocation finding (0.51) was fixed by renaming the private functions to `check_destination` and `write_output`. A Test-public-behavior finding (0.46) was fixed by testing through the three public ports. |
+| `infrastructure/environment/src/snapshot.rs`, `profile.rs`, `execution_preparation.rs`, `derived_profile.rs` | Use-case parameters | Accepted as inapplicable. These are infrastructure functions; the strict-path parameters were removed and `CancellationToken` stays last. |
+| `infrastructure/dependencies/src/export_environment.rs` | Use-case parameters; Phase spacing; Narrow custom implementations; Use-case declaration order | Accepted. The composition wires ports, as the other composition modules do. Its only logic runs the existing Steam validation before preparation. |
+| `presentation/cli/src/runner.rs` | Test public behavior | Accepted. The runner test drives the public CLI entry point with fake export ports and checks stdout and stderr. |
+| `infrastructure/environment/src/derived_profile.rs` | Reusable capability ports (Part 1, 0.50) | Fixed. Shared staging attaches the neutral `RetainedProfile`, and each command maps it to its own message. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs`, `environment_preparation.rs` | Callable port invocation (Part 1 0.56 and 0.48; final Part 2 run 0.57 and 0.64) | Not cleared, accepted as a false positive after two fixes. First, the private port-body functions were renamed (listed above). Second, `PreparationPorts` replaced the `*_port()` factory methods, so composition only moves struct fields. The full-branch run still reports the rule. A search of both files for any call syntax on the 14 port names (`prepare_environment_plan(`, `create_virtual_file_system(`, and the others) finds none, and neither file invokes a port at all: they only build port closures that call infrastructure functions. Earlier reviews recorded the same false positive for other composition files. |
+| `infrastructure/environment/src/snapshot.rs` | Prefer Option and Result combinators; Choose the narrow conditional form | Accepted. The touched `temp` check returns an access-dependent error when the first entry exists; it is a guard, not a pure conversion. The `let ... else` after `read_metadata` returns the finished inventory early and the rest of the function continues, so no single combinator expresses it. |
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

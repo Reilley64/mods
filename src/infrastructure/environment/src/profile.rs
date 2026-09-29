@@ -119,20 +119,12 @@ pub(crate) async fn validate_profile_files(
 	require_empty: bool,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	validate_profile_mode(profile, require_empty, false, cancellation).await
-}
-
-pub(crate) async fn validate_execution_profile(
-	profile: &Path,
-	cancellation: &CancellationToken,
-) -> Result<(), ErrorMarker> {
-	validate_profile_mode(profile, false, true, cancellation).await
+	validate_profile_mode(profile, require_empty, cancellation).await
 }
 
 async fn validate_profile_mode(
 	profile: &Path,
 	require_empty: bool,
-	execution: bool,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
@@ -169,7 +161,7 @@ async fn validate_profile_mode(
 		}
 	}
 	for required in ["Fallout.ini", "plugins.txt", "loadorder.txt", "modlist.txt", "saves"] {
-		if expected.contains(required) && !(execution && matches!(required, "plugins.txt" | "loadorder.txt")) {
+		if expected.contains(required) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
@@ -186,9 +178,7 @@ async fn validate_profile_mode(
 	{
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
-	if !execution {
-		validate_saves(&saves, cancellation).await?;
-	}
+	validate_saves(&saves, cancellation).await?;
 
 	let fallout = read_regular_file(profile, "Fallout.ini", cancellation).await?;
 	let text = decode(&fallout)?.0;
@@ -214,12 +204,9 @@ async fn validate_profile_mode(
 			.await
 			.context(ErrorMarker::environment_invalid(None))?
 		else {
-			if execution {
-				continue;
-			}
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		};
-		validate_plugin_list(&bytes, utf8, !execution)?;
+		validate_plugin_list(&bytes, utf8, true)?;
 	}
 
 	let modlist = read_regular_file(profile, "modlist.txt", cancellation).await?;

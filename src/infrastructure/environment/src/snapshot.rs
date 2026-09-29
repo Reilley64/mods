@@ -2,7 +2,6 @@ use crate::files::read_optional;
 use crate::files::validate_exact_entries;
 use crate::manifest::validate_manifest;
 use crate::profile::is_activatable_plugin_name;
-use crate::profile::validate_execution_profile;
 use crate::profile::validate_profile_files;
 use crate::profile_activation::ProfileActivation;
 use crate::validate_bsa_file;
@@ -40,8 +39,6 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::from_utf8;
-use std::time::SystemTime;
-use tempfile::TempDir;
 use tokio::fs::metadata;
 use tokio::fs::read;
 use tokio::fs::read_dir;
@@ -60,8 +57,6 @@ const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
 
 #[derive(Debug, Clone)]
 pub(crate) struct EnvironmentSnapshotData {
-	pub(crate) file_details: HashMap<String, ProviderFileDetails>,
-	pub(crate) provider_metadata: Vec<(PathBuf, Vec<u8>)>,
 	pub(crate) game_binding: GameBinding,
 	pub(crate) installed_mods: Vec<InstalledMod>,
 	pub(crate) current_winners: HashMap<DataRelativePath, EffectiveResult>,
@@ -74,32 +69,13 @@ pub(crate) async fn load(
 	access: InstallationStateAccess,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, binding, access, false, None, cancellation).await
-}
-
-pub(crate) async fn load_execution(
-	root_path: &Path,
-	binding: &GameBinding,
-	owned_spool: Option<&TempDir>,
-	cancellation: &CancellationToken,
-) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(
-		root_path,
-		binding,
-		InstallationStateAccess::Mutation,
-		true,
-		owned_spool,
-		cancellation,
-	)
-	.await
+	load_inner(root_path, binding, access, cancellation).await
 }
 
 async fn load_inner(
 	root_path: &Path,
 	binding: &GameBinding,
 	access: InstallationStateAccess,
-	execution: bool,
-	owned_spool: Option<&TempDir>,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
 	if cancellation.is_cancelled() {
@@ -122,18 +98,12 @@ async fn load_inner(
 	}
 	if temp_exists.context(ErrorMarker::environment_invalid(None))? {
 		let mut entries = read_dir(&temp).await.context(ErrorMarker::environment_invalid(None))?;
-		while let Some(entry) = entries
+		if entries
 			.next_entry()
 			.await
 			.context(ErrorMarker::environment_invalid(None))?
+			.is_some()
 		{
-			if owned_spool.is_some_and(|spool| {
-				spool.path().parent() == Some(temp.as_path())
-					&& spool.path().file_name() == Some(entry.file_name().as_os_str())
-			}) {
-				continue;
-			}
-
 			let marker = match access {
 				InstallationStateAccess::Preview => ErrorMarker::environment_invalid(None),
 				InstallationStateAccess::Mutation => ErrorMarker::manual_cleanup_required(),
@@ -162,18 +132,9 @@ async fn load_inner(
 	let profile_dir = root_path.join("profile");
 	let overwrite = root_path.join("overwrite");
 
-	if execution {
-		validate_execution_profile(&profile_dir, cancellation).await?;
-	} else {
-		validate_profile_files(&profile_dir, false, cancellation).await?;
-	}
+	validate_profile_files(&profile_dir, false, cancellation).await?;
 
-	let mut overwrite_inventory =
-		collect_provider_inventory(&overwrite, ProviderKind::Overwrite, execution, cancellation).await?;
-	let mut provider_metadata = Vec::new();
-	if let Some(bytes) = overwrite_inventory.metadata.take() {
-		provider_metadata.push((root_path.join("overwrite/meta.toml"), bytes));
-	}
+	let overwrite_inventory = collect_provider_inventory(&overwrite, ProviderKind::Overwrite, cancellation).await?;
 
 	let mut directories = HashMap::new();
 	let mut discovered_names = HashSet::new();
@@ -203,13 +164,8 @@ async fn load_inner(
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 
-		let mut inventory =
-			collect_provider_inventory(&entry.path(), ProviderKind::DataMod, execution, cancellation)
-				.await?;
+		let inventory = collect_provider_inventory(&entry.path(), ProviderKind::DataMod, cancellation).await?;
 
-		if let Some(bytes) = inventory.metadata.take() {
-			provider_metadata.push((root_path.join("mods").join(name.as_str()).join("meta.toml"), bytes));
-		}
 		discovered_names.insert(name.as_str().to_owned());
 		directories.insert(key, (name, inventory));
 	}
@@ -245,31 +201,20 @@ async fn load_inner(
 	}
 
 	let game_binding = binding.clone();
-	let InventoryWinners {
-		files: current_winners,
-		details: file_details,
-	} = current_winners(
+	let current_winners = current_winners(
 		&installed_mods,
 		inventories,
 		overwrite_inventory,
 		&game_binding,
-		execution,
 		cancellation,
 	)
 	.await?;
-	provider_metadata.sort_by(|left, right| left.0.cmp(&right.0));
-	let file_dependencies = if execution {
-		HashMap::new()
-	} else {
-		file_dependencies(&profile_dir, &current_winners, cancellation).await?
-	};
+	let file_dependencies = file_dependencies(&profile_dir, &current_winners, cancellation).await?;
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
 	Ok(EnvironmentSnapshotData {
-		file_details,
-		provider_metadata,
 		game_binding,
 		installed_mods,
 		current_winners,
@@ -277,28 +222,14 @@ async fn load_inner(
 	})
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ProviderFileDetails {
-	pub(crate) length: u64,
-	pub(crate) modified: SystemTime,
-}
-
 #[derive(Default)]
 struct ProviderInventory {
 	entries: Vec<(DataRelativePath, bool)>,
-	files: HashMap<String, ProviderFileDetails>,
 	tombstones: Vec<(DataRelativePath, bool)>,
-	metadata: Option<Vec<u8>>,
 }
 
 pub(crate) struct ProviderMetadata {
 	pub(crate) tombstones: Vec<(DataRelativePath, bool)>,
-	bytes: Vec<u8>,
-}
-
-struct InventoryWinners {
-	files: HashMap<DataRelativePath, EffectiveResult>,
-	details: HashMap<String, ProviderFileDetails>,
 }
 
 #[derive(Clone, Copy)]
@@ -320,33 +251,22 @@ async fn validate_provider(
 	kind: ProviderKind,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	collect_provider_inventory(provider, kind, false, cancellation).await?;
+	collect_provider_inventory(provider, kind, cancellation).await?;
 	Ok(())
 }
 
 async fn collect_provider_inventory(
 	provider: &Path,
 	kind: ProviderKind,
-	file_details: bool,
 	cancellation: &CancellationToken,
 ) -> Result<ProviderInventory, ErrorMarker> {
 	let mut inventory = ProviderInventory::default();
 	let mut paths = HashSet::new();
-	validate_provider_directory(
-		provider,
-		kind,
-		"",
-		&mut paths,
-		&mut inventory,
-		file_details,
-		cancellation,
-	)
-	.await?;
-	let Some(ProviderMetadata { tombstones, bytes }) = read_metadata(provider).await? else {
+	validate_provider_directory(provider, kind, "", &mut paths, &mut inventory, cancellation).await?;
+	let Some(ProviderMetadata { tombstones }) = read_metadata(provider).await? else {
 		return Ok(inventory);
 	};
 
-	inventory.metadata = Some(bytes);
 	let mut directory_tombstones = HashSet::new();
 	for (tombstone, directory) in &tombstones {
 		if cancellation.is_cancelled() {
@@ -398,7 +318,6 @@ async fn validate_provider_directory(
 	prefix: &str,
 	paths: &mut HashSet<String>,
 	inventory: &mut ProviderInventory,
-	file_details: bool,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
@@ -450,7 +369,6 @@ async fn validate_provider_directory(
 				&relative,
 				paths,
 				inventory,
-				file_details,
 				cancellation,
 			))
 			.await?;
@@ -474,17 +392,6 @@ async fn validate_provider_directory(
 			continue;
 		}
 
-		if file_details {
-			inventory.files.insert(
-				data_path.comparison_key().to_owned(),
-				ProviderFileDetails {
-					length: metadata.len(),
-					modified: metadata
-						.modified()
-						.context(ErrorMarker::environment_invalid(None))?,
-				},
-			);
-		}
 		inventory.entries.push((data_path, false));
 	}
 	Ok(())
@@ -518,10 +425,7 @@ pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMa
 	let invalidation_archive_identity = case_fold_key(INVALIDATION_ARCHIVE);
 	let mut result = Vec::new();
 	let Some(tombstones) = table.get("tombstones") else {
-		return Ok(ProviderMetadata {
-			tombstones: result,
-			bytes,
-		});
+		return Ok(ProviderMetadata { tombstones: result });
 	};
 
 	let tombstones = tombstones
@@ -558,10 +462,7 @@ pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMa
 			result.push((canonical, directory));
 		}
 	}
-	Ok(ProviderMetadata {
-		tombstones: result,
-		bytes,
-	})
+	Ok(ProviderMetadata { tombstones: result })
 }
 
 pub(crate) async fn validate_prospective_namespace(
@@ -649,14 +550,12 @@ async fn current_winners(
 	inventories: Vec<ProviderInventory>,
 	overwrite: ProviderInventory,
 	binding: &GameBinding,
-	file_details: bool,
 	cancellation: &CancellationToken,
-) -> Result<InventoryWinners, ErrorMarker> {
+) -> Result<HashMap<DataRelativePath, EffectiveResult>, ErrorMarker> {
 	let mut namespace = HashMap::new();
 	let mut winners = HashMap::new();
 	if let Some(data) = game_data(binding).await? {
-		let inventory =
-			collect_provider_inventory(&data, ProviderKind::GameBase, file_details, cancellation).await?;
+		let inventory = collect_provider_inventory(&data, ProviderKind::GameBase, cancellation).await?;
 		apply_inventory(
 			inventory,
 			ProviderClass::SteamData,
@@ -696,19 +595,13 @@ async fn current_winners(
 	)?;
 
 	let mut result = HashMap::with_capacity(winners.len());
-	let mut details = HashMap::new();
-	for (path, effective, file) in winners.into_values() {
+	for (path, effective) in winners.into_values() {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		if matches!(effective, EffectiveResult::File(_))
-			&& let Some(file) = file
-		{
-			details.insert(path.comparison_key().to_owned(), file);
-		}
 		result.insert(path, effective);
 	}
-	Ok(InventoryWinners { files: result, details })
+	Ok(result)
 }
 
 async fn apply_provider(
@@ -717,7 +610,7 @@ async fn apply_provider(
 	mod_name: Option<ModName>,
 	priority: Option<ModPriority>,
 	namespace: &mut HashMap<String, bool>,
-	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult, Option<ProviderFileDetails>)>,
+	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult)>,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	let entries = collect_entries(directory, cancellation).await?;
@@ -727,11 +620,7 @@ async fn apply_provider(
 		.unwrap_or_default();
 
 	apply_inventory(
-		ProviderInventory {
-			entries,
-			tombstones,
-			..ProviderInventory::default()
-		},
+		ProviderInventory { entries, tombstones },
 		class,
 		mod_name,
 		priority,
@@ -742,12 +631,12 @@ async fn apply_provider(
 }
 
 fn apply_inventory(
-	mut inventory: ProviderInventory,
+	inventory: ProviderInventory,
 	class: ProviderClass,
 	mod_name: Option<ModName>,
 	priority: Option<ModPriority>,
 	namespace: &mut HashMap<String, bool>,
-	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult, Option<ProviderFileDetails>)>,
+	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult)>,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	for (path, is_directory) in inventory.entries {
@@ -761,8 +650,7 @@ fn apply_inventory(
 		namespace.insert(key.clone(), is_directory);
 		if !is_directory {
 			let provider = provider_reference(class, mod_name.clone(), priority, path.clone())?;
-			let details = inventory.files.remove(&key);
-			winners.insert(key, (path, EffectiveResult::File(provider), details));
+			winners.insert(key, (path, EffectiveResult::File(provider)));
 		}
 	}
 	if inventory.tombstones.is_empty() {
@@ -788,7 +676,7 @@ fn apply_inventory(
 		path_tombstones.insert(path.comparison_key().to_owned(), (path, tombstone));
 	}
 
-	for (key, (_, effective, _)) in winners.iter_mut() {
+	for (key, (_, effective)) in winners.iter_mut() {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -820,7 +708,6 @@ fn apply_inventory(
 				EffectiveResult::Absent {
 					controlling_tombstone: Some(tombstone),
 				},
-				None,
 			),
 		);
 	}

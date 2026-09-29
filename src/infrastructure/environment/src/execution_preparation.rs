@@ -8,12 +8,9 @@ use crate::files::read_optional;
 use crate::profile::PROFILE_FILES;
 use crate::profile::decode;
 use crate::profile::validate_plugin_text;
-use crate::snapshot::load_execution;
 use application::ErrorMarker;
-use application::installation::InstallationState;
 use application::ports::ProfilePurpose;
 use domain::DataRelativePath;
-use domain::EffectiveResult;
 use domain::EnvironmentRoot;
 use domain::GameBinding;
 use domain::ProviderIdentity;
@@ -26,10 +23,8 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::str::from_utf8;
-use std::time::SystemTime;
 use tempfile::TempDir;
 use tokio::fs::metadata;
-use tokio::fs::read;
 use tokio::fs::read_dir;
 use tokio_util::sync::CancellationToken;
 
@@ -68,173 +63,7 @@ pub struct PreparedLaunch {
 	pub cache_directory: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionVisibleFile {
-	pub path: DataRelativePath,
-	pub physical_path: PathBuf,
-	pub modified: SystemTime,
-}
-
-/// Strict preparation retained for export comparisons and read-only inventories.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedExecution {
-	pub game_binding: GameBinding,
-	pub providers: Vec<ExecutionProvider>,
-	pub winners: Vec<ProviderReference>,
-	pub visible_files: Vec<ExecutionVisibleFile>,
-	pub profile_files: Vec<ExecutionProfileText>,
-	pub profile_directory: PathBuf,
-	pub data_directory: PathBuf,
-	pub cache_directory: PathBuf,
-	consumed_state: InstallationState,
-	consumed_bytes: Vec<(PathBuf, Vec<u8>)>,
-	file_lengths: Vec<u64>,
-}
-
 impl EnvironmentAdapter {
-	/// Reads execution inputs without repairing or rewriting canonical state.
-	///
-	/// The caller must validate the effective settings binding through the game platform adapter.
-	///
-	/// # Errors
-	///
-	/// Refuses pending work, invalid state, unsafe paths, and cancellation.
-	pub async fn prepare_execution(
-		&self,
-		root: &EnvironmentRoot,
-		effective_binding: &GameBinding,
-		cancellation: &CancellationToken,
-	) -> Result<PreparedExecution, ErrorMarker> {
-		self.prepare_execution_with_spool(root, effective_binding, None, cancellation)
-			.await
-	}
-
-	async fn prepare_execution_with_spool(
-		&self,
-		root: &EnvironmentRoot,
-		effective_binding: &GameBinding,
-		owned_spool: Option<&TempDir>,
-		cancellation: &CancellationToken,
-	) -> Result<PreparedExecution, ErrorMarker> {
-		let snapshot = load_execution(root.as_path(), effective_binding, owned_spool, cancellation).await?;
-		let data_directory = effective_binding.game_directory().as_path().join("Data");
-		let mut providers = vec![ExecutionProvider {
-			identity: ProviderIdentity::SteamData,
-			root: data_directory.clone(),
-			enabled: true,
-		}];
-		for installed in &snapshot.installed_mods {
-			providers.push(ExecutionProvider {
-				identity: ProviderIdentity::DataMod {
-					mod_name: installed.name.clone(),
-					priority: installed.priority,
-				},
-				root: root.as_path().join("mods").join(installed.name.as_str()),
-				enabled: installed.enabled,
-			});
-		}
-		providers.push(ExecutionProvider {
-			identity: ProviderIdentity::Overwrite,
-			root: root.as_path().join("overwrite"),
-			enabled: true,
-		});
-
-		let mut winners: Vec<_> = snapshot
-			.current_winners
-			.values()
-			.filter_map(|result| {
-				if let EffectiveResult::File(provider) = result {
-					Some(provider.clone())
-				} else {
-					None
-				}
-			})
-			.collect();
-		winners.sort_by(|left, right| {
-			left.original_path()
-				.comparison_key()
-				.cmp(right.original_path().comparison_key())
-		});
-
-		let mut visible_files = Vec::with_capacity(winners.len());
-		let mut file_lengths = Vec::with_capacity(winners.len());
-		for winner in &winners {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			let provider = providers
-				.iter()
-				.find(|provider| provider.identity == winner.identity())
-				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-			let details = snapshot
-				.file_details
-				.get(winner.original_path().comparison_key())
-				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-			file_lengths.push(details.length);
-			visible_files.push(ExecutionVisibleFile {
-				path: winner.original_path().clone(),
-				physical_path: provider.root.join(winner.original_path().as_str()),
-				modified: details.modified,
-			});
-		}
-
-		let profile_directory = root.as_path().join("profile");
-		let mut consumed_bytes = Vec::new();
-		let mut profile_files = Vec::new();
-		for name in PROFILE_FILES.into_iter().chain(["modlist.txt"]) {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-
-			let Some(bytes) = read_optional(&profile_directory.join(name))
-				.await
-				.context(ErrorMarker::environment_invalid(None))?
-			else {
-				continue;
-			};
-			if name != "modlist.txt" {
-				let text = match name {
-					"plugins.txt" => decode_active_code_page(&bytes)?,
-					"loadorder.txt" => from_utf8(&bytes)
-						.context(ErrorMarker::environment_invalid(None))?
-						.to_owned(),
-					_ => decode(&bytes).context(ErrorMarker::environment_invalid(None))?.0,
-				};
-				profile_files.push(ExecutionProfileText { name, text });
-			}
-			consumed_bytes.push((profile_directory.join(name), bytes));
-		}
-
-		let manifest = read(root.as_path().join("mods.toml"))
-			.await
-			.context(ErrorMarker::environment_invalid(None))?;
-		consumed_bytes.push((root.as_path().join("mods.toml"), manifest));
-
-		consumed_bytes.extend(snapshot.provider_metadata);
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
-		Ok(PreparedExecution {
-			game_binding: effective_binding.clone(),
-			providers,
-			winners,
-			visible_files,
-			profile_files,
-			profile_directory,
-			data_directory,
-			cache_directory: root.as_path().join("cache"),
-			consumed_state: InstallationState {
-				game_binding: snapshot.game_binding,
-				installed_mods: snapshot.installed_mods,
-				current_winners: snapshot.current_winners,
-				file_dependencies: snapshot.file_dependencies,
-			},
-			consumed_bytes,
-			file_lengths,
-		})
-	}
-
 	/// Reads execution inputs and creates missing enabled-mod metadata.
 	/// The binding is retained without verifying its Steam installation or build.
 	/// Cancellation is cooperative between operations; a whole-file read cannot be interrupted.
@@ -397,7 +226,6 @@ impl EnvironmentAdapter {
 	) -> Result<StagedProfileInis, ErrorMarker> {
 		StagedProfileInis::create(
 			&prepared.profile_directory,
-			prepared.game_binding.game_directory().as_path(),
 			&root.as_path().join("temp"),
 			purpose,
 			cancellation,
@@ -476,11 +304,6 @@ mod tests {
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Enabled\r\n-Disabled\r\n")
 			.context(ErrorMarker::io_failure())?;
 		EnvironmentAdapter
-			.prepare_execution(&root, &binding, &CancellationToken::new())
-			.await?;
-		assert!(!root.as_path().join("mods/Enabled/meta.toml").exists());
-
-		EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
 			.await?;
 		let metadata = root.as_path().join("mods/Enabled/meta.toml");
@@ -524,10 +347,6 @@ mod tests {
 		EnvironmentAdapter
 			.check_launch(&root, &binding, &CancellationToken::new())
 			.await?;
-		assert!(EnvironmentAdapter
-			.prepare_execution(&root, &binding, &CancellationToken::new())
-			.await
-			.is_err());
 		assert_eq!(
 			fs::read(&archive).context(ErrorMarker::io_failure())?,
 			b"corrupt fixture"
@@ -547,10 +366,6 @@ mod tests {
 		let mut manifest = fs::read(root.as_path().join("mods.toml")).context(ErrorMarker::io_failure())?;
 		manifest.extend_from_slice(format!("#{}\n", "x".repeat(64 * 1024)).as_bytes());
 		fs::write(root.as_path().join("mods.toml"), manifest).context(ErrorMarker::io_failure())?;
-		assert!(EnvironmentAdapter
-			.prepare_execution(&root, &binding, &CancellationToken::new())
-			.await
-			.is_err());
 		let prepared = EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
 			.await?;
@@ -695,21 +510,17 @@ mod tests {
 		let launch = EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
 			.await?;
-		let strict = EnvironmentAdapter
-			.prepare_execution(&root, &binding, &CancellationToken::new())
-			.await?;
 
-		for winners in [&launch.winners, &strict.winners] {
-			let shared = winners
-				.iter()
-				.find(|winner| winner.original_path().comparison_key() == "shared.txt")
-				.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
-			assert!(matches!(
-				shared,
-				ProviderReference::DataMod { mod_name, priority, .. }
-					if mod_name.as_str() == "High" && priority.get() == 1
-			));
-		}
+		let shared = launch
+			.winners
+			.iter()
+			.find(|winner| winner.original_path().comparison_key() == "shared.txt")
+			.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
+		assert!(matches!(
+			shared,
+			ProviderReference::DataMod { mod_name, priority, .. }
+				if mod_name.as_str() == "High" && priority.get() == 1
+		));
 		Ok(())
 	}
 

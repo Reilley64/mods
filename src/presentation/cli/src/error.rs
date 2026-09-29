@@ -1,8 +1,8 @@
 use crate::output::quote;
 use application::ErrorCode;
 use application::ErrorMarker;
-use application::execution::RetainedExecutionInis;
 use application::export::RetainedExport;
+use application::ports::RetainedProfile;
 use rootcause::Report;
 use std::path::Path;
 
@@ -30,7 +30,7 @@ pub(crate) fn execution_error<C>(report: &Report<C>) -> String {
 
 	if let Some(retained) = report
 		.iter_reports()
-		.find_map(|entry| entry.downcast_current_context::<RetainedExecutionInis>())
+		.find_map(|entry| entry.downcast_current_context::<RetainedProfile>())
 	{
 		text.push_str(&format!(
 			"retained_execution_inis = {}\n",
@@ -60,6 +60,19 @@ pub(crate) fn export_error<C>(report: &Report<C>, output: &Path) -> String {
 		);
 	} else {
 		text.push_str(&format!("output = {}\n", quote(&output.display().to_string())));
+	}
+
+	if let Some(retained) = report
+		.iter_reports()
+		.find_map(|entry| entry.downcast_current_context::<RetainedProfile>())
+	{
+		text.push_str(&format!(
+			"retained_export_stage = {}\n",
+			quote(&retained.path.display().to_string())
+		));
+		text.push_str(
+			"The stage holds only derived profile copies. Delete it before the next exec or export.\n",
+		);
 	}
 
 	if let Some(marker) = application_marker(report) {
@@ -124,7 +137,7 @@ mod tests {
 	use application::ErrorCode;
 	use application::ErrorMarker;
 	use application::execution::ExecuteProgramError;
-	use application::execution::RetainedExecutionInis;
+	use application::ports::RetainedProfile;
 	use application::settings::ListSettingsError;
 	use rootcause::report;
 	use std::path::Path;
@@ -134,7 +147,7 @@ mod tests {
 	fn execution_error_exposes_only_typed_retained_ini_path() {
 		let mut report = report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"))
 			.context(ExecuteProgramError);
-		report.children_mut().push(report!(RetainedExecutionInis {
+		report.children_mut().push(report!(RetainedProfile {
 			path: PathBuf::from("C:\\private\\inis\\line\n")
 		})
 		.into_dynamic()
@@ -146,7 +159,7 @@ mod tests {
 		assert!(text.contains("retained_execution_inis = \"C:\\\\private\\\\inis\\\\line\\n\""));
 		assert!(text.contains("after all managed processes have stopped"));
 		assert!(!text.contains("ExecuteProgramError"));
-		assert!(!text.contains("RetainedExecutionInis"));
+		assert!(!text.contains("RetainedProfile"));
 	}
 
 	#[test]
@@ -163,6 +176,24 @@ mod tests {
 		assert!(text.contains("retained_partial_output = \"C:\\\\private\\\\partial\""));
 		assert!(!text.contains("ExportEnvironmentError"));
 		assert!(!text.lines().any(|line| line.starts_with("output =")));
+	}
+
+	#[test]
+	fn export_error_names_a_retained_stage_with_export_advice() {
+		let mut report =
+			report!(ErrorMarker::io_failure()).context(application::export::ExportEnvironmentError);
+		report.children_mut().push(report!(RetainedProfile {
+			path: PathBuf::from("C:\\env\\temp\\export-inis-1")
+		})
+		.into_dynamic()
+		.into_cloneable());
+
+		let text = super::export_error(&report, Path::new("C:\\private\\output"));
+
+		assert!(text.contains("retained_export_stage = \"C:\\\\env\\\\temp\\\\export-inis-1\""));
+		assert!(text.contains("Delete it before the next exec or export"));
+		assert!(!text.contains("retained_execution_inis"));
+		assert!(!text.contains("RetainedProfile"));
 	}
 
 	#[test]

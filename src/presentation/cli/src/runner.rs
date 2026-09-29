@@ -432,7 +432,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 					} else {
 						String::new()
 					},
-					stderr: String::new(),
+					stderr: result.warnings.iter().map(output::plugin_warning).collect(),
 				},
 				Err(report) => RunOutcome {
 					status: error::application_marker(&report)
@@ -616,17 +616,23 @@ mod tests {
 	use application::execution::ExecuteProgramError;
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
-	use application::execution::RetainedExecutionInis;
 	use application::export::ExportEnvironmentDependencies;
 	use application::export::ExportFile;
+	use application::export::ExportListing;
 	use application::export::ExportProvider;
-	use application::export::PreparedExport;
+	use application::export::ExportSources;
 	use application::installation::InstallArchiveDependencies;
+	use application::ports::AdapterState;
+	use application::ports::EnvironmentPlan;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
 	use application::ports::InitializationTargetAssessment;
 	use application::ports::PortFuture;
+	use application::ports::ProfileProjection;
+	use application::ports::ProfileWarning;
 	use application::ports::ResolvedGameInstallation;
+	use application::ports::RetainedProfile;
+	use application::ports::StagedProfile;
 	use application::ports::StoredAndEffectiveBinding;
 	use application::preparation::PluginWarning;
 	use application::settings::GetSettingDependencies;
@@ -857,14 +863,83 @@ mod tests {
 				}),
 			},
 			install_archive,
-			export_environment: ExportEnvironmentDependencies {
-				prepare_export: Arc::new(|_, _, _| {
-					Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
-				}),
-			},
+			export_environment: unavailable_export_dependencies(),
 			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
 			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
 			explain_path: unavailable_explain_path_dependencies(),
+		}
+	}
+
+	fn failed<T: Send + 'static>() -> PortFuture<T> {
+		Box::pin(async { Err(report!(ErrorMarker::io_failure())) })
+	}
+
+	fn unavailable_export_dependencies() -> ExportEnvironmentDependencies {
+		ExportEnvironmentDependencies {
+			validate_export_destination: Arc::new(|_| failed()),
+			prepare_environment_plan: Arc::new(|_| failed()),
+			project_profile: Arc::new(|_: &EnvironmentPlan| failed()),
+			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
+			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _| failed()),
+			write_export: Arc::new(|_, _, _, _| failed()),
+			discard_staged_profile: Arc::new(|_| failed()),
+		}
+	}
+
+	/// Export ports that list one profile file and record whether it was written.
+	fn export_dependencies(
+		expected_output: PathBuf,
+		include_saves: bool,
+		written: Arc<AtomicBool>,
+	) -> ExportEnvironmentDependencies {
+		ExportEnvironmentDependencies {
+			validate_export_destination: Arc::new(move |output| {
+				assert_eq!(output, expected_output);
+				Box::pin(async { Ok(()) })
+			}),
+			prepare_environment_plan: Arc::new(|_| {
+				Box::pin(async {
+					Ok(EnvironmentPlan {
+						providers: Vec::new(),
+						state: AdapterState::new(()),
+					})
+				})
+			}),
+			project_profile: Arc::new(|_: &EnvironmentPlan| {
+				Box::pin(async {
+					Ok(ProfileProjection {
+						warnings: vec![ProfileWarning::LoadOrderNotEnforced],
+					})
+				})
+			}),
+			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| {
+				Box::pin(async {
+					Ok(StagedProfile {
+						directory: PathBuf::from("stage"),
+						state: AdapterState::new(()),
+					})
+				})
+			}),
+			list_export_files: Arc::new(move |_: &EnvironmentPlan, _: &StagedProfile, saves, _| {
+				assert_eq!(saves, include_saves);
+				Box::pin(async {
+					Ok(ExportListing {
+						files: vec![ExportFile {
+							source_id: 0,
+							path: DataRelativePath::new("profile/Fallout.ini".to_owned())
+								.map_err(|_| report!(ErrorMarker::invalid_data_path()))?,
+							provider: ExportProvider::Profile,
+							bytes: 17,
+						}],
+						sources: ExportSources(AdapterState::new(())),
+					})
+				})
+			}),
+			write_export: Arc::new(move |_, _, _, _| {
+				written.store(true, Ordering::SeqCst);
+				Box::pin(async { Ok(()) })
+			}),
+			discard_staged_profile: Arc::new(|_| Box::pin(async { Ok(()) })),
 		}
 	}
 
@@ -950,7 +1025,7 @@ mod tests {
 		dependencies.execute_program = Box::new(|_, _, _, _, _| {
 			let mut failure =
 				report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"));
-			failure.children_mut().push(report!(RetainedExecutionInis {
+			failure.children_mut().push(report!(RetainedProfile {
 				path: PathBuf::from("C:\\private\\inis")
 			})
 			.into_dynamic()
@@ -981,28 +1056,8 @@ mod tests {
 		let published = Arc::new(AtomicBool::new(false));
 		for (dry_run, include_saves) in [(true, true), (false, false)] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			let published_for_port = published.clone();
-			let expected_output = temp.path().join("payload");
-			dependencies.export_environment.prepare_export = Arc::new(move |output, saves, _| {
-				assert_eq!(output, expected_output);
-				assert_eq!(saves, include_saves);
-				let published = published_for_port.clone();
-				Box::pin(async move {
-					Ok(PreparedExport {
-						files: vec![ExportFile {
-							source_id: 0,
-							path: DataRelativePath::new("profile/Fallout.ini".to_owned())
-								.map_err(|_| report!(ErrorMarker::invalid_data_path()))?,
-							provider: ExportProvider::Profile,
-							bytes: 17,
-						}],
-						publish: Arc::new(move |_, _| {
-							published.store(true, Ordering::SeqCst);
-							Box::pin(async { Ok(()) }) as PortFuture<_>
-						}),
-					})
-				}) as PortFuture<_>
-			});
+			dependencies.export_environment =
+				export_dependencies(temp.path().join("payload"), include_saves, published.clone());
 			let arguments = if dry_run {
 				arguments![
 					"mods",
@@ -1021,7 +1076,7 @@ mod tests {
 			})
 			.await?;
 			assert_eq!(outcome.status, 0);
-			assert!(outcome.stderr.is_empty());
+			assert!(outcome.stderr.starts_with("warning [load_order_not_enforced]"));
 			if dry_run {
 				assert!(outcome.stdout.contains("files.count = 1"));
 				assert!(outcome.stdout.contains("total_bytes = 17"));

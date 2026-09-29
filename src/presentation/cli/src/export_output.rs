@@ -90,6 +90,7 @@ mod tests {
 			],
 			total_bytes: 23,
 			published: false,
+			warnings: Vec::new(),
 		};
 
 		let text = preview(Path::new("/output"), &output);

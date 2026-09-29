@@ -1,5 +1,5 @@
 use super::ExecutionAdapter;
-use crate::environment_preparation::PreparationAdapter;
+use crate::environment_preparation::PreparationPorts;
 use application::ErrorMarker;
 use application::execution::ExecuteProgramDependencies;
 use application::ports::AdapterState;
@@ -68,52 +68,50 @@ impl ExecutionAdapter {
 	/// thread, so native session calls never overlap.
 	pub(super) fn dependencies(&self) -> ExecuteProgramDependencies {
 		let adapter = Arc::new(self.clone());
-		let preparation = PreparationAdapter::new(self.root.clone(), self.binding.clone());
+		let preparation = PreparationPorts::new(self.root.clone(), self.binding.clone());
 
 		ExecuteProgramDependencies {
 			report_progress: None,
 			resolve_launch_target: Arc::new({
 				let adapter = adapter.clone();
 				move |program, arguments, working_directory| {
-					completed(adapter.resolve_launch_target(program, arguments, working_directory))
+					completed(adapter.resolve_target(program, arguments, working_directory))
 				}
 			}),
-			prepare_environment_plan: preparation.prepare_environment_plan_port(),
-			project_profile: preparation.project_profile_port(),
-			stage_profile: preparation.stage_profile_port(),
+			prepare_environment_plan: preparation.prepare_environment_plan,
+			project_profile: preparation.project_profile,
+			stage_profile: preparation.stage_profile,
 			create_virtual_file_system: Arc::new(
 				|plan: EnvironmentPlan,
 				 staged: &StagedProfile,
 				 output_mod: Option<ModName>,
 				 cancellation: CancellationToken| {
-					completed(create_virtual_file_system(plan, staged, output_mod, cancellation))
+					completed(build_virtual_file_system(plan, staged, output_mod, cancellation))
 				},
 			),
 			launch_program: Arc::new({
 				let adapter = adapter.clone();
-				move |file_system, target| completed(adapter.launch_program(file_system, target))
+				move |file_system, target| completed(adapter.start_program(file_system, target))
 			}),
 			supervise_program: Arc::new({
 				let adapter = adapter.clone();
 				move |program, cancellation| {
 					let force_cancellation = adapter.force_cancellation.clone();
-					Box::pin(supervise_program(program, cancellation, force_cancellation))
+					Box::pin(supervise_child(program, cancellation, force_cancellation))
 						as PortFuture<_>
 				}
 			}),
-			preserve_execution_profile: Arc::new(|staged| {
-				Box::pin(preserve_execution_profile(staged)) as PortFuture<_>
-			}),
-			finish_program_output: Arc::new(|output| completed(finish_program_output(output))),
+			preserve_execution_profile: Arc::new(|staged| Box::pin(preserve_inis(staged)) as PortFuture<_>),
+			finish_program_output: Arc::new(|output| completed(finish_streams(output))),
 			check_profile_state: Arc::new(move |cancellation| {
 				let adapter = adapter.clone();
-				Box::pin(async move { adapter.check_profile_state(cancellation).await })
+				Box::pin(async move { adapter.check_retained_state(cancellation).await })
 					as PortFuture<_>
 			}),
 		}
 	}
 
-	fn resolve_launch_target(
+	fn resolve_target(
 		&self,
 		program: Program,
 		arguments: Vec<ProgramArgument>,
@@ -148,7 +146,7 @@ impl ExecutionAdapter {
 		})))
 	}
 
-	fn launch_program(
+	fn start_program(
 		&self,
 		file_system: VirtualFileSystem,
 		target: LaunchTarget,
@@ -209,7 +207,7 @@ impl ExecutionAdapter {
 		})))
 	}
 
-	async fn check_profile_state(&self, cancellation: CancellationToken) -> Result<(), ErrorMarker> {
+	async fn check_retained_state(&self, cancellation: CancellationToken) -> Result<(), ErrorMarker> {
 		EnvironmentAdapter
 			.check_launch_with_spool(
 				&self.root,
@@ -221,7 +219,7 @@ impl ExecutionAdapter {
 	}
 }
 
-fn create_virtual_file_system(
+fn build_virtual_file_system(
 	plan: EnvironmentPlan,
 	staged: &StagedProfile,
 	output_mod: Option<ModName>,
@@ -277,7 +275,7 @@ fn create_virtual_file_system(
 	Ok(VirtualFileSystem(AdapterState::new(view)))
 }
 
-async fn supervise_program(
+async fn supervise_child(
 	program: RunningProgram,
 	cancellation: CancellationToken,
 	force_cancellation: CancellationToken,
@@ -305,13 +303,13 @@ async fn supervise_program(
 	})
 }
 
-async fn preserve_execution_profile(staged: StagedProfile) -> Result<(), ErrorMarker> {
+async fn preserve_inis(staged: StagedProfile) -> Result<(), ErrorMarker> {
 	let inis: StagedProfileInis = staged.state.downcast().ok_or_else(foreign_handle)?;
 
 	inis.preserve().await
 }
 
-fn finish_program_output(output: ProgramOutput) -> Result<(), ErrorMarker> {
+fn finish_streams(output: ProgramOutput) -> Result<(), ErrorMarker> {
 	let private_streams: Option<PrivateStreams> = output.0.downcast().ok_or_else(foreign_handle)?;
 
 	if let Some(private_streams) = private_streams {

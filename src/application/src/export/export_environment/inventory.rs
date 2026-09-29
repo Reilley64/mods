@@ -1,5 +1,4 @@
 use crate::ErrorMarker;
-use crate::export::ExportEnvironmentError;
 use crate::export::ExportFile;
 use crate::export::ExportProvider;
 use domain::DataRelativePath;
@@ -12,7 +11,7 @@ use rootcause::report;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-pub(super) fn plan_inventory(candidates: Vec<ExportFile>) -> Result<(Vec<ExportFile>, u64), ExportEnvironmentError> {
+pub(super) fn plan_inventory(candidates: Vec<ExportFile>) -> Result<(Vec<ExportFile>, u64), ErrorMarker> {
 	let mut files: Vec<_> = candidates
 		.into_iter()
 		.filter(|file| file.provider != ExportProvider::Data(ProviderIdentity::SteamData))
@@ -22,7 +21,7 @@ pub(super) fn plan_inventory(candidates: Vec<ExportFile>) -> Result<(Vec<ExportF
 	let mut file_keys = HashSet::new();
 	for file in &files {
 		if !file_keys.insert(file.path.comparison_key().to_owned()) {
-			return Err(report!(ErrorMarker::invalid_data_path()).context(ExportEnvironmentError));
+			return Err(report!(ErrorMarker::invalid_data_path()));
 		}
 
 		let rank = if let ExportProvider::Data(provider) = &file.provider {
@@ -44,7 +43,7 @@ pub(super) fn plan_inventory(candidates: Vec<ExportFile>) -> Result<(Vec<ExportF
 	}
 
 	if directories.keys().any(|key| file_keys.contains(key)) {
-		return Err(report!(ErrorMarker::invalid_data_path()).context(ExportEnvironmentError));
+		return Err(report!(ErrorMarker::invalid_data_path()));
 	}
 
 	let mut total_bytes = 0_u64;
@@ -63,10 +62,10 @@ pub(super) fn plan_inventory(candidates: Vec<ExportFile>) -> Result<(Vec<ExportF
 				spelling.push(directory.clone());
 			}
 		}
-		file.path = DataRelativePath::new(spelling.join("/")).context(ExportEnvironmentError)?;
+		file.path = DataRelativePath::new(spelling.join("/")).context(ErrorMarker::invalid_data_path())?;
 		total_bytes = total_bytes
 			.checked_add(file.bytes)
-			.ok_or_else(|| report!(ErrorMarker::io_failure()).context(ExportEnvironmentError))?;
+			.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
 	}
 	files.sort_by(|left, right| left.path.comparison_key().cmp(right.path.comparison_key()));
 

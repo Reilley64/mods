@@ -1,5 +1,6 @@
 use application::ErrorMarker;
 use application::ports::AdapterState;
+use application::ports::DiscardStagedProfile;
 use application::ports::EnvironmentPlan;
 use application::ports::EnvironmentProvider;
 use application::ports::PortFuture;
@@ -12,6 +13,7 @@ use domain::EnvironmentRoot;
 use domain::GameBinding;
 use infrastructure_environment::EnvironmentAdapter;
 use infrastructure_environment::PreparedLaunch;
+use infrastructure_environment::StagedProfileInis;
 use infrastructure_execution::ProfileProjectionInput;
 use infrastructure_execution::ProfileText;
 use infrastructure_execution::VisibleProfileFile;
@@ -23,67 +25,53 @@ use rootcause::report;
 use std::future::ready;
 use std::sync::Arc;
 
-/// Builds the platform-neutral preparation ports that exec and export share.
-#[derive(Clone)]
-pub(crate) struct PreparationAdapter {
-	root: EnvironmentRoot,
-	binding: GameBinding,
+/// The platform-neutral preparation ports that exec and export share.
+pub(crate) struct PreparationPorts {
+	pub prepare_environment_plan: PrepareEnvironmentPlan,
+	pub project_profile: ProjectProfile,
+	pub stage_profile: StageProfile,
+	pub discard_staged_profile: DiscardStagedProfile,
 }
 
 // The ports create every plan they consume, so another handle type is a
 // composition defect rather than a user-facing condition.
 fn foreign_handle() -> Report<ErrorMarker> {
-	report!(ErrorMarker::execution_supervision_failed())
+	report!(ErrorMarker::environment_invalid(None))
 }
 
-#[cfg_attr(
-	not(windows),
-	expect(dead_code, reason = "only Windows exec composes these ports until export uses them")
-)]
-impl PreparationAdapter {
+impl PreparationPorts {
 	/// Uses a binding that the caller has already validated.
 	pub fn new(root: EnvironmentRoot, binding: GameBinding) -> Self {
-		Self { root, binding }
-	}
-
-	pub fn prepare_environment_plan_port(&self) -> PrepareEnvironmentPlan {
-		let root = self.root.clone();
-		let binding = self.binding.clone();
-
-		Arc::new(move |cancellation| {
+		let prepare_environment_plan: PrepareEnvironmentPlan = Arc::new({
 			let root = root.clone();
-			let binding = binding.clone();
 
-			Box::pin(async move {
-				let prepared = EnvironmentAdapter
-					.prepare_launch(&root, &binding, &cancellation)
-					.await?;
+			move |cancellation| {
+				let root = root.clone();
+				let binding = binding.clone();
 
-				let providers = prepared
-					.providers
-					.iter()
-					.map(|provider| EnvironmentProvider {
-						identity: provider.identity.clone(),
-						enabled: provider.enabled,
+				Box::pin(async move {
+					let prepared = EnvironmentAdapter
+						.prepare_launch(&root, &binding, &cancellation)
+						.await?;
+
+					let providers = prepared
+						.providers
+						.iter()
+						.map(|provider| EnvironmentProvider {
+							identity: provider.identity.clone(),
+							enabled: provider.enabled,
+						})
+						.collect();
+
+					Ok(EnvironmentPlan {
+						providers,
+						state: AdapterState::new(prepared),
 					})
-					.collect();
+				}) as PortFuture<_>
+			}
+		});
 
-				Ok(EnvironmentPlan {
-					providers,
-					state: AdapterState::new(prepared),
-				})
-			}) as PortFuture<_>
-		})
-	}
-
-	pub fn project_profile_port(&self) -> ProjectProfile {
-		Arc::new(|plan: &EnvironmentPlan| Box::pin(ready(project(plan))) as PortFuture<_>)
-	}
-
-	pub fn stage_profile_port(&self) -> StageProfile {
-		let root = self.root.clone();
-
-		Arc::new(move |plan: &EnvironmentPlan, purpose, cancellation| {
+		let stage_profile: StageProfile = Arc::new(move |plan: &EnvironmentPlan, purpose, cancellation| {
 			let root = root.clone();
 			// The port borrows the plan, so the future owns a copy of the prepared launch.
 			let prepared = plan.state.downcast_ref::<PreparedLaunch>().cloned();
@@ -100,11 +88,27 @@ impl PreparationAdapter {
 					state: AdapterState::new(inis),
 				})
 			}) as PortFuture<_>
-		})
+		});
+
+		Self {
+			prepare_environment_plan,
+			project_profile: Arc::new(|plan: &EnvironmentPlan| {
+				Box::pin(ready(project_plan(plan))) as PortFuture<_>
+			}),
+			stage_profile,
+			discard_staged_profile: Arc::new(|staged: StagedProfile| {
+				Box::pin(async move {
+					let inis: StagedProfileInis =
+						staged.state.downcast().ok_or_else(foreign_handle)?;
+
+					inis.discard().await
+				}) as PortFuture<_>
+			}),
+		}
 	}
 }
 
-fn project(plan: &EnvironmentPlan) -> Result<ProfileProjection, ErrorMarker> {
+fn project_plan(plan: &EnvironmentPlan) -> Result<ProfileProjection, ErrorMarker> {
 	let prepared = plan.state.downcast_ref::<PreparedLaunch>().ok_or_else(foreign_handle)?;
 
 	let files: Vec<_> = prepared
@@ -127,7 +131,7 @@ fn project(plan: &EnvironmentPlan) -> Result<ProfileProjection, ErrorMarker> {
 		files: &files,
 		visible_files: &visible_files,
 	})
-	.context(ErrorMarker::environment_invalid(Some("execution")))?;
+	.context(ErrorMarker::environment_invalid(Some("profile_projection")))?;
 
 	for (order, plugin) in projected.plugins.iter().enumerate() {
 		tracing::info!(plugin = %plugin.path, basis = "analytical_data", runtime_observed = false, projected_order = order, projected_activation_sources = ?plugin.activation_sources, "advisory plugin projection");

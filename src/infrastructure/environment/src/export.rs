@@ -1,19 +1,22 @@
 use crate::EnvironmentAdapter;
-use crate::PreparedExecution;
-use crate::derived_profile::ProfileIniInputs;
+use crate::PreparedLaunch;
 use crate::files::read_optional;
 use crate::profile::PROFILE_FILES;
 use application::ErrorMarker;
 use application::export::ExportFile;
+use application::export::ExportListing;
 use application::export::ExportProvider;
-use application::export::PrepareExport;
-use application::export::PreparedExport;
+use application::export::ExportSources;
+use application::export::ListExportFiles;
 use application::export::RetainedExport;
+use application::export::ValidateExportDestination;
+use application::export::WriteExport;
+use application::ports::AdapterState;
+use application::ports::EnvironmentPlan;
 use application::ports::PortFuture;
+use application::ports::StagedProfile;
 use domain::DataRelativePath;
 use domain::EnvironmentRoot;
-use domain::GameBinding;
-use domain::ProfileIniPurpose;
 use domain::ProviderIdentity;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -31,56 +34,93 @@ use tokio::fs::create_dir_all;
 use tokio::fs::metadata;
 use tokio::fs::read_dir;
 use tokio::fs::try_exists;
-use tokio::fs::write;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
+
+/// Where a listed file is copied from, and whose modification time the copy gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExportOrigin {
+	path: PathBuf,
+	time_source: PathBuf,
+}
+
+impl ExportOrigin {
+	fn new(path: PathBuf) -> Self {
+		Self {
+			time_source: path.clone(),
+			path,
+		}
+	}
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExportSource {
 	path: PathBuf,
 	modified: SystemTime,
-	derived: Option<Vec<u8>>,
 	entry: ExportFile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ExportSnapshot {
-	execution: PreparedExecution,
-	inis: ProfileIniInputs,
+/// The listed sources behind an [`ExportSources`] handle.
+struct ExportSourceTable {
 	sources: Vec<ExportSource>,
+	include_saves: bool,
 }
 
 impl EnvironmentAdapter {
-	/// The caller must validate the effective Game Binding and stop source writers.
-	/// Sources are not compared again before they are copied.
-	/// Preparing a dry-run inventory creates no output and reserves no destination.
-	pub fn prepare_export_port(&self, root: EnvironmentRoot, binding: GameBinding) -> PrepareExport {
-		Arc::new(move |output, include_saves, cancellation| {
+	pub fn validate_export_destination_port(&self, root: EnvironmentRoot) -> ValidateExportDestination {
+		Arc::new(move |output| {
 			let root = root.clone();
-			let binding = binding.clone();
+
+			Box::pin(async move { check_destination(&root, &output).await }) as PortFuture<_>
+		})
+	}
+
+	/// The caller must stop source writers. Sources are not compared again before
+	/// they are copied.
+	pub fn list_export_files_port(&self) -> ListExportFiles {
+		Arc::new(
+			|plan: &EnvironmentPlan, staged: &StagedProfile, include_saves, cancellation| {
+				// The port borrows the plan, so the future owns a copy of the prepared environment.
+				let prepared = plan.state.downcast_ref::<PreparedLaunch>().cloned();
+				let staged = staged.directory.clone();
+
+				Box::pin(async move {
+					let prepared = prepared
+						.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
+
+					let sources =
+						list_sources(&prepared, &staged, include_saves, &cancellation).await?;
+
+					Ok(ExportListing {
+						files: sources.iter().map(|source| source.entry.clone()).collect(),
+						sources: ExportSources(AdapterState::new(ExportSourceTable {
+							sources,
+							include_saves,
+						})),
+					})
+				}) as PortFuture<_>
+			},
+		)
+	}
+
+	pub fn write_export_port(&self, root: EnvironmentRoot) -> WriteExport {
+		Arc::new(move |sources: ExportSources, files, output, cancellation| {
+			let root = root.clone();
+
 			Box::pin(async move {
-				validate_destination(&root, &output).await?;
+				let table: ExportSourceTable = sources
+					.0
+					.downcast()
+					.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 
-				let snapshot = capture(&root, &binding, include_saves, &cancellation).await?;
-				let files = snapshot.sources.iter().map(|source| source.entry.clone()).collect();
-
-				let publish = Arc::new(move |files, cancellation| {
-					let root = root.clone();
-					let output = output.clone();
-					let snapshot = snapshot.clone();
-					Box::pin(async move {
-						publish(&root, &output, include_saves, &snapshot, files, &cancellation)
-							.await
-					}) as PortFuture<_>
-				});
-				Ok(PreparedExport { files, publish })
+				write_output(&root, &output, &table, files, &cancellation).await
 			}) as PortFuture<_>
 		})
 	}
 }
 
 /// Requires a new output directory outside the environment, so export never copies into its own sources.
-async fn validate_destination(root: &EnvironmentRoot, output: &Path) -> Result<(), ErrorMarker> {
+async fn check_destination(root: &EnvironmentRoot, output: &Path) -> Result<(), ErrorMarker> {
 	if !output.is_absolute() {
 		return Err(report!(ErrorMarker::invalid_data_path()));
 	}
@@ -114,55 +154,51 @@ async fn validate_destination(root: &EnvironmentRoot, output: &Path) -> Result<(
 	Ok(())
 }
 
-async fn capture(
-	root: &EnvironmentRoot,
-	binding: &GameBinding,
+/// Lists every file the game sees except its own Data files: Data winners, the
+/// staged profile INIs, the other profile files, the invalidation archive, and
+/// optionally saves.
+async fn list_sources(
+	prepared: &PreparedLaunch,
+	staged: &Path,
 	include_saves: bool,
 	cancellation: &CancellationToken,
-) -> Result<ExportSnapshot, ErrorMarker> {
-	let execution = EnvironmentAdapter
-		.prepare_execution(root, binding, cancellation)
-		.await?;
-	let profile = &execution.profile_directory;
-	let inis = ProfileIniInputs::read(profile, binding.game_directory().as_path(), cancellation).await?;
-
+) -> Result<Vec<ExportSource>, ErrorMarker> {
 	let mut sources = Vec::new();
-	for (winner, file) in execution.winners.iter().zip(&execution.visible_files) {
+	for (winner, file) in prepared.winners.iter().zip(&prepared.visible_files) {
 		if winner.identity() == ProviderIdentity::SteamData {
 			continue;
 		}
 
 		capture_file(
 			&mut sources,
-			file.physical_path.clone(),
+			ExportOrigin::new(file.physical_path.clone()),
 			format!("Data/{}", file.path),
 			ExportProvider::Data(winner.identity()),
-			None,
 			cancellation,
 		)
 		.await?;
 	}
 
+	let profile = &prepared.profile_directory;
 	for name in PROFILE_FILES.into_iter().chain(["modlist.txt"]) {
-		let Some(bytes) = read_optional(&profile.join(name))
-			.await
-			.context(ErrorMarker::io_failure())?
-		else {
-			continue;
-		};
-
-		let derived = if name.ends_with(".ini") {
-			Some(inis.derive(name, &bytes, ProfileIniPurpose::Export)?)
+		// Staged INIs carry the export routing; each copy keeps its canonical file's time.
+		let path = if name.ends_with(".ini") {
+			staged.join(name)
 		} else {
-			None
+			profile.join(name)
 		};
+		if read_optional(&path).await.context(ErrorMarker::io_failure())?.is_none() {
+			continue;
+		}
 
 		capture_file(
 			&mut sources,
-			profile.join(name),
+			ExportOrigin {
+				path,
+				time_source: profile.join(name),
+			},
 			format!("profile/{name}"),
 			ExportProvider::Profile,
-			derived,
 			cancellation,
 		)
 		.await?;
@@ -170,10 +206,9 @@ async fn capture(
 
 	capture_file(
 		&mut sources,
-		execution.cache_directory.join("Fallout - Invalidation.bsa"),
+		ExportOrigin::new(prepared.cache_directory.join("Fallout - Invalidation.bsa")),
 		"Data/Fallout - Invalidation.bsa".to_owned(),
 		ExportProvider::GeneratedInvalidation,
-		None,
 		cancellation,
 	)
 	.await?;
@@ -182,43 +217,41 @@ async fn capture(
 		capture_saves(&mut sources, &profile.join("saves"), "profile/saves", cancellation).await?;
 	}
 
-	Ok(ExportSnapshot {
-		execution,
-		inis,
-		sources,
-	})
+	Ok(sources)
 }
 
 async fn capture_file(
 	sources: &mut Vec<ExportSource>,
-	path: PathBuf,
+	origin: ExportOrigin,
 	destination: String,
 	provider: ExportProvider,
-	derived: Option<Vec<u8>>,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let metadata = metadata(&path).await.context(ErrorMarker::io_failure())?;
-	if !metadata.is_file() {
+	let file = metadata(&origin.path).await.context(ErrorMarker::io_failure())?;
+	if !file.is_file() {
 		return Err(report!(ErrorMarker::environment_root_unsafe()));
 	}
 
-	let modified = metadata.modified().context(ErrorMarker::io_failure())?;
+	let modified = metadata(&origin.time_source)
+		.await
+		.context(ErrorMarker::io_failure())?
+		.modified()
+		.context(ErrorMarker::io_failure())?;
 
 	let entry = ExportFile {
 		source_id: sources.len(),
 		path: DataRelativePath::new(destination).context(ErrorMarker::invalid_data_path())?,
 		provider,
-		bytes: derived.as_ref().map_or(metadata.len(), |bytes| bytes.len() as u64),
+		bytes: file.len(),
 	};
 
 	sources.push(ExportSource {
-		path,
+		path: origin.path,
 		modified,
-		derived,
 		entry,
 	});
 	Ok(())
@@ -262,10 +295,9 @@ async fn capture_saves(
 		} else {
 			capture_file(
 				sources,
-				child,
+				ExportOrigin::new(child),
 				format!("{destination}/{name}"),
 				ExportProvider::Profile,
-				None,
 				cancellation,
 			)
 			.await?;
@@ -274,11 +306,10 @@ async fn capture_saves(
 	Ok(())
 }
 
-async fn publish(
+async fn write_output(
 	root: &EnvironmentRoot,
 	output: &Path,
-	include_saves: bool,
-	snapshot: &ExportSnapshot,
+	table: &ExportSourceTable,
 	files: Vec<ExportFile>,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
@@ -286,10 +317,10 @@ async fn publish(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	validate_destination(root, output).await?;
+	check_destination(root, output).await?;
 	create_dir(output).await.context(ErrorMarker::io_failure())?;
 
-	let result = copy_files(output, include_saves, snapshot, files, cancellation).await;
+	let result = copy_files(output, table, files, cancellation).await;
 	result.map_err(|mut error| {
 		error.children_mut().push(report!(RetainedExport {
 			path: output.to_owned()
@@ -303,8 +334,7 @@ async fn publish(
 /// Writes every selected file directly into the output directory, in order.
 async fn copy_files(
 	output: &Path,
-	include_saves: bool,
-	snapshot: &ExportSnapshot,
+	table: &ExportSourceTable,
 	files: Vec<ExportFile>,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
@@ -314,7 +344,7 @@ async fn copy_files(
 	create_dir(output.join("profile"))
 		.await
 		.context(ErrorMarker::io_failure())?;
-	if include_saves {
+	if table.include_saves {
 		create_dir(output.join("profile/saves"))
 			.await
 			.context(ErrorMarker::io_failure())?;
@@ -325,7 +355,7 @@ async fn copy_files(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let source = snapshot
+		let source = table
 			.sources
 			.get(entry.source_id)
 			.ok_or_else(|| report!(ErrorMarker::invalid_data_path()))?;
@@ -345,13 +375,9 @@ async fn copy_files(
 			create_dir_all(parent).await.context(ErrorMarker::io_failure())?;
 		}
 
-		if let Some(bytes) = &source.derived {
-			write(&destination, bytes).await.context(ErrorMarker::io_failure())?;
-		} else {
-			copy(&source.path, &destination)
-				.await
-				.context(ErrorMarker::io_failure())?;
-		}
+		copy(&source.path, &destination)
+			.await
+			.context(ErrorMarker::io_failure())?;
 
 		set_modified(&destination, source.modified).await?;
 	}
@@ -378,15 +404,18 @@ async fn set_modified(path: &Path, modified: SystemTime) -> Result<(), ErrorMark
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use application::export::ExportEnvironmentDependencies;
-	use application::export::export_environment;
+	use crate::StagedProfileInis;
+	use application::ports::AdapterState;
+	use application::ports::EnvironmentPlan;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
+	use application::ports::ProfilePurpose;
 	use application::ports::ProfileSource;
+	use application::ports::StagedProfile;
+	use domain::GameBinding;
 	use domain::GameInstallationPath;
 	use std::fs;
 	use tempfile::TempDir;
-	use tokio::runtime::Builder as RuntimeBuilder;
 
 	async fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding, PathBuf), ErrorMarker> {
 		let temp = TempDir::new().context(ErrorMarker::io_failure())?;
@@ -425,72 +454,90 @@ mod tests {
 		Ok((temp, root, binding, parent.join("output")))
 	}
 
-	#[test]
-	fn dry_run_is_read_only_and_saves_are_opt_in() -> Result<(), ErrorMarker> {
-		RuntimeBuilder::new_current_thread()
-			.build()
+	async fn stage(
+		root: &EnvironmentRoot,
+		binding: &GameBinding,
+	) -> Result<(EnvironmentPlan, StagedProfile), ErrorMarker> {
+		let cancellation = CancellationToken::new();
+		let prepared = EnvironmentAdapter.prepare_launch(root, binding, &cancellation).await?;
+		let inis = EnvironmentAdapter
+			.stage_profile_inis(root, &prepared, ProfilePurpose::Export, &cancellation)
+			.await?;
+
+		let staged = StagedProfile {
+			directory: inis.path().to_owned(),
+			state: AdapterState::new(inis),
+		};
+		let plan = EnvironmentPlan {
+			providers: Vec::new(),
+			state: AdapterState::new(prepared),
+		};
+		Ok((plan, staged))
+	}
+
+	async fn discard(staged: StagedProfile) -> Result<(), ErrorMarker> {
+		staged.state
+			.downcast::<StagedProfileInis>()
+			.ok_or_else(|| report!(ErrorMarker::io_failure()))?
+			.discard()
+			.await
+	}
+
+	fn modified(path: &Path) -> Result<SystemTime, ErrorMarker> {
+		fs::metadata(path)
 			.context(ErrorMarker::io_failure())?
-			.block_on(async {
-				let (_temp, root, binding, output) = fixture().await?;
-				let canonical = fs::read(root.as_path().join("profile/Fallout.ini"))
-					.context(ErrorMarker::io_failure())?;
-				let cache = fs::metadata(root.as_path().join("cache/Fallout - Invalidation.bsa"))
+			.modified()
+			.context(ErrorMarker::io_failure())
+	}
+
+	#[tokio::test]
+	async fn listing_covers_the_game_view_except_base_data_and_saves_are_opt_in() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding, _output) = fixture().await?;
+		let canonical =
+			fs::read(root.as_path().join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?;
+		let (plan, staged) = stage(&root, &binding).await?;
+		let list = EnvironmentAdapter.list_export_files_port();
+
+		for saves in [false, true] {
+			let listing = list.call((&plan, &staged, saves, CancellationToken::new())).await?;
+
+			let paths: Vec<_> = listing.files.iter().map(|file| file.path.as_str()).collect();
+			for expected in [
+				"Data/Textures/nested/meta.toml",
+				"Data/Opaque.bsa",
+				"Data/Fallout - Invalidation.bsa",
+				"profile/Fallout.ini",
+				"profile/modlist.txt",
+			] {
+				assert!(paths.contains(&expected), "missing {expected}");
+			}
+			assert!(!paths.iter().any(|path| path.ends_with("FalloutNV.esm")));
+			assert_eq!(paths.contains(&"profile/saves/example.fos"), saves);
+			let ini = listing
+				.files
+				.iter()
+				.find(|file| file.path.as_str() == "profile/Fallout.ini")
+				.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
+			assert_eq!(
+				ini.bytes,
+				fs::metadata(staged.directory.join("Fallout.ini"))
 					.context(ErrorMarker::io_failure())?
-					.modified()
-					.context(ErrorMarker::io_failure())?;
-				for saves in [false, true] {
-					let result = export_environment(
-						ExportEnvironmentDependencies {
-							prepare_export: EnvironmentAdapter
-								.prepare_export_port(root.clone(), binding.clone()),
-						},
-						output.clone(),
-						saves,
-						true,
-						CancellationToken::new(),
-					)
-					.await
-					.context(ErrorMarker::io_failure())?;
-					assert!(!output.exists());
-					assert!(result
-						.files
-						.iter()
-						.any(|file| file.path.as_str() == "Data/Textures/nested/meta.toml"));
-					assert!(result
-						.files
-						.iter()
-						.any(|file| file.path.as_str() == "Data/Opaque.bsa"));
-					assert!(!result
-						.files
-						.iter()
-						.any(|file| file.path.as_str().ends_with("FalloutNV.esm")));
-					assert_eq!(
-						result.files
-							.iter()
-							.any(|file| file.path.as_str() == "profile/saves/example.fos"),
-						saves
-					);
-				}
-				assert_eq!(
-					fs::read(root.as_path().join("profile/Fallout.ini"))
-						.context(ErrorMarker::io_failure())?,
-					canonical
-				);
-				assert_eq!(
-					fs::metadata(root.as_path().join("cache/Fallout - Invalidation.bsa"))
-						.context(ErrorMarker::io_failure())?
-						.modified()
-						.context(ErrorMarker::io_failure())?,
-					cache
-				);
-				assert_eq!(
-					fs::read_dir(root.as_path().join("temp"))
-						.context(ErrorMarker::io_failure())?
-						.count(),
-					0
-				);
-				Ok(())
-			})
+					.len()
+			);
+		}
+
+		discard(staged).await?;
+		assert_eq!(
+			fs::read(root.as_path().join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?,
+			canonical
+		);
+		assert_eq!(
+			fs::read_dir(root.as_path().join("temp"))
+				.context(ErrorMarker::io_failure())?
+				.count(),
+			0
+		);
+		Ok(())
 	}
 
 	#[tokio::test]
@@ -509,66 +556,62 @@ mod tests {
 		fs::write(profile.join("FalloutPrefs.ini"), format!("[General]\r\n{warning}"))
 			.context(ErrorMarker::io_failure())?;
 
-		let snapshot = capture(&root, &binding, false, &CancellationToken::new()).await?;
+		let (_plan, staged) = stage(&root, &binding).await?;
 
-		for name in ["profile/Fallout.ini", "profile/FalloutPrefs.ini"] {
-			let derived = snapshot
-				.sources
-				.iter()
-				.find(|source| source.entry.path.as_str() == name)
-				.and_then(|source| source.derived.as_ref())
-				.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
-			let derived = String::from_utf8(derived.clone()).context(ErrorMarker::io_failure())?;
+		for name in ["Fallout.ini", "FalloutPrefs.ini"] {
+			let derived =
+				fs::read_to_string(staged.directory.join(name)).context(ErrorMarker::io_failure())?;
 			assert!(derived.contains(warning));
 		}
-		Ok(())
+		discard(staged).await
 	}
 
 	#[tokio::test]
 	async fn existing_outputs_and_outputs_inside_the_environment_are_rejected() -> Result<(), ErrorMarker> {
 		let (_temp, root, _binding, output) = fixture().await?;
-		assert!(validate_destination(&root, &root.as_path().join("export"))
-			.await
-			.is_err());
-		assert!(validate_destination(&root, &root.as_path().join("mods/export"))
-			.await
-			.is_err());
-		validate_destination(&root, &output).await?;
+		let validate = EnvironmentAdapter.validate_export_destination_port(root.clone());
+
+		for inside in [root.as_path().join("export"), root.as_path().join("mods/export")] {
+			assert!(validate.call((inside,)).await.is_err());
+		}
+		validate.call((output.clone(),)).await?;
 		fs::create_dir(&output).context(ErrorMarker::io_failure())?;
-		assert!(validate_destination(&root, &output).await.is_err());
+		assert!(validate.call((output,)).await.is_err());
 		Ok(())
 	}
 
 	#[tokio::test]
-	async fn export_writes_bytes_and_times_directly_to_the_output() -> Result<(), ErrorMarker> {
+	async fn export_copies_sources_and_staged_inis_with_source_times() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding, output) = fixture().await?;
-		let cancellation = CancellationToken::new();
-		let snapshot = capture(&root, &binding, true, &cancellation).await?;
-		let files = snapshot.sources.iter().map(|source| source.entry.clone()).collect();
+		let (plan, staged) = stage(&root, &binding).await?;
+		let listing = EnvironmentAdapter
+			.list_export_files_port()
+			.call((&plan, &staged, true, CancellationToken::new()))
+			.await?;
 
-		publish(&root, &output, true, &snapshot, files, &cancellation).await?;
+		EnvironmentAdapter
+			.write_export_port(root.clone())
+			.call((listing.sources, listing.files, output.clone(), CancellationToken::new()))
+			.await?;
 
-		for source in &snapshot.sources {
-			let written = output.join(source.entry.path.as_str());
-			assert_eq!(
-				fs::metadata(&written)
-					.context(ErrorMarker::io_failure())?
-					.modified()
-					.context(ErrorMarker::io_failure())?,
-				source.modified
-			);
-			if let Some(bytes) = &source.derived {
-				assert_eq!(fs::read(&written).context(ErrorMarker::io_failure())?, *bytes);
-			} else {
-				assert_eq!(
-					fs::read(&written).context(ErrorMarker::io_failure())?,
-					fs::read(&source.path).context(ErrorMarker::io_failure())?
-				);
-			}
-		}
+		let opaque = root.as_path().join("overwrite/Opaque.bsa");
+		assert_eq!(
+			fs::read(output.join("Data/Opaque.bsa")).context(ErrorMarker::io_failure())?,
+			b"opaque"
+		);
+		assert_eq!(modified(&output.join("Data/Opaque.bsa"))?, modified(&opaque)?);
+		assert_eq!(
+			fs::read(output.join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?,
+			fs::read(staged.directory.join("Fallout.ini")).context(ErrorMarker::io_failure())?
+		);
+		assert_eq!(
+			modified(&output.join("profile/Fallout.ini"))?,
+			modified(&root.as_path().join("profile/Fallout.ini"))?
+		);
+		assert!(output.join("profile/saves/example.fos").is_file());
 		let ini = fs::read_to_string(output.join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?;
 		assert!(ini.contains("SLocalSavePath=Saves\\"));
 		assert!(ini.contains("sArchiveList=Fallout - Invalidation.bsa, Original.bsa"));
-		Ok(())
+		discard(staged).await
 	}
 }

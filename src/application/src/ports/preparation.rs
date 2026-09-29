@@ -1,6 +1,7 @@
 use crate::ports::AdapterState;
 use crate::ports::PortFuture;
 use domain::ProviderIdentity;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -58,7 +59,22 @@ pub struct StagedProfile {
 	pub state: AdapterState,
 }
 
+/// Report attachment for a staged profile directory kept on disk after a
+/// failure. Each command finds it by type and prints its own recovery advice;
+/// it never formats the raw report tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedProfile {
+	pub path: PathBuf,
+}
+impl fmt::Display for RetainedProfile {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str("staged profile retained")
+	}
+}
+
 pub type PrepareEnvironmentPlan = Arc<dyn Fn(CancellationToken) -> PortFuture<EnvironmentPlan> + Send + Sync>;
 pub type ProjectProfile = Arc<dyn Fn(&EnvironmentPlan) -> PortFuture<ProfileProjection> + Send + Sync>;
 pub type StageProfile =
 	Arc<dyn Fn(&EnvironmentPlan, ProfilePurpose, CancellationToken) -> PortFuture<StagedProfile> + Send + Sync>;
+/// Removes a staged profile that holds no edits to keep.
+pub type DiscardStagedProfile = Arc<dyn Fn(StagedProfile) -> PortFuture<()> + Send + Sync>;
