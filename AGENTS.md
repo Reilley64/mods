@@ -26,6 +26,8 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 
 Rust implementation and review must follow `CODING_STYLE.md`.
 
+Coding-style gate dispositions live in `.prime/agent/coding-style-dispositions.json`, which is git-ignored and never committed. When a PR relies on dispositions, list each accepted finding in the PR description with its file, rule, and reason.
+
 ### Ticket scope
 
 Ticket implementation and review remediation use a frozen scope contract and bounded repair cycle. See `docs/agents/ticket-scope.md`.
