@@ -17,6 +17,60 @@ export interface PerRuleCase {
 
 export const perRuleCases: PerRuleCase[] = [
   {
+    "name": "workflow-port-for-export",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/application/src/export/export_environment.rs",
+    "before": "",
+    "after": "pub struct ExportEnvironmentDependencies {\n\tpub prepare_export: PrepareExport,\n}\n\npub type PrepareExport = Arc<dyn Fn(PathBuf, bool, CancellationToken) -> PortFuture<PreparedExport> + Send + Sync>;\n\npub struct PreparedExport {\n\tpub files: Vec<ExportFile>,\n\tpub publish: PublishExport,\n}"
+  },
+  {
+    "name": "duplicate-port-for-second-use-case",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": true,
+    "path": "src/application/src/ports/conflicts.rs",
+    "before": "",
+    "after": "// ScanEnvironmentConflicts already scans enabled providers for list_conflicts.\npub type ScanConflictsForExplain =\n\tArc<dyn Fn(CancellationToken) -> PortFuture<EnvironmentConflictScan> + Send + Sync>;"
+  },
+  {
+    "name": "neutral-shared-preparation-ports",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/application/src/ports/preparation.rs",
+    "before": "",
+    "after": "pub type PrepareEnvironmentPlan = Arc<dyn Fn(CancellationToken) -> PortFuture<EnvironmentPlan> + Send + Sync>;\npub type ProjectProfile = Arc<dyn Fn(&EnvironmentPlan) -> PortFuture<ProfileProjection> + Send + Sync>;"
+  },
+  {
+    "name": "use-case-specific-final-step",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "train",
+    "expectedViolation": false,
+    "path": "src/application/src/ports/export.rs",
+    "before": "",
+    "after": "/// Only export writes a standalone output directory.\npub type WriteExport = Arc<dyn Fn(Vec<ExportFile>, PathBuf, CancellationToken) -> PortFuture<()> + Send + Sync>;"
+  },
+  {
+    "name": "launch-named-plan-shared-with-export",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "validation",
+    "expectedViolation": true,
+    "path": "src/application/src/export/export_environment.rs",
+    "before": "",
+    "after": "pub struct ExportEnvironmentDependencies {\n\t// The same winner resolution exec uses, still named for launching.\n\tpub prepare_launch_plan: PrepareLaunchPlan,\n\tpub write_export: WriteExport,\n}"
+  },
+  {
+    "name": "reused-neutral-port-in-second-use-case",
+    "ruleId": "application-use-cases-and-ports-reusable-capability-ports",
+    "split": "validation",
+    "expectedViolation": false,
+    "path": "src/application/src/export/export_environment.rs",
+    "before": "",
+    "after": "pub struct ExportEnvironmentDependencies {\n\tpub prepare_environment_plan: PrepareEnvironmentPlan,\n\tpub project_profile: ProjectProfile,\n\tpub write_export: WriteExport,\n}"
+  },
+  {
     "name": "let-else-only-returns-error",
     "ruleId": "control-flow-prefer-option-and-result-combinators",
     "split": "train",

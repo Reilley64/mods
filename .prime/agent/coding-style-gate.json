@@ -25,6 +25,7 @@
     "application-use-cases-and-ports-use-case-declaration-order": 0.075,
     "application-use-cases-and-ports-use-case-parameters": 0.08499999999999999,
     "application-use-cases-and-ports-callable-port-invocation": 0.435,
+    "application-use-cases-and-ports-reusable-capability-ports": 0.5,
     "application-use-cases-and-ports-focused-use-case-orchestration": 0.315,
     "application-use-cases-and-ports-use-case-local-implementation-modules": 0.5750000000000001,
     "cli-arguments-required-positional-arguments-and-optional-named-arguments": 0.5,

@@ -4,9 +4,9 @@
 
 - Source: current `CODING_STYLE.md` and `reviewer.ts` question/state contract.
 - New fixture: `.prime/agent/extensions/coding-style-gate/calibration/per-rule-cases.ts`.
-- 37 rule IDs; 222 individually named review snippets.
+- 38 rule IDs; 228 individually named review snippets.
 - Each rule: two positive and two negative training cases; one positive and one negative validation case.
-- Total training: 148 (74 positive, 74 negative). Total validation: 74 (37 positive, 37 negative).
+- Total training: 152 (76 positive, 76 negative). Total validation: 76 (38 positive, 38 negative).
 - Labels apply **only to `ruleId`**. Other rules can legitimately flag the same snippet.
 - Fixtures are independent authored scenarios, not verbatim rubric examples or imports of the old calibration corpus.
 - The interface is locally declared. There are no imports or live API calls.
@@ -16,7 +16,7 @@
 
 ## Evidence limits and unfilled sub-boundaries
 
-All 37 rules have six supported target-label examples. This does **not** mean every normative clause is covered:
+All 38 rules have six supported target-label examples. This does **not** mean every normative clause is covered:
 
 - Dependency direction: positive examples show forbidden external types directly in domain/application Rust paths. Rust patches alone cannot establish the complete dependency graph, virtual-root workspace status, package inventory, or actual binary composition-root ownership. No evidence-free positives were assigned to those clauses. Run dependency/workspace checks separately.
 - Established crates: positive cases use TOML table parsing, UTF-16 decoding, and asynchronous delay. `toml`, `encoding_rs`, and `tokio` are present in the current workspace dependency declarations. The snippets make those abstractions relevant. Popularity, maintenance status, approval changes, and the full requirement fit still need dependency review; a model cannot infer those facts from an arbitrary Rust patch.
@@ -35,6 +35,10 @@ The CLI rule adds six fixtures covering required positional inputs, optional nam
 ## Option and Result combinator rule
 
 The combinator rule adds six fixtures: `let ... else` and `match` forms that only convert or default, their combinator equivalents, and a `let ... else` whose failure path does cleanup work. Error-wrapping `match` versus `.context(...)` is held out for validation. Its configured threshold is provisionally `0.5`; no live model scoring or threshold fitting has been performed for this rule. The existing calibration results do not include it.
+
+## Reusable capability port rule
+
+The reusable-port rule adds six fixtures: a whole-workflow export port, a near-duplicate conflict-scan port, neutral shared preparation ports, and an export-only final step. A launch-named plan reused by export is held out for validation, with its neutral counterpart. Its configured threshold is provisionally `0.5`; no live model scoring or threshold fitting has been performed for this rule. The existing calibration results do not include it.
 
 ## Preservation and deletion coverage
 
@@ -65,6 +69,7 @@ Every row has `train +2/-2`, `validation +1/-1`. The boundary column identifies 
 | `application-use-cases-and-ports-use-case-declaration-order` | Imports and secondary constants may surround correctly ordered primary items. |
 | `application-use-cases-and-ports-use-case-parameters` | A use case that does not support cancellation need not accept a token. |
 | `application-use-cases-and-ports-callable-port-invocation` | Ordinary local functions still use ordinary function-call syntax. |
+| `application-use-cases-and-ports-reusable-capability-ports` | A step only one use case needs, such as writing export output, may have a use-case-specific port. |
 | `application-use-cases-and-ports-focused-use-case-orchestration` | One-use transformation can remain inline; not every loop needs a module. |
 | `application-use-cases-and-ports-use-case-local-implementation-modules` | Repeated callers justify a precise capability-level helper. |
 | `cli-arguments-required-positional-arguments-and-optional-named-arguments` | A defaulted value is optional even when its Rust field is not `Option<T>`; it needs a named argument. |
