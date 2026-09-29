@@ -405,6 +405,12 @@ INI derivation keeps two purposes. The exported folder is a standalone layout, s
 4. Export prints the same plugin warnings as exec.
 5. Export on macOS and Linux still works, because the projection becomes platform-neutral.
 
+#### Decisions so far
+
+- Export may create missing `meta.toml` for enabled mods (question 1: yes).
+- Shared ports are neutral, composable, and reusable (question 3). CODING_STYLE now has the "Reusable capability ports" rule (main `4cdc383`), so the neutral names above are required.
+- Questions 2 and 4 are waiting for the user's answer.
+
 #### Questions for the user
 
 1. Is export allowed to create missing `meta.toml` (change 2)? The alternative is a read-only flag on `PrepareEnvironmentPlan`, which makes the two commands differ again.
