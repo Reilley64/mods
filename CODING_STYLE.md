@@ -816,7 +816,7 @@ async fn copy(progress: ReportProgress, cancellation: CancellationToken) { /* ..
 
 #### Rule
 
-Use `if` for boolean conditions, `let ... else` for one required pattern with an exiting failure path, and `if let` when behavior depends on one relevant pattern.
+Use `if` for boolean conditions, `let ... else` for one required pattern with an exiting failure path, and `if let` when behavior depends on one relevant pattern. When the failure path only converts to an error or a default, use a combinator instead; see "Prefer Option and Result combinators".
 
 #### Violation
 
@@ -909,6 +909,36 @@ if let Some(value) = value {
 	use_value(value);
 }
 ```
+
+### Prefer Option and Result combinators
+
+
+#### Rule
+
+When a branch only converts, forwards, or defaults an `Option` or `Result`, write it as a combinator chain with `?`, such as `ok_or`, `ok_or_else`, `map`, `map_err`, `and_then`, `unwrap_or`, or `.context(...)`, instead of `match`, `if let`, or `let ... else`. Keep a conditional when a branch has side effects or does more than one conversion, or when the chain would need nested closures that are harder to read. Error conversions still follow "Preserve causes at owned boundaries": attach context and never discard the source error.
+
+#### Violation
+
+A `match`, `if let`, or `let ... else` only turns `None` or an error into another error or a default value, where a combinator chain expresses the same logic.
+
+#### Compliant
+
+Pure conversions use combinators and `?`. Conditionals remain for branches with real work in them.
+
+#### Bad example
+
+```rust
+let Some(native) = self.native else {
+	return Err(report!(ExecutionError));
+};
+```
+
+#### Good example
+
+```rust
+let native = self.native.ok_or_else(|| report!(ExecutionError))?;
+```
+
 
 ## Functions and tests
 
