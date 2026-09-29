@@ -1539,28 +1539,50 @@ pub(crate) fn parse_modlist(bytes: &[u8]) -> Result<Vec<InstalledMod>, ErrorMark
 		if !seen.insert(name.comparison_key().to_owned()) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
-		let priority = u32::try_from(entries.len()).context(ErrorMarker::environment_invalid(None))?;
-		entries.push(InstalledMod {
-			name,
-			priority: ModPriority::new(priority),
-			enabled,
-		});
+		entries.push((name, enabled));
 	}
-	Ok(entries)
+
+	// MO2 lists the highest Mod Priority first. Return mods from lowest to highest.
+	entries.into_iter()
+		.rev()
+		.enumerate()
+		.map(|(priority, (name, enabled))| {
+			let priority = u32::try_from(priority).context(ErrorMarker::environment_invalid(None))?;
+			Ok(InstalledMod {
+				name,
+				priority: ModPriority::new(priority),
+				enabled,
+			})
+		})
+		.collect()
 }
 
-pub(crate) fn append_disabled_mod(bytes: &[u8], name: &ModName) -> Result<Vec<u8>, ErrorMarker> {
+/// Inserts a new disabled mod at the highest Mod Priority.
+///
+/// MO2 lists the highest priority first, so the entry goes before the first
+/// non-comment line. Leading `#` comments, the BOM, and existing separators stay.
+pub(crate) fn insert_disabled_mod(bytes: &[u8], name: &ModName) -> Result<Vec<u8>, ErrorMarker> {
 	parse_modlist(bytes)?;
 	let bom_length = usize::from(bytes.starts_with(UTF8_BOM)) * UTF8_BOM.len();
 	let body = &bytes[bom_length..];
 	let separator = last_separator(body).unwrap_or(b"\r\n");
-	let mut result = bytes.to_vec();
-	if !body.is_empty() && !body.ends_with(b"\n") {
+
+	let mut insertion = bom_length;
+	for line in body.split_inclusive(|byte| *byte == b'\n') {
+		if !line.starts_with(b"#") {
+			break;
+		}
+		insertion += line.len();
+	}
+
+	let mut result = bytes[..insertion].to_vec();
+	if insertion > bom_length && !result.ends_with(b"\n") {
 		result.extend_from_slice(separator);
 	}
 	result.push(b'-');
 	result.extend_from_slice(name.as_str().as_bytes());
 	result.extend_from_slice(separator);
+	result.extend_from_slice(&bytes[insertion..]);
 	Ok(result)
 }
 
@@ -1590,7 +1612,9 @@ mod tests {
 	use super::ProviderKind;
 	use super::assess_installation;
 	use super::collect_entries_inner;
+	use super::insert_disabled_mod;
 	use super::load;
+	use super::parse_modlist;
 	use super::validate_provider;
 	use super::validate_provider_directory;
 	use super::visible_plugins;
@@ -1639,6 +1663,27 @@ mod tests {
 	use std::result::Result as StdResult;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
+
+	#[test]
+	fn new_mods_are_inserted_at_the_top_after_leading_comments() {
+		let name = ModName::new("New".to_owned()).expect("mod name must be valid");
+		for (current, expected) in [
+			(&b""[..], &b"-New\r\n"[..]),
+			(
+				b"\xef\xbb\xbf# header\n+High\n+Base\n",
+				b"\xef\xbb\xbf# header\n-New\n+High\n+Base\n",
+			),
+			(b"# one\r\n# two\r\n+Base", b"# one\r\n# two\r\n-New\r\n+Base"),
+			(b"# only", b"# only\r\n-New\r\n"),
+			(b"+Base\r\n", b"-New\r\n+Base\r\n"),
+		] {
+			let updated = insert_disabled_mod(current, &name).expect("modlist must update");
+
+			assert_eq!(updated, expected);
+			let installed = parse_modlist(&updated).expect("updated modlist must parse");
+			assert_eq!(installed.last().map(|installed| installed.name.as_str()), Some("New"));
+		}
+	}
 
 	#[test]
 	fn snapshot_resource_caps_are_deliberate() {

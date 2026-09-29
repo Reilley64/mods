@@ -9,7 +9,7 @@ use crate::safe_fs::read_bounded;
 use crate::safe_fs::sync_tree;
 use crate::safe_fs::validate_exact_entries;
 use crate::snapshot::MAX_PROVIDER_ENTRIES;
-use crate::snapshot::append_disabled_mod;
+use crate::snapshot::insert_disabled_mod;
 use crate::snapshot::load_during_publication;
 use crate::snapshot::validate_prospective_namespace;
 use crate::snapshot::validate_staged_provider;
@@ -225,7 +225,7 @@ impl InstallationTransaction {
 				ErrorMarker::transaction_failure().with_phase("publication"),
 				cancellation,
 			)?;
-			let intended_modlist = append_disabled_mod(&current_modlist, &self.approved.plan.mod_name)?;
+			let intended_modlist = insert_disabled_mod(&current_modlist, &self.approved.plan.mod_name)?;
 			staged_profile
 				.write_new("modlist.txt", &intended_modlist)
 				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
@@ -308,7 +308,7 @@ fn validate_intent(installed: &[InstalledMod], plan: &InstallPlan) -> Result<(),
 				|| plan.projected_state.mod_name != plan.mod_name
 				|| plan.projected_state.enabled
 				|| plan.projected_state.priority.get() != expected
-				|| plan.projected_state.list_position != u64::from(expected)
+				|| plan.projected_state.list_position != 0
 			{
 				return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 			}
@@ -317,7 +317,8 @@ fn validate_intent(installed: &[InstalledMod], plan: &InstallPlan) -> Result<(),
 			if plan.projected_state.mode != InstallMode::Replacement
 				|| plan.mod_name.as_str() != existing.name.as_str()
 				|| plan.projected_state.mod_name != existing.name
-				|| plan.projected_state.list_position != u64::from(existing.priority.get())
+				|| plan.projected_state.list_position
+					!= (installed.len() - 1 - existing.priority.get() as usize) as u64
 				|| plan.projected_state.enabled != existing.enabled
 				|| plan.projected_state.priority != existing.priority
 			{
@@ -712,7 +713,7 @@ mod tests {
 					},
 					mod_name,
 					priority: ModPriority::new(priority),
-					list_position: u64::from(priority),
+					list_position: 0,
 					enabled,
 					overlaps: Vec::new(),
 				},
@@ -894,6 +895,29 @@ mod tests {
 			.expect("temp must read")
 			.next()
 			.is_none());
+	}
+
+	#[test]
+	fn new_install_takes_the_top_of_an_mo2_ordered_modlist() {
+		let parent = temp_dir();
+		let root = initialized_environment(&parent);
+		fs::create_dir(root.as_path().join("mods/Base")).expect("existing mod must exist");
+		fs::write(root.as_path().join("profile/modlist.txt"), b"# header\r\n+Base\r\n")
+			.expect("modlist must write");
+		let archive = parent.path().join("new.zip");
+		fs::write(&archive, b"archive").expect("archive fixture must exist");
+
+		install(
+			&root,
+			approved_installation(&archive, "New", false, false, 1, "file.txt"),
+			"file.txt",
+			b"contents",
+		);
+
+		assert_eq!(
+			fs::read(root.as_path().join("profile/modlist.txt")).expect("modlist must read"),
+			b"# header\r\n-New\r\n+Base\r\n"
+		);
 	}
 
 	#[test]

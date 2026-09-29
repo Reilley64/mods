@@ -45,7 +45,7 @@ The case-insensitively unique name that identifies a Data Mod in its directory n
 _Avoid_: Mod ID, opaque identifier
 
 **Mod Priority**:
-The zero-based position of a Data Mod in the complete low-to-high `modlist.txt` order. Only enabled Data Mods participate in the Virtual Game View; Overwrite has a separate implicit highest rank.
+The zero-based rank of a Data Mod in the complete `modlist.txt`, which uses Mod Organizer 2 order: the first listed mod has the highest priority and the last listed mod has priority 0. Game Data is always lowest. Only enabled Data Mods participate in the Virtual Game View; Overwrite has a separate implicit highest rank.
 _Avoid_: Plugin load order, dependency rank
 
 **File Conflict**:

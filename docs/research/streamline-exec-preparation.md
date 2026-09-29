@@ -143,6 +143,23 @@ The gate remains non-clean. The CLI crate now enables `fn_traits`, so `runner.rs
 | `src/application/src/execution/execute_program.rs` | Cancellation propagation and checkpoints; Test public behavior; Use-case parameters | Close-port removal: accepted. The checkpoint after file-system creation is still an inline guard owned by the use case, as the parent contract requires. The test fixture's drop recorder shows that the use case drops the handle; it does not inspect adapter internals. Dependencies stay first and cancellation stays last. |
 | `src/application/src/ports/execution.rs`, `native.rs` | Use-case parameters | Close-port removal: accepted as inapplicable. Only a port type and its adapter were removed. |
 
+## MO2 modlist order
+
+The user approved reading `profile/modlist.txt` in Mod Organizer 2 order. The first listed mod has the highest Mod Priority and the last has priority 0. Overwrite stays implicitly highest and game Data lowest. There is no migration: an existing list written in the old low-to-high order now reads with the order reversed.
+
+- `snapshot::parse_modlist` (strict preparation, installation state, export) and `conflict_scan::parse_modlist` (conflict list, inspect, explain, and installation previews) collect entries in file order. They then return them lowest priority first, with priority = rank from the end of the file. Exec's inventory uses the strict parser. Every caller that iterates installed mods therefore keeps its low-to-high order.
+- `insert_disabled_mod` (renamed from `append_disabled_mod`) puts a new disabled mod before the first non-comment line, after any leading `#` lines. It keeps the BOM and reuses the file's last separator. New installs still get priority = number of installed mods, which is now the highest.
+- `ProjectedModState.list_position` now counts from the top of `modlist.txt`: a new install is at 0, and a replacement keeps its current line. The installation use case and transaction intent validation both use this meaning. The install preview prints this field.
+- `CONTEXT.md` (Mod Priority) and the skill references `execution.md` and `installation.md` describe the new order.
+- New tests:
+  - `first_listed_mod_wins_in_an_mo2_ordered_modlist`: a comment header, `+High` first, `+Base` last, and a conflicting `shared.txt`. `High` wins in both launch and strict preparation.
+  - `modlist_lists_the_highest_priority_first`: conflict scan priorities.
+  - `new_mods_are_inserted_at_the_top_after_leading_comments`: BOM, LF and CRLF, comment-only, and empty lists.
+  - `new_install_takes_the_top_of_an_mo2_ordered_modlist`: publication.
+  - `list_position_counts_from_the_top_of_the_mo2_modlist`: new and replacement previews.
+- Test fixtures with more than one mod now list the higher-priority mods first. They keep the same resulting priorities.
+- Gate findings on this diff: Use-case parameters (≤0.10) in `conflict_scan.rs`, `transactions.rs`, and `execution_preparation.rs`. Accepted as inapplicable: the changes are infrastructure parsers, a writer, intent validation, and test functions, and no signature changed apart from the `insert_disabled_mod` rename. A transient Phase spacing finding on `snapshot.rs` cleared after the parser was split into collection and priority-assignment blocks.
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

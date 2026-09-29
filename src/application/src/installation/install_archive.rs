@@ -339,10 +339,13 @@ pub async fn install_archive(
 			.position(|candidate| candidate.name == installed.name)
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))
 			.context(InstallArchiveError)?;
+		// MO2 lists the highest Mod Priority first, so the list position counts
+		// from the top of `modlist.txt`.
+		let list_position = state.installed_mods.len() - 1 - position;
 		(
 			InstallMode::Replacement,
 			installed.priority,
-			position as u64,
+			list_position as u64,
 			installed.enabled,
 		)
 	} else {
@@ -354,12 +357,7 @@ pub async fn install_archive(
 			.map_or(Some(0), |priority| priority.checked_add(1))
 			.ok_or_else(|| report!(ErrorMarker::ambiguous_install_plan()))
 			.context(InstallArchiveError)?;
-		(
-			InstallMode::NewInstall,
-			ModPriority::new(priority),
-			state.installed_mods.len() as u64,
-			false,
-		)
+		(InstallMode::NewInstall, ModPriority::new(priority), 0, false)
 	};
 	let source_basename = archive
 		.as_path()
@@ -591,7 +589,10 @@ mod tests {
 	use domain::InstallCandidate;
 	use domain::InstallCandidateOrigin;
 	use domain::InstallationPhase;
+	use domain::InstalledMod;
 	use domain::InvalidModName;
+	use domain::ModName;
+	use domain::ModPriority;
 	use domain::OptionFileTrigger;
 	use domain::Participation;
 	use domain::ProviderIdentity;
@@ -1964,6 +1965,57 @@ mod tests {
 		assert_eq!(marker.group_id(), Some("missing"));
 		assert_eq!(marker.option_id(), Some("unknown"));
 		assert_eq!(marker.supplied_sequence(), Some(1));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn list_position_counts_from_the_top_of_the_mo2_modlist() -> Result<()> {
+		let installed_mods = vec![
+			InstalledMod {
+				name: ModName::new("Base".to_owned())?,
+				priority: ModPriority::new(0),
+				enabled: false,
+			},
+			InstalledMod {
+				name: ModName::new("Top".to_owned())?,
+				priority: ModPriority::new(1),
+				enabled: false,
+			},
+		];
+		for (mod_name, replace, priority, list_position) in [(None, false, 2, 0), (Some("Base"), true, 0, 1)] {
+			let mut dependencies =
+				dependencies(Arc::new(Mutex::new(Vec::new())), false, Arc::new(AtomicUsize::new(0)));
+			let installed_mods = installed_mods.clone();
+			dependencies.load_installation_state = Arc::new(move |_, _| {
+				let installed_mods = installed_mods.clone();
+				Box::pin(async move {
+					Ok(InstallationState {
+						game_binding: binding(),
+						installed_mods,
+						current_winners: HashMap::new(),
+						file_dependencies: HashMap::new(),
+					})
+				}) as PortFuture<_>
+			});
+			let mod_name = mod_name.map(|name| ModName::new(name.to_owned())).transpose()?;
+
+			let output = install_archive(
+				dependencies,
+				ArchivePath::new(temp_dir().join("Plain Mod.zip"))?,
+				mod_name,
+				replace,
+				Vec::new(),
+				true,
+				CancellationToken::new(),
+			)
+			.await?;
+
+			let InstallArchiveOutput::Preview(preview) = output else {
+				return Err(report!("expected preview"));
+			};
+			assert_eq!(preview.plan.projected_state.priority, ModPriority::new(priority));
+			assert_eq!(preview.plan.projected_state.list_position, list_position);
+		}
 		Ok(())
 	}
 

@@ -13,7 +13,7 @@ mods --environment 'D:\Mod Environments\Mojave' conflicts explain 'textures\weap
 - `explain PATH` takes a **Data-relative** file path, not an absolute path or a `Data\`-prefixed path. It reports the effective result, provider stack, Tombstone effects, reasons, comparisons, and problems.
 - All three support optional `--compare-content` for SHA-256 comparisons. Without it content is not compared. States include `not_compared`, `same_sha256`, `different_sha256`, `unavailable`, and `unstable`. Matching bytes are not a game-compatibility guarantee.
 
-A **File Conflict** is two or more unsuppressed active non-base providers with ordinary files at the same case-insensitive Data-relative path. **Mod Priority** is the zero-based complete low-to-high `modlist.txt` order, not plugin load order. Only enabled Data Mods participate; **Overwrite** has implicit highest priority. Physical BSA files are opaque ordinary files; their internal members are not analyzed.
+A **File Conflict** is two or more unsuppressed active non-base providers with ordinary files at the same case-insensitive Data-relative path. **Mod Priority** follows Mod Organizer 2 `modlist.txt` order: the first listed mod has the highest priority and the last has the lowest. It is not plugin load order. Only enabled Data Mods participate; **Overwrite** has implicit highest priority. Physical BSA files are opaque ordinary files; their internal members are not analyzed.
 
 A **Tombstone** is provider-owned metadata suppressing a lower file or inclusive subtree in analysis without supplying a file. If no higher file overrides it, analysis can report an absent effective path. This does not delete Steam Data and does not guarantee runtime suppression.
 

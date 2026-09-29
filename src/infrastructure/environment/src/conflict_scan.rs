@@ -296,7 +296,7 @@ fn parse_modlist(bytes: &[u8]) -> (Vec<InstalledMod>, Vec<ConflictProblem>) {
 			}],
 		);
 	};
-	let mut installed = Vec::new();
+	let mut listed = Vec::new();
 	let mut seen = HashSet::new();
 	for raw_line in text.split('\n') {
 		let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
@@ -327,7 +327,13 @@ fn parse_modlist(bytes: &[u8]) -> (Vec<InstalledMod>, Vec<ConflictProblem>) {
 			problems.push(modlist_problem());
 			continue;
 		}
-		let Ok(priority) = u32::try_from(installed.len()) else {
+		listed.push((name, enabled));
+	}
+
+	// MO2 lists the highest Mod Priority first. Return mods from lowest to highest.
+	let mut installed = Vec::with_capacity(listed.len());
+	for (priority, (name, enabled)) in listed.into_iter().rev().enumerate() {
+		let Ok(priority) = u32::try_from(priority) else {
 			problems.push(modlist_problem());
 			continue;
 		};
@@ -895,7 +901,7 @@ mod tests {
 		fs::write(root.as_path().join("overwrite/textures/shared.dds"), b"overwrite")?;
 		fs::write(
 			root.as_path().join("profile/modlist.txt"),
-			b"+Low\r\n-Disabled\n+High\r\n",
+			b"+High\r\n-Disabled\n+Low\r\n",
 		)?;
 
 		let completed = scan(root.as_path(), &binding, &CancellationToken::new()).expect("scan must complete");
@@ -969,6 +975,18 @@ mod tests {
 				.any(|problem| problem.kind == ConflictProblemKind::InvalidTombstoneMetadata));
 		}
 		Ok(())
+	}
+
+	#[test]
+	fn modlist_lists_the_highest_priority_first() {
+		let (installed, problems) = parse_modlist(b"# Mod Organizer header\r\n+High\r\n-Disabled\r\n+Base\r\n");
+
+		assert!(problems.is_empty());
+		let priorities: Vec<_> = installed
+			.iter()
+			.map(|installed| (installed.name.as_str(), installed.priority.get()))
+			.collect();
+		assert_eq!(priorities, [("Base", 0), ("Disabled", 1), ("High", 2)]);
 	}
 
 	#[test]
