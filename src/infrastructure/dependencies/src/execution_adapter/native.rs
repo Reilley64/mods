@@ -308,6 +308,7 @@ fn project_execution_profile(plan: &LaunchPlan) -> Result<ExecutionProfileProjec
 			path: file.path.clone(),
 		})
 		.collect();
+
 	let mut profile = build_profile_configuration(ProfileConfigurationInput {
 		files: &profile_files,
 		visible_files: &visible_files,

@@ -16,6 +16,7 @@ impl Resources {
 				let environment = environment.clone();
 				let root = root.clone();
 				let binding = binding.clone();
+
 				Box::pin(async move {
 					let binding = validate.call((binding, cancellation.clone())).await?;
 

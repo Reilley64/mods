@@ -339,6 +339,14 @@ Consequence: export drops its separate strict `prepare_execution` / `PreparedExe
 
 Export-only concerns that stay after the split: the output must not be inside the environment, `--include-saves`, and `--dry-run`.
 
+### Decisions on the tokio::fs follow-ups
+
+- Walk timing accepted: the exec inventory walk over 20,000 files went from a median of 21.0 ms to 27.6 ms with tokio::fs.
+- Walk resource limits stay removed: mod count, entry budget, and depth. A link cycle stops only when the OS reports an error.
+- Init and install drop staging and write directly into their destination directories. If nothing stages any more, the pending-operation refusal has nothing to detect; the writer reports whether any of it remains.
+- `--cwd` gets help text describing the game-directory default.
+- Gate dispositions will match on file content hash as well as file and rule.
+
 ## Execution cost map and optimization candidates
 
 The detailed read-only trace below explains the installed revision. Source-derived costs are hypotheses, not measured Windows bottlenecks.

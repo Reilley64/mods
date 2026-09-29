@@ -186,7 +186,7 @@ Part 1 gate dispositions:
 | `settings/src/manifest_writer.rs`, `settings/src/layout.rs`, `game_platform/src/steam/libraries.rs` | Language-neutral review priorities | Accepted. Removing staging, flushes, source comparison, and link/reparse rejection is the user's explicit decision. Git rollback covers recovery. It is not a terseness trade. |
 | `settings/src/*`, `game_platform/src/*`, `dependencies/src/export_environment.rs`, `cli/src/runner.rs`, `cli/src/main.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure adapters, ports, and composition. Cancellation stays last where present. |
 | `dependencies/src/set_game_directory.rs` | Callable port invocation | Accepted as a false positive. It calls inherent adapter factory methods, not an application port. |
-| `settings/src/lib.rs`, `settings/src/layout.rs`, `game_platform/src/steam/validation.rs`, `game_platform/src/profile_sources.rs` | Phase spacing; Narrow custom implementations | Accepted. The checks are direct `tokio::fs` calls grouped per validation step. No general-purpose facility is added. |
+| `settings/src/lib.rs`, `settings/src/layout.rs`, `game_platform/src/steam/validation.rs`, `game_platform/src/profile_sources.rs` | Narrow custom implementations | Accepted. The checks are direct `tokio::fs` calls grouped per validation step. No general-purpose facility is added. Phase spacing in these files is fixed; see the `exec --cwd` help section. |
 
 ### Part 2: environment and callers
 
@@ -242,7 +242,6 @@ Part 2 gate dispositions:
 | `environment/src/files.rs`, `lib.rs`, `profile.rs`, `transactions.rs`, `conflict_scan.rs`, `export.rs`, `execution_preparation.rs`, `native.rs` | Narrow custom implementations | Accepted. `files.rs` has two small helpers over `tokio::fs::read` and `read_dir` that replace the larger `safe_fs.rs`. The rest are direct `tokio::fs` calls. |
 | `environment/src/lib.rs`, `execution_preparation.rs`, `transactions.rs` | Choose the narrow conditional form | Accepted. The flagged `match` statements have three arms (found, `NotFound`, other error) with different results; one `if let` cannot express them. |
 | `environment/src/conflict_scan.rs`, `snapshot.rs`, `transactions.rs` | Guard clauses | Accepted. The flagged code keeps the original structure: the `temp` check nests the two access modes, and loops `continue` past unrelated entries before one check that returns. |
-| Environment modules, `native.rs` | Phase spacing | Accepted. Blank lines separate the read, validate, and write phases. Long `.await` chains keep one operation together. |
 | `game_platform/src/profile_sources.rs` | Match only for multi-way logic (Part 1, 0.55) | Fixed. The two-arm `Option` match is now an `if let`. |
 
 The new "Prefer Option and Result combinators" rule was applied to the code written after it arrived: `derived_profile.rs` (deleted child INI) and `transactions.rs` (split of the staged path) use `ok_or_else(...)?`. Three-way `NotFound` matches and `let`-`else` branches that `continue` stay conditionals.
@@ -264,10 +263,18 @@ Gate dispositions for this change:
 | --- | --- | --- |
 | `environment/src/transactions.rs`, `lib.rs`, `snapshot.rs`, `profile.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are adapter internals; `CancellationToken` stays last. |
 | `environment/src/transactions.rs`, `snapshot.rs` | Language-neutral review priorities; Readability before secondary cleanup | Accepted. Removing staging is the user's explicit decision, not a terseness trade. The install flow is now one straight sequence of writes. |
-| `environment/src/snapshot.rs` | Phase spacing | Accepted. Blank lines separate the load, write, and check phases. |
 | `environment/src/transactions.rs`, `lib.rs` | Test public behavior | Accepted. The remaining tests drive `InstallationTransaction` and the initialization port and assert files on disk. |
 
 The combinator rule is applied in `finish_committed_installation`, which checks the installed mod with `find`, `filter`, and `ok_or_else(...)?`.
+
+### `exec --cwd` help and Phase spacing pass
+
+- `mods exec --help` now describes `--cwd`: "Working directory for the program; defaults to the bound game installation directory. Program lookup still uses the caller's directory and PATH". The text comes from the field's doc comment in `commands.rs`. There were no help snapshot tests; the new test `exec_help_describes_the_working_directory_default` checks both parts of the text.
+- Phase spacing: blank lines were added at phase changes in each file that the branch gate flagged for this rule. The files are `environment` (`conflict_scan.rs`, `derived_profile.rs`, `execution_preparation.rs`, `execution_preparation/inventory.rs`, `export.rs`, `lib.rs`, `manifest.rs`, `profile.rs`, `profile_activation.rs`, `snapshot.rs`, `transactions.rs`), `settings` (`lib.rs`, `layout.rs`, `manifest_writer.rs`), `game_platform` (`steam/validation.rs`, `profile_sources.rs`), `dependencies` (`export_environment.rs`, `execution_adapter.rs`, `execution_adapter/native.rs`), and `application/src/execution/execute_program.rs`. Only blank lines changed. The per-edit gate reviews after these edits report no Phase spacing finding. The full-branch review still reports Phase spacing at 0.21 to 0.44 in most of the same files, so the finding is not cleared there. `profile_activation.rs` no longer appears. The Part 2 and no-staging rows are replaced by this row:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `settings/src/lib.rs`, `layout.rs`, `manifest_writer.rs`; `environment/src/lib.rs`, `transactions.rs`, `execution_preparation.rs`, `execution_preparation/inventory.rs`, `conflict_scan.rs`, `snapshot.rs`, `derived_profile.rs`, `profile.rs`, `export.rs`, `manifest.rs`; `game_platform/src/steam/validation.rs`, `profile_sources.rs`; `dependencies/src/export_environment.rs`, `execution_adapter.rs`, `execution_adapter/native.rs`; `application/src/execution/execute_program.rs` | Phase spacing (full-branch review, 0.21 to 0.44) | Accepted after one fix pass. Blank lines now separate guards, acquisition, transformation, writes, and output in the changed functions, and the per-edit reviews of these files are clean. The full-branch review gives no line numbers. The remaining finding cannot be traced to a specific block; adding more blank lines would split statements that form one operation. |
 
 ## INI text lines without an assignment
 

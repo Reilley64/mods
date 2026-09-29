@@ -195,6 +195,7 @@ async fn validate_profile_mode(
 	if !canonical_profile_routing_valid("Fallout.ini", &text) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
+
 	for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
 		let Some(bytes) = read_optional(&profile.join(name))
 			.await
@@ -207,6 +208,7 @@ async fn validate_profile_mode(
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
+
 	for (name, utf8) in [("plugins.txt", false), ("loadorder.txt", true)] {
 		let Some(bytes) = read_optional(&profile.join(name))
 			.await
@@ -287,6 +289,7 @@ pub(crate) async fn update_plugin_lists(
 	let plugins_bytes = read_regular_file(&profile, "plugins.txt", cancellation).await?;
 	let plugins_text = decode_active_code_page(&plugins_bytes)?;
 	let plugins_output = remove_unavailable_lines(&plugins_text, &unavailable);
+
 	if plugins_output != plugins_text {
 		let bytes = encode_active_code_page(&plugins_output)?;
 		write(profile.join("plugins.txt"), &bytes)

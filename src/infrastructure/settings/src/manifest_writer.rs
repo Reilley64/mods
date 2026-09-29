@@ -30,6 +30,7 @@ pub(crate) async fn replace_validated(
 	}
 
 	refuse_unfinished_operation_in_temp(&root.join("temp"), SettingsAccess::Mutation).await?;
+
 	if !validate(contents) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}

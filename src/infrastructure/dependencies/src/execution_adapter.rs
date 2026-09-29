@@ -90,14 +90,17 @@ impl ExecutionAdapter {
 					{
 						let dispatcher = get_default(Clone::clone);
 						let span = Span::current();
+
 						spawn_blocking(move || {
 							with_default(&dispatcher, || {
 								let _entered = span.enter();
+
 								let runtime = Builder::new_current_thread()
 								.enable_time()
 								.build()
 								.context(ErrorMarker::execution_supervision_failed())
 								.context(ExecuteProgramError)?;
+
 								runtime.block_on(execute_program(
 									self.dependencies(),
 									self.binding.clone(),

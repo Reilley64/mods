@@ -307,6 +307,7 @@ impl EnvironmentAdapter {
 				}
 				continue;
 			};
+
 			let text = match name {
 				"plugins.txt" => decode_active_code_page(&bytes)?,
 				"loadorder.txt" => from_utf8(&bytes)
@@ -314,6 +315,7 @@ impl EnvironmentAdapter {
 					.to_owned(),
 				_ => decode(&bytes).context(ErrorMarker::environment_invalid(None))?.0,
 			};
+
 			if ["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"].contains(&name)
 				&& !canonical_profile_routing_valid(name, &text)
 			{
@@ -328,6 +330,7 @@ impl EnvironmentAdapter {
 
 		let data_directory = effective_binding.game_directory().as_path().join("Data");
 		let inventory = ExecutionInventory::read(root.as_path(), &data_directory, cancellation).await?;
+
 		let mut providers = vec![ExecutionProvider {
 			identity: ProviderIdentity::SteamData,
 			root: data_directory.clone(),
@@ -359,6 +362,7 @@ impl EnvironmentAdapter {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
+
 			let provider = provider_roots
 				.get(&winner.identity())
 				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;

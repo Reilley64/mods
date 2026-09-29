@@ -169,7 +169,9 @@ impl InstallationTransaction {
 			let current_modlist = read(&modlist)
 				.await
 				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+
 			let intended_modlist = insert_disabled_mod(&current_modlist, &self.approved.plan.mod_name)?;
+
 			write(&modlist, &intended_modlist)
 				.await
 				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
@@ -198,6 +200,7 @@ async fn create_mod_file(
 	for component in parents {
 		directory = open_or_create_exact(&directory, component, cancellation).await?;
 	}
+
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled().with_phase("publication")));
 	}
@@ -389,6 +392,7 @@ async fn finish_committed_installation(
 	)
 	.await
 	.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+
 	snapshot.installed_mods
 		.iter()
 		.find(|installed| installed.name == plan.mod_name)

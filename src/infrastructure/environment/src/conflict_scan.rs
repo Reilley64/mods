@@ -60,6 +60,7 @@ pub(crate) async fn scan(
 	{
 		return Err(report!(ErrorMarker::environment_not_initialized()));
 	}
+
 	let profile = required_directory(root_path, "profile").await?;
 	let mods = required_directory(root_path, "mods").await?;
 	let overwrite = required_directory(root_path, "overwrite").await?;
@@ -322,6 +323,7 @@ async fn enumerate_mod_directories(
 			problems.push(modlist_problem());
 			continue;
 		};
+
 		if !metadata(entry.path())
 			.await
 			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
@@ -451,6 +453,7 @@ async fn scan_provider_directory(
 		let metadata = metadata(entry.path())
 			.await
 			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
+
 		let is_directory = metadata.is_dir();
 		if keys.insert(path.comparison_key().to_owned(), is_directory).is_some() {
 			problems.push(path_problem(ConflictProblemKind::InternalKeyCollision, &path));

@@ -52,8 +52,10 @@ impl GamePlatformAdapter {
 			#[cfg(test)]
 			KnownFolderSource::Fixed(folders) => folders,
 		};
+
 		let documents = optional_directory(&folders.documents, &["My Games", "FalloutNV"]).await?;
 		let local = optional_directory(&folders.local_app_data, &["FalloutNV"]).await?;
+
 		let specifications = [
 			("Fallout.ini", documents.as_ref()),
 			("FalloutPrefs.ini", documents.as_ref()),
@@ -64,6 +66,7 @@ impl GamePlatformAdapter {
 			("loadorder.txt", local.as_ref()),
 			("Plugins.fnvviewsettings", local.as_ref()),
 		];
+
 		let mut files = Vec::with_capacity(specifications.len());
 		for (name, directory) in specifications {
 			if cancellation.is_cancelled() {

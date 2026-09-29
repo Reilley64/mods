@@ -27,6 +27,7 @@ impl ProfileActivation {
 		let plugin_bytes = read(profile.join("plugins.txt"))
 			.await
 			.context(ErrorMarker::environment_invalid(None))?;
+
 		let plugin_text = decode_active_code_page(&plugin_bytes)?;
 		let mut active_plugins = plugin_text
 			.split_terminator("\r\n")

@@ -49,6 +49,7 @@ async fn open_validated(path: &Path) -> Result<ValidatedGameInstallation, ErrorM
 
 	require_directory(steamapps_path).await?;
 	require_directory(common_path).await?;
+
 	let game = metadata(path).await.map_err(|error| {
 		let marker = if error.kind() == ErrorKind::NotFound {
 			ErrorMarker::game_install_not_found()
@@ -60,10 +61,12 @@ async fn open_validated(path: &Path) -> Result<ValidatedGameInstallation, ErrorM
 	if !game.is_dir() {
 		return Err(report!(ErrorMarker::game_install_invalid()));
 	}
+
 	let canonical_game = canonicalize(path).await.context(ErrorMarker::game_install_invalid())?;
 
 	require_file(&path.join("FalloutNV.exe")).await?;
 	require_file(&path.join("Fallout_default.ini")).await?;
+
 	let mut data = read_dir(path.join("Data"))
 		.await
 		.context(ErrorMarker::game_install_invalid())?;

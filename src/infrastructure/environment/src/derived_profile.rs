@@ -185,6 +185,7 @@ impl ExecutionInis {
 			let derived = source
 				.map(|bytes| self.inputs.derive(name, bytes, ProfileIniPurpose::Execution))
 				.transpose()?;
+
 			if let Some(bytes) = &derived {
 				write(self.path.join(name), bytes)
 					.await
@@ -239,6 +240,7 @@ impl ExecutionInis {
 				.transpose()?
 				.unwrap_or_default();
 			let preserved = encode(&preserve_profile_ini_keys(&original_text, &text), encoding)?;
+
 			if original.is_none() && *name == "FalloutCustom.ini" {
 				continue;
 			}

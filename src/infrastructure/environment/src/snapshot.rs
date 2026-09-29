@@ -148,7 +148,9 @@ async fn load_inner(
 		cancellation,
 	)
 	.await?;
+
 	validate_manifest(root_path, cancellation).await?;
+
 	let cache = root_path.join("cache");
 	validate_exact_entries(&cache, &[INVALIDATION_ARCHIVE], cancellation).await?;
 	validate_bsa_file(&cache, cancellation).await?;
@@ -159,11 +161,13 @@ async fn load_inner(
 	let mods = root_path.join("mods");
 	let profile_dir = root_path.join("profile");
 	let overwrite = root_path.join("overwrite");
+
 	if execution {
 		validate_execution_profile(&profile_dir, cancellation).await?;
 	} else {
 		validate_profile_files(&profile_dir, false, cancellation).await?;
 	}
+
 	let mut overwrite_inventory =
 		collect_provider_inventory(&overwrite, ProviderKind::Overwrite, execution, cancellation).await?;
 	let mut provider_metadata = Vec::new();
@@ -189,6 +193,7 @@ async fn load_inner(
 			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 		let name = ModName::new(spelling.to_owned()).context(ErrorMarker::environment_invalid(None))?;
 		let key = name.comparison_key().to_owned();
+
 		if directories.contains_key(&key)
 			|| !metadata(entry.path())
 				.await
@@ -201,6 +206,7 @@ async fn load_inner(
 		let mut inventory =
 			collect_provider_inventory(&entry.path(), ProviderKind::DataMod, execution, cancellation)
 				.await?;
+
 		if let Some(bytes) = inventory.metadata.take() {
 			provider_metadata.push((root_path.join("mods").join(name.as_str()).join("meta.toml"), bytes));
 		}
@@ -211,6 +217,7 @@ async fn load_inner(
 	let modlist = read(profile_dir.join("modlist.txt"))
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;
+
 	let parsed = parse_modlist(&modlist)?;
 	let listed_names: HashSet<_> = parsed.iter().map(|entry| entry.name.as_str().to_owned()).collect();
 	if listed_names != discovered_names {

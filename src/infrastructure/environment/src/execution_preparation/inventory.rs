@@ -45,6 +45,7 @@ impl ExecutionInventory {
 			.await
 			.context(ErrorMarker::environment_invalid(None))?;
 		let installed = parse_modlist(&bytes)?;
+
 		let enabled: HashSet<_> = installed
 			.iter()
 			.filter(|entry| entry.enabled)
@@ -68,6 +69,7 @@ impl ExecutionInventory {
 			installed,
 			..Self::default()
 		};
+
 		match metadata(data).await {
 			Ok(metadata) if metadata.is_dir() => {
 				result.provider(data, ProviderIdentity::SteamData, cancellation).await?
@@ -96,6 +98,7 @@ impl ExecutionInventory {
 				.into_string()
 				.map_err(|_| report!(ErrorMarker::environment_invalid(None)))?;
 			let name = ModName::new(spelling.clone()).context(ErrorMarker::environment_invalid(None))?;
+
 			if !folded.insert(name.comparison_key().to_owned()) {
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
@@ -167,10 +170,12 @@ impl ExecutionInventory {
 		} else {
 			Vec::new()
 		};
+
 		let own: HashMap<_, _> = tombstones
 			.iter()
 			.map(|(path, directory)| (path.comparison_key().to_owned(), *directory))
 			.collect();
+
 		for (path, _) in &tombstones {
 			if path.comparison_key()
 				.match_indices('/')
@@ -199,6 +204,7 @@ impl ExecutionInventory {
 							.is_some_and(|suffix| suffix.starts_with('/')));
 				!affected || winner.rank() > rank
 			});
+
 			let scopes = self.tombstones.entry(key).or_default();
 			let scope = &mut scopes[usize::from(directory)];
 			if scope.is_none_or(|existing| rank > existing) {
@@ -250,6 +256,7 @@ impl ExecutionInventory {
 			let path = DataRelativePath::new(relative.clone())
 				.context(ErrorMarker::environment_invalid(None))?;
 			let key = path.comparison_key().to_owned();
+
 			if !paths.insert(key.clone())
 				|| own.contains_key(&key) || key
 				.match_indices('/')
@@ -270,6 +277,7 @@ impl ExecutionInventory {
 			} else {
 				file_type
 			};
+
 			if !file_type.is_dir() && !file_type.is_file() {
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
@@ -309,6 +317,7 @@ impl ExecutionInventory {
 						scopes[1].is_some_and(|rank| rank >= identity.rank())
 					})
 				});
+
 			if suppressed
 				|| self.winners
 					.get(&key)
@@ -340,6 +349,7 @@ async fn create_default_metadata(path: &Path) -> Result<(), ErrorMarker> {
 		Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
 		Err(error) => return Err(report!(error).context(ErrorMarker::environment_invalid(None))),
 	};
+
 	file.write_all(b"schema_version = 1\n")
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;

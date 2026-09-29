@@ -321,6 +321,7 @@ async fn open_manifest_root(root: &EnvironmentRoot) -> Result<String, ErrorMarke
 	if !manifest_metadata.is_file() {
 		return Err(report!(ErrorMarker::environment_root_unsafe()));
 	}
+
 	let text = read_to_string(&manifest)
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;
@@ -338,6 +339,7 @@ async fn open_manifest_root(root: &EnvironmentRoot) -> Result<String, ErrorMarke
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
+
 	Ok(text)
 }
 

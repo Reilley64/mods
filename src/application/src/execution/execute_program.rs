@@ -116,6 +116,7 @@ pub async fn execute_program(
 			return Err(report!(ErrorMarker::output_target_not_found().with_mod_name(name))
 				.context(ExecuteProgramError));
 		};
+
 		if !provider.enabled {
 			return Err(report!(ErrorMarker::output_target_disabled().with_mod_name(name))
 				.context(ExecuteProgramError));

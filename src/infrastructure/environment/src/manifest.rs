@@ -31,12 +31,14 @@ pub(crate) async fn write_manifest(stage: &Path, plan: &InitializationPlan) -> R
 		.as_path()
 		.to_str()
 		.ok_or_else(|| report!(ErrorMarker::game_install_invalid()))?;
+
 	let contents = to_string_pretty(&Manifest {
 		schema_version: 1,
 		name: None,
 		game_dir: game_dir.to_owned(),
 	})
 	.context(ErrorMarker::environment_invalid(None))?;
+
 	write(stage.join("mods.toml"), contents)
 		.await
 		.context(ErrorMarker::environment_root_unsafe())
@@ -57,6 +59,7 @@ pub(crate) async fn validate_manifest_file(
 	let contents = read(directory.join("mods.toml"))
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;
+
 	parse_manifest(&contents)
 }
 

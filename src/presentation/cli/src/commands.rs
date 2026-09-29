@@ -130,6 +130,7 @@ pub(crate) struct ExportArgs {
 pub(crate) struct ExecArgs {
 	#[arg(long)]
 	pub(crate) output_target: Option<String>,
+	/// Working directory for the program; defaults to the bound game installation directory. Program lookup still uses the caller's directory and PATH.
 	#[arg(long)]
 	pub(crate) cwd: Option<PathBuf>,
 	#[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
@@ -165,6 +166,17 @@ mod tests {
 	use super::parse_from;
 	use std::error::Error;
 	use std::ffi::OsString;
+
+	#[test]
+	fn exec_help_describes_the_working_directory_default() {
+		let help = parse_from(["mods", "exec", "--help"])
+			.err()
+			.map(|error| error.to_string())
+			.unwrap_or_default();
+
+		assert!(help.contains("defaults to the bound game installation directory"));
+		assert!(help.contains("Program lookup still uses the caller's directory and PATH"));
+	}
 
 	#[test]
 	fn removed_binding_id_keys_are_not_cli_settings() {

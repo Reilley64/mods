@@ -193,6 +193,7 @@ impl EnvironmentAdapter {
 						ErrorMarker::operation_cancelled().with_phase("extraction")
 					));
 				}
+
 				let file = transaction.begin_file(&path, &cancellation).await;
 				if cancellation.is_cancelled() {
 					return Err(report!(
@@ -237,6 +238,7 @@ impl EnvironmentAdapter {
 							written
 						}) as PortFuture<_>
 					});
+
 				let finish_file = Arc::clone(&file);
 				let finish_transaction = Arc::clone(&begin_transaction);
 				let finish = Arc::new(move |cancellation: CancellationToken| {
@@ -257,6 +259,7 @@ impl EnvironmentAdapter {
 							return Err(report!(ErrorMarker::transaction_failure()
 								.with_phase("publication")));
 						}
+
 						let finished = file.0.flush().await;
 						if cancellation.is_cancelled() {
 							return Err(report!(ErrorMarker::operation_cancelled()
@@ -294,6 +297,7 @@ impl EnvironmentAdapter {
 						ErrorMarker::operation_cancelled().with_phase("publication")
 					));
 				}
+
 				transaction.finish(&cancellation).await
 			}) as PortFuture<_>
 		});
@@ -462,6 +466,7 @@ async fn validate_layout(directory: &Path, cancellation: &CancellationToken) -> 
 		cancellation,
 	)
 	.await?;
+
 	validate_exact_entries(&directory.join("mods"), &[], cancellation).await?;
 	validate_exact_entries(&directory.join("overwrite"), &[], cancellation).await?;
 	validate_exact_entries(&directory.join("cache"), &["Fallout - Invalidation.bsa"], cancellation).await?;

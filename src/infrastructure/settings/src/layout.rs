@@ -48,6 +48,7 @@ const PROFILE_FILES: [&str; 8] = [
 /// followed like ordinary entries.
 pub(crate) async fn validate(root: &Path) -> Result<(), ErrorMarker> {
 	validate_root_entries(root).await?;
+
 	let overwrite = root.join("overwrite");
 	require_directory(&overwrite).await?;
 	if entry_names(&overwrite).await?.contains("meta.toml") {
@@ -111,8 +112,10 @@ async fn validate_mods(mods: &Path, listed_mods: &HashSet<String>) -> Result<(),
 		if !valid_windows_component(&name) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
+
 		let directory = mods.join(&name);
 		require_directory(&directory).await?;
+
 		if entry_names(&directory).await?.contains("meta.toml") {
 			validate_meta(&read_regular(&directory, "meta.toml").await?)?;
 		}

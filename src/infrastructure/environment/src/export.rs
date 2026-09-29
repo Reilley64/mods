@@ -60,8 +60,10 @@ impl EnvironmentAdapter {
 			let binding = binding.clone();
 			Box::pin(async move {
 				validate_destination(&root, &output).await?;
+
 				let snapshot = capture(&root, &binding, include_saves, &cancellation).await?;
 				let files = snapshot.sources.iter().map(|source| source.entry.clone()).collect();
+
 				let publish = Arc::new(move |files, cancellation| {
 					let root = root.clone();
 					let output = output.clone();
@@ -94,6 +96,7 @@ async fn validate_destination(root: &EnvironmentRoot, output: &Path) -> Result<(
 	if relative.components().count() != 1 {
 		return Err(report!(ErrorMarker::invalid_data_path()));
 	}
+
 	if try_exists(output).await.context(ErrorMarker::io_failure())? {
 		return Err(report!(ErrorMarker::environment_already_initialized()));
 	}
@@ -104,6 +107,7 @@ async fn validate_destination(root: &EnvironmentRoot, output: &Path) -> Result<(
 	let root = canonicalize(root.as_path())
 		.await
 		.context(ErrorMarker::environment_root_unsafe())?;
+
 	if parent.starts_with(root) {
 		return Err(report!(ErrorMarker::environment_root_unsafe()));
 	}
@@ -121,6 +125,7 @@ async fn capture(
 		.await?;
 	let profile = &execution.profile_directory;
 	let inis = ProfileIniInputs::read(profile, binding.game_directory().as_path(), cancellation).await?;
+
 	let mut sources = Vec::new();
 	for (winner, file) in execution.winners.iter().zip(&execution.visible_files) {
 		if winner.identity() == ProviderIdentity::SteamData {
@@ -145,11 +150,13 @@ async fn capture(
 		else {
 			continue;
 		};
+
 		let derived = if name.ends_with(".ini") {
 			Some(inis.derive(name, &bytes, ProfileIniPurpose::Export)?)
 		} else {
 			None
 		};
+
 		capture_file(
 			&mut sources,
 			profile.join(name),
@@ -200,12 +207,14 @@ async fn capture_file(
 	}
 
 	let modified = metadata.modified().context(ErrorMarker::io_failure())?;
+
 	let entry = ExportFile {
 		source_id: sources.len(),
 		path: DataRelativePath::new(destination).context(ErrorMarker::invalid_data_path())?,
 		provider,
 		bytes: derived.as_ref().map_or(metadata.len(), |bytes| bytes.len() as u64),
 	};
+
 	sources.push(ExportSource {
 		path,
 		modified,
@@ -331,9 +340,11 @@ async fn copy_files(
 			.path
 			.components()
 			.fold(output.to_path_buf(), |path, component| path.join(component));
+
 		if let Some(parent) = destination.parent() {
 			create_dir_all(parent).await.context(ErrorMarker::io_failure())?;
 		}
+
 		if let Some(bytes) = &source.derived {
 			write(&destination, bytes).await.context(ErrorMarker::io_failure())?;
 		} else {
@@ -341,6 +352,7 @@ async fn copy_files(
 				.await
 				.context(ErrorMarker::io_failure())?;
 		}
+
 		set_modified(&destination, source.modified).await?;
 	}
 	Ok(())
@@ -355,6 +367,7 @@ async fn set_modified(path: &Path, modified: SystemTime) -> Result<(), ErrorMark
 		.context(ErrorMarker::io_failure())?
 		.into_std()
 		.await;
+
 	spawn_blocking(move || file.set_modified(modified))
 		.await
 		.map_err(io::Error::other)
