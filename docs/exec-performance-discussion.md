@@ -339,6 +339,88 @@ Consequence: export drops its separate strict `prepare_execution` / `PreparedExe
 
 Export-only concerns that stay after the split: the output must not be inside the environment, `--include-saves`, and `--dry-run`.
 
+### Design: export shares preparation with exec
+
+Status: proposal, waiting for approval. No code changed yet.
+
+#### Goal
+
+Both commands run the same preparation through the same application ports. They differ only at the end:
+
+- exec: stage the profile INIs, create the VFS, launch, supervise, and preserve the INIs.
+- export: copy every winner and every profile file into the output directory.
+
+An export folder then contains exactly what the game sees under exec.
+
+#### Where they differ today
+
+| Area | exec | export |
+| --- | --- | --- |
+| Use-case shape | 10 ports composed by `execute_program` | one `PrepareExport` port that does everything in infrastructure, then `PublishExport` |
+| Preparation | `prepare_launch`: tolerant, refuses a non-empty `temp`, creates missing `meta.toml` for enabled mods | `prepare_execution`: strict; records consumed bytes and file lengths; rejects extra entries and a corrupt invalidation BSA |
+| Archive-list fallback | embedded English Steam default | reads `Fallout_default.ini` at runtime |
+| Plugin projection | projected, with advisory warnings | `plugins.txt` and `loadorder.txt` copied verbatim; no warnings |
+| INI derivation | `ProfileIniPurpose::Execution`: only `FalloutCustom.ini` rewritten; saves routed to `__mods_saves\`; invalidation BSA appended last | `ProfileIniPurpose::Export`: Fallout and Custom rewritten; `SLocalSavePath=Saves\`; invalidation BSA first |
+| Platform | ports are wired only in the Windows `native.rs`; profile projection (`build_profile_configuration`) is Windows-only | runs on every platform |
+
+#### Proposed shape
+
+Shared application ports, in a new capability module `application::ports::preparation`. The names become neutral because two commands use them:
+
+- `PrepareEnvironmentPlan(CancellationToken) -> EnvironmentPlan`: today's `PrepareLaunchPlan` / `LaunchPlan`, backed by `prepare_launch`.
+- `ProjectProfile(&EnvironmentPlan) -> ProfileProjection { profile, warnings }`: today's `ProjectExecutionProfile` without the Windows Documents and LocalAppData directories. Those move into exec's `CreateVirtualFileSystem`, the only step that needs them.
+
+A shared application helper, `application::preparation::prepare_environment`, calls both ports and maps `ProfileWarning` to the user-facing warnings. Both use cases call it, as allowed by the "repeated callers justify a capability-level helper" rule.
+
+exec after the change: resolve target, `prepare_environment`, output-target check, stage the profile, create the VFS, launch, supervise, preserve, finish output, post-run check. The steps and behavior stay the same; only the first two ports are renamed and shared.
+
+export after the change:
+
+1. `ValidateExportDestination(output)` (export only): the path is absolute, does not exist yet, and its parent is not inside the environment.
+2. `prepare_environment` (shared).
+3. `ListExportFiles(&EnvironmentPlan, &ProfileProjection, include_saves)` (export only): every winner except game Data, the profile files (INIs derived with `ProfileIniPurpose::Export`, plus `plugins.txt`, `loadorder.txt`, and `modlist.txt`), the invalidation BSA, and saves when `--include-saves` is given. Each file carries its size.
+4. `plan_inventory` (application, unchanged): folds directory spelling case and checks for structural conflicts.
+5. `--dry-run` stops here.
+6. `WriteExport(files, output)` (export only): writes each file directly and sets the source mtime.
+
+The `ExportEnvironmentOutput` gains `warnings`, the same list that exec reports.
+
+Wiring: the shared ports move out of `native.rs` into a platform-neutral adapter in `infrastructure-dependencies`. The profile-projection module in `infrastructure-execution` stops being Windows-only. `native.rs` keeps the VFS, launch, supervision, and output steps.
+
+#### Removed
+
+- `PrepareExport`, `PreparedExport`, `PublishExport`, and the `ExportSnapshot` capture in `environment/src/export.rs`.
+- `prepare_execution` and `PreparedExecution` (their only users are export and their own tests).
+- The runtime read of `Fallout_default.ini` (`ProfileIniInputs` non-execution mode and its `fallback` field). Export uses the embedded default list, like exec.
+
+#### Kept different on purpose
+
+INI derivation keeps two purposes. The exported folder is a standalone layout, so it keeps `Saves\` and rewrites `Fallout.ini`. exec overlays a VFS and relies on JIP LN NVSE reading `FalloutCustom.ini`. This is the "last bit" of each command, not shared preparation.
+
+#### User-visible changes for export
+
+1. Export accepts whatever exec accepts: extra entries, and a generated BSA copied as-is.
+2. Export creates missing `meta.toml` for enabled mods, because `prepare_launch` does. Export stops being strictly read-only.
+3. When neither `FalloutCustom.ini` nor `Fallout.ini` sets `sArchiveList`, export uses the embedded default list instead of reading `Fallout_default.ini`.
+4. Export prints the same plugin warnings as exec.
+5. Export on macOS and Linux still works, because the projection becomes platform-neutral.
+
+#### Questions for the user
+
+1. Is export allowed to create missing `meta.toml` (change 2)? The alternative is a read-only flag on `PrepareEnvironmentPlan`, which makes the two commands differ again.
+2. Should export print the plugin warnings (change 4)?
+3. Should the shared ports get the neutral names `PrepareEnvironmentPlan`, `EnvironmentPlan`, and `ProjectProfile`, or keep the exec names?
+4. Is it right to keep the two INI derivation purposes separate?
+
+#### Plan
+
+On this branch, as separate commits:
+
+1. Make the shared ports platform-neutral, with the renames, and move them out of `native.rs`. exec behavior does not change.
+2. Rebuild export on the shared ports and delete the strict path.
+
+Then an independent spec and standards review, Windows validation, and install.
+
 ### Decisions on the tokio::fs follow-ups
 
 - Walk timing accepted: the exec inventory walk over 20,000 files went from a median of 21.0 ms to 27.6 ms with tokio::fs.
