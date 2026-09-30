@@ -116,8 +116,9 @@ fn validate_mods(mods: &Dir, listed_mods: &HashSet<String>) -> Result<(), ErrorM
 		}
 		let directory = open_real_dir(mods, &name)?;
 		validate_safe_tree(&directory)?;
-		open_real_file(&directory, "meta.toml")?;
-		validate_meta(&read_regular(&directory, "meta.toml")?)?;
+		if entry_names(&directory)?.contains("meta.toml") {
+			validate_meta(&read_regular(&directory, "meta.toml")?)?;
+		}
 		if !installed.insert(case_fold_key(&name)) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
