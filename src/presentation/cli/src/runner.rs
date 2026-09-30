@@ -420,6 +420,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				dependencies.export_environment,
 				output_path.clone(),
 				arguments.include_saves,
+				arguments.include_game_data,
 				arguments.dry_run,
 				operation::ctrl_c_token(),
 			)
@@ -880,7 +881,7 @@ mod tests {
 			prepare_environment_plan: Arc::new(|_| failed()),
 			project_profile: Arc::new(|_: &EnvironmentPlan| failed()),
 			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
-			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _| failed()),
+			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _, _| failed()),
 			write_export: Arc::new(|_, _, _, _| failed()),
 			set_load_order_times: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
 			discard_staged_profile: Arc::new(|_| failed()),
@@ -891,6 +892,7 @@ mod tests {
 	fn export_dependencies(
 		expected_output: PathBuf,
 		include_saves: bool,
+		include_game_data: bool,
 		written: Arc<AtomicBool>,
 	) -> ExportEnvironmentDependencies {
 		ExportEnvironmentDependencies {
@@ -923,21 +925,28 @@ mod tests {
 					})
 				})
 			}),
-			list_export_files: Arc::new(move |_: &EnvironmentPlan, _: &StagedProfile, saves, _| {
-				assert_eq!(saves, include_saves);
-				Box::pin(async {
-					Ok(ExportListing {
-						files: vec![ExportFile {
-							source_id: 0,
-							path: DataRelativePath::new("profile/Fallout.ini".to_owned())
-								.map_err(|_| report!(ErrorMarker::invalid_data_path()))?,
-							provider: ExportProvider::Profile,
-							bytes: 17,
-						}],
-						sources: ExportSources(AdapterState::new(())),
+			list_export_files: Arc::new(
+				move |_: &EnvironmentPlan, _: &StagedProfile, saves, game_data, _| {
+					assert_eq!(saves, include_saves);
+					assert_eq!(game_data, include_game_data);
+					Box::pin(async {
+						Ok(ExportListing {
+							files: vec![ExportFile {
+								source_id: 0,
+								path: DataRelativePath::new(
+									"profile/Fallout.ini".to_owned(),
+								)
+								.map_err(|_| {
+									report!(ErrorMarker::invalid_data_path())
+								})?,
+								provider: ExportProvider::Profile,
+								bytes: 17,
+							}],
+							sources: ExportSources(AdapterState::new(())),
+						})
 					})
-				})
-			}),
+				},
+			),
 			write_export: Arc::new(move |_, _, _, _| {
 				written.store(true, Ordering::SeqCst);
 				Box::pin(async { Ok(()) })
@@ -1058,10 +1067,10 @@ mod tests {
 	async fn export_dispatch_previews_without_publication_and_publishes_quietly() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let published = Arc::new(AtomicBool::new(false));
-		for (dry_run, include_saves) in [(true, true), (false, false)] {
+		for (dry_run, include) in [(true, true), (false, false)] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 			dependencies.export_environment =
-				export_dependencies(temp.path().join("payload"), include_saves, published.clone());
+				export_dependencies(temp.path().join("payload"), include, include, published.clone());
 			let arguments = if dry_run {
 				arguments![
 					"mods",
@@ -1070,6 +1079,7 @@ mod tests {
 					"export",
 					"payload",
 					"--include-saves",
+					"--include-game-data",
 					"--dry-run"
 				]
 			} else {

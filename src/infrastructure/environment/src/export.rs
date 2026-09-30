@@ -58,7 +58,11 @@ impl EnvironmentAdapter {
 	/// they are copied.
 	pub fn list_export_files_port(&self) -> ListExportFiles {
 		Arc::new(
-			|plan: &EnvironmentPlan, staged: &StagedProfile, include_saves, cancellation| {
+			|plan: &EnvironmentPlan,
+			 staged: &StagedProfile,
+			 include_saves,
+			 include_game_data,
+			 cancellation| {
 				// The port borrows the plan, so the future owns a copy of the prepared environment.
 				let prepared = plan.state.downcast_ref::<PreparedLaunch>().cloned();
 				let staged = staged.directory.clone();
@@ -67,8 +71,14 @@ impl EnvironmentAdapter {
 					let prepared = prepared
 						.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 
-					let sources =
-						list_sources(&prepared, &staged, include_saves, &cancellation).await?;
+					let sources = list_sources(
+						&prepared,
+						&staged,
+						include_saves,
+						include_game_data,
+						&cancellation,
+					)
+					.await?;
 
 					Ok(ExportListing {
 						files: sources.iter().map(|source| source.entry.clone()).collect(),
@@ -133,18 +143,19 @@ async fn check_destination(root: &EnvironmentRoot, output: &Path) -> Result<(), 
 	Ok(())
 }
 
-/// Lists every file the game sees except its own Data files: Data winners, the
-/// staged profile INIs, the other profile files, the invalidation archive, and
-/// optionally saves.
+/// Lists every file the game sees: Data winners, the staged profile INIs, the
+/// other profile files, the invalidation archive, and optionally the game's own
+/// Data files and saves.
 async fn list_sources(
 	prepared: &PreparedLaunch,
 	staged: &Path,
 	include_saves: bool,
+	include_game_data: bool,
 	cancellation: &CancellationToken,
 ) -> Result<Vec<ExportSource>, ErrorMarker> {
 	let mut sources = Vec::new();
 	for (winner, file) in prepared.winners.iter().zip(&prepared.visible_files) {
-		if winner.identity() == ProviderIdentity::SteamData {
+		if winner.identity() == ProviderIdentity::SteamData && !include_game_data {
 			continue;
 		}
 
@@ -446,15 +457,17 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn listing_covers_the_game_view_except_base_data_and_saves_are_opt_in() -> Result<(), ErrorMarker> {
+	async fn listing_covers_the_game_view_and_base_data_and_saves_are_opt_in() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding, _output) = fixture().await?;
 		let canonical =
 			fs::read(root.as_path().join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?;
 		let (plan, staged) = stage(&root, &binding).await?;
 		let list = EnvironmentAdapter.list_export_files_port();
 
-		for saves in [false, true] {
-			let listing = list.call((&plan, &staged, saves, CancellationToken::new())).await?;
+		for (saves, game_data) in [(false, false), (true, false), (false, true)] {
+			let listing = list
+				.call((&plan, &staged, saves, game_data, CancellationToken::new()))
+				.await?;
 
 			let paths: Vec<_> = listing.files.iter().map(|file| file.path.as_str()).collect();
 			for expected in [
@@ -466,7 +479,7 @@ mod tests {
 			] {
 				assert!(paths.contains(&expected), "missing {expected}");
 			}
-			assert!(!paths.iter().any(|path| path.ends_with("FalloutNV.esm")));
+			assert_eq!(paths.contains(&"Data/FalloutNV.esm"), game_data);
 			assert_eq!(paths.contains(&"profile/saves/example.fos"), saves);
 			let ini = listing
 				.files
@@ -541,7 +554,7 @@ mod tests {
 		let (plan, staged) = stage(&root, &binding).await?;
 		let listing = EnvironmentAdapter
 			.list_export_files_port()
-			.call((&plan, &staged, true, CancellationToken::new()))
+			.call((&plan, &staged, true, false, CancellationToken::new()))
 			.await?;
 
 		EnvironmentAdapter
@@ -581,7 +594,7 @@ mod tests {
 		let (plan, staged) = stage(&root, &binding).await?;
 		let listing = EnvironmentAdapter
 			.list_export_files_port()
-			.call((&plan, &staged, false, CancellationToken::new()))
+			.call((&plan, &staged, false, false, CancellationToken::new()))
 			.await?;
 
 		let timed = async {
@@ -592,7 +605,14 @@ mod tests {
 
 			EnvironmentAdapter
 				.set_load_order_times_port()
-				.call((&plan, LoadOrderTarget::Export(output.clone()), CancellationToken::new()))
+				.call((
+					&plan,
+					LoadOrderTarget::Export {
+						output: output.clone(),
+						include_game_data: false,
+					},
+					CancellationToken::new(),
+				))
 				.await
 		}
 		.await;
@@ -636,6 +656,54 @@ mod tests {
 		}
 		discard(staged).await?;
 		checked
+	}
+
+	#[tokio::test]
+	async fn export_with_game_data_copies_and_times_the_base_game_plugin() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding, output) = fixture().await?;
+		load_order_fixture(&root)?;
+		let (plan, staged) = stage(&root, &binding).await?;
+		let listing = EnvironmentAdapter
+			.list_export_files_port()
+			.call((&plan, &staged, false, true, CancellationToken::new()))
+			.await?;
+
+		let timed = async {
+			EnvironmentAdapter
+				.write_export_port(root.clone())
+				.call((listing.sources, listing.files, output.clone(), CancellationToken::new()))
+				.await?;
+
+			EnvironmentAdapter
+				.set_load_order_times_port()
+				.call((
+					&plan,
+					LoadOrderTarget::Export {
+						output: output.clone(),
+						include_game_data: true,
+					},
+					CancellationToken::new(),
+				))
+				.await
+		}
+		.await;
+		discard(staged).await?;
+		timed?;
+
+		let data = output.join("Data");
+		assert_eq!(
+			fs::read(data.join("FalloutNV.esm")).context(ErrorMarker::io_failure())?,
+			b"base"
+		);
+		for (name, position) in [
+			("Fallout - Invalidation.bsa", 0),
+			("Opaque.bsa", 1),
+			("FalloutNV.esm", 2),
+			("Mod.esp", 3),
+		] {
+			assert_eq!(modified(&data.join(name))?, load_order_time(position), "{name}");
+		}
+		Ok(())
 	}
 
 	/// Adds a plugin with a matching archive and lists it after the game's master.

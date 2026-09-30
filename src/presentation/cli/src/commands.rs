@@ -122,6 +122,11 @@ pub(crate) struct ExportArgs {
 	pub(crate) output: PathBuf,
 	#[arg(long)]
 	pub(crate) include_saves: bool,
+	/// Also export the winning files from the game's own Data folder, such as the
+	/// base game and DLC plugins and BSAs, so the output is a complete Data folder.
+	/// Game root files, such as executables and DLLs, are never exported.
+	#[arg(long)]
+	pub(crate) include_game_data: bool,
 	#[arg(long)]
 	pub(crate) dry_run: bool,
 }
@@ -347,13 +352,18 @@ mod tests {
 			"export",
 			"output",
 			"--include-saves",
+			"--include-game-data",
 			"--dry-run",
 		])?;
 		let Command::Export(arguments) = parsed.command else {
 			return Err("export command must parse".into());
 		};
 		assert_eq!(arguments.output, std::path::PathBuf::from("output"));
-		assert!(arguments.include_saves && arguments.dry_run);
+		assert!(arguments.include_saves && arguments.include_game_data && arguments.dry_run);
+		let Command::Export(defaults) = parse_from(["mods", "export", "output"])?.command else {
+			return Err("export command must parse".into());
+		};
+		assert!(!defaults.include_saves && !defaults.include_game_data && !defaults.dry_run);
 		assert!(parse_from(["mods", "export"]).is_err());
 		assert!(parse_from(["mods", "export", "output", "--apply"]).is_err());
 		Ok(())

@@ -497,6 +497,42 @@ Gate dispositions for change H:
 
 Full check: `bun run check` exit 0; 424 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
 
+### Export can include the game's own Data winners (change I)
+
+Decision: `docs/exec-performance-discussion.md`, "Decision: export can include the game's own Data winners".
+
+- CLI: new optional named flag `--include-game-data` on `export` (`ExportArgs.include_game_data`), with help text. Syntax: `mods [--environment PATH] export OUTPUT [--include-saves] [--include-game-data] [--dry-run]`.
+- Use case: `export_environment(dependencies, output, include_saves, include_game_data, dry_run, cancellation)`. The flag is a business input. It goes to `ListExportFiles` next to `include_saves`, to `plan_inventory`, and to the load-order step.
+- `ListExportFiles` is now `Fn(&EnvironmentPlan, &StagedProfile, include_saves, include_game_data, CancellationToken)`. The adapter lists `SteamData` winners only with the flag. Game root files are not winners, so they are never listed.
+- `plan_inventory(candidates, include_game_data)` keeps `SteamData` files only with the flag. The generated invalidation archive wins: a `SteamData` file at the same path as a `GeneratedInvalidation` file is dropped. A non-game Data file at that path still fails as a duplicate path, as before.
+- `LoadOrderTarget::Export` is now `{ output, include_game_data }`. With the flag, the base game plugins and BSAs in the output also get load-order times. They already took their positions before, so the times of the other files do not change. The load-order inputs now also drop any Data winner named `Fallout - Invalidation.bsa`, because the generated archive replaces it. This applies to exec as well, where the virtual file system maps the generated archive over it; Steam validation already refuses such a file in the game's Data folder.
+- Without the flag, the listing, the plan, the output, and the times are unchanged. The dry-run preview already renders `steam_data` providers, so its format is unchanged.
+
+Tests:
+
+- CLI parsing: the flag parses with the other export options, and all three flags default to off. The dispatch test passes `--include-game-data` in its dry-run case and checks that the flag reaches `ListExportFiles`.
+- `plan_inventory` (new `inventory.rs` tests): game Data files are kept only with the flag, with the byte totals; the generated invalidation archive wins over a game Data copy, matched case-insensitively.
+- Use case: with and without the flag, `Data/Base.esm` is in the output only with the flag, the byte total changes, and the flag reaches `ListExportFiles` and the load-order step.
+- Adapter listing: `Data/FalloutNV.esm` is listed only with the flag.
+- Adapter export with the flag: `Data/FalloutNV.esm` is copied with its bytes and gets load-order position 2, between `Opaque.bsa` (1) and `Mod.esp` (3).
+- Adapter exec: a game Data `Fallout - Invalidation.bsa` winner keeps its time; the generated archive gets position 0.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain --all-targets -- -D warnings` passes. As before, `infrastructure-execution`, `infrastructure-dependencies`, and the CLI could not be compiled for Windows here. Change I does not touch Windows-only code.
+
+Docs: `export.md` (syntax, what the flag adds, invalidation precedence, load-order times, preview provider kind), `commands.md` (syntax), and the `SKILL.md` reference list.
+
+Gate dispositions for change I:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/export/export_environment.rs`, `export/types.rs`, `export_environment/inventory.rs` | Use-case parameters | Accepted. The use case takes dependencies first and the token last. `include_game_data` is a named business input next to `include_saves`, as the task requires; it is not hidden in a bag. |
+| `infrastructure/environment/src/export.rs`, `load_order.rs` | Use-case parameters | Accepted as inapplicable: adapter ports and private helpers, token last. |
+| `presentation/cli/src/runner.rs` | Test public behavior (0.38); Use-case parameters (0.15) | Accepted. The dispatch test checks the public CLI contract: the parsed flag reaches the export port. |
+| `application/src/export/export_environment/inventory.rs` | Preserve causes at owned boundaries (0.70, was 0.56) | Accepted as a false positive. Change I adds only a filter and tests. The markers without a cause (duplicate path, directory/file clash, byte overflow) have no underlying error to keep, and the path conversion keeps its cause with `.context`. |
+| `application/src/ports/preparation.rs` | Use-case parameters (0.35) | Accepted. `LoadOrderTarget::Export` gained the `include_game_data` field; the port keeps the token last. |
+
+Full check: `bun run check` exit 0; 428 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

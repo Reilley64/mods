@@ -59,7 +59,8 @@ impl fmt::Display for ExportEnvironmentError {
 /// with exec. It stages the derived profile INIs in the environment's `temp`
 /// directory, copies them into the output, gives the output plugins and archives
 /// their load-order times, and then removes the stage on every path, including
-/// `dry_run` and failures.
+/// `dry_run` and failures. With `include_game_data`, it also copies the winners
+/// from the game's own Data folder, and the load-order times cover them.
 ///
 /// # Errors
 ///
@@ -72,6 +73,7 @@ pub async fn export_environment(
 	dependencies: ExportEnvironmentDependencies,
 	output: PathBuf,
 	include_saves: bool,
+	include_game_data: bool,
 	dry_run: bool,
 	cancellation: CancellationToken,
 ) -> Result<ExportEnvironmentOutput, ExportEnvironmentError> {
@@ -101,10 +103,10 @@ pub async fn export_environment(
 	let exported = async {
 		let listing = dependencies
 			.list_export_files
-			.call((&plan, &staged, include_saves, cancellation.clone()))
+			.call((&plan, &staged, include_saves, include_game_data, cancellation.clone()))
 			.await?;
 
-		let (files, total_bytes) = plan_inventory(listing.files)?;
+		let (files, total_bytes) = plan_inventory(listing.files, include_game_data)?;
 
 		if !dry_run {
 			dependencies
@@ -116,7 +118,14 @@ pub async fn export_environment(
 			// and archives get times, in load order.
 			dependencies
 				.set_load_order_times
-				.call((&plan, LoadOrderTarget::Export(output.clone()), cancellation))
+				.call((
+					&plan,
+					LoadOrderTarget::Export {
+						output: output.clone(),
+						include_game_data,
+					},
+					cancellation,
+				))
 				.await
 				.map_err(|mut error| {
 					error.current_context_mut().set_phase_if_missing("load_order");
@@ -192,6 +201,7 @@ mod tests {
 	struct Scenario {
 		files: Vec<ExportFile>,
 		destination_valid: bool,
+		include_game_data: bool,
 		write_fails: bool,
 		load_order_fails: bool,
 		discard_fails: bool,
@@ -241,6 +251,7 @@ mod tests {
 				entry(3, "profile/Fallout.ini", ExportProvider::Profile)?,
 			],
 			destination_valid: true,
+			include_game_data: false,
 			write_fails: false,
 			load_order_fails: false,
 			discard_fails: false,
@@ -264,6 +275,7 @@ mod tests {
 		let Scenario {
 			files,
 			destination_valid,
+			include_game_data,
 			write_fails,
 			load_order_fails,
 			discard_fails,
@@ -301,14 +313,17 @@ mod tests {
 					state: AdapterState::new("stage"),
 				}))
 			}),
-			list_export_files: Arc::new(move |_: &EnvironmentPlan, staged: &StagedProfile, saves, _| {
-				assert_eq!(staged.directory, PathBuf::from("stage"));
-				record(&listed, format!("list:saves={saves}"));
-				complete(Ok(ExportListing {
-					files: files.clone(),
-					sources: ExportSources(AdapterState::new("sources")),
-				}))
-			}),
+			list_export_files: Arc::new(
+				move |_: &EnvironmentPlan, staged: &StagedProfile, saves, game_data, _| {
+					assert_eq!(staged.directory, PathBuf::from("stage"));
+					assert_eq!(game_data, include_game_data);
+					record(&listed, format!("list:saves={saves}"));
+					complete(Ok(ExportListing {
+						files: files.clone(),
+						sources: ExportSources(AdapterState::new("sources")),
+					}))
+				},
+			),
 			write_export: Arc::new(move |sources: ExportSources, files: Vec<ExportFile>, output, _| {
 				assert_eq!(sources.0.downcast::<&str>(), Some("sources"));
 				assert_eq!(output, PathBuf::from("/output"));
@@ -320,7 +335,13 @@ mod tests {
 			}),
 			set_load_order_times: Arc::new(move |plan: &EnvironmentPlan, target, _| {
 				assert_eq!(plan.state.downcast_ref::<&str>(), Some(&"plan"));
-				assert_eq!(target, LoadOrderTarget::Export(PathBuf::from("/output")));
+				assert_eq!(
+					target,
+					LoadOrderTarget::Export {
+						output: PathBuf::from("/output"),
+						include_game_data,
+					}
+				);
 				record(&timed, "load_order");
 				if load_order_fails {
 					return complete(Err(report!(ErrorMarker::io_failure())));
@@ -342,12 +363,14 @@ mod tests {
 
 	async fn run(
 		dependencies: ExportEnvironmentDependencies,
+		include_game_data: bool,
 		dry_run: bool,
 	) -> Result<ExportEnvironmentOutput, ExportEnvironmentError> {
 		export_environment(
 			dependencies,
 			PathBuf::from("/output"),
 			true,
+			include_game_data,
 			dry_run,
 			CancellationToken::new(),
 		)
@@ -366,7 +389,9 @@ mod tests {
 	{
 		let (dependencies, steps) = fake_dependencies(scenario()?);
 
-		let output = run(dependencies, true).await.context(ErrorMarker::io_failure())?;
+		let output = run(dependencies, false, true)
+			.await
+			.context(ErrorMarker::io_failure())?;
 
 		assert_eq!(
 			recorded(&steps),
@@ -393,7 +418,9 @@ mod tests {
 	-> Result<(), ErrorMarker> {
 		let (dependencies, steps) = fake_dependencies(scenario()?);
 
-		let output = run(dependencies, false).await.context(ErrorMarker::io_failure())?;
+		let output = run(dependencies, false, false)
+			.await
+			.context(ErrorMarker::io_failure())?;
 
 		assert!(output.published);
 		assert_eq!(
@@ -418,7 +445,7 @@ mod tests {
 		scenario.destination_valid = false;
 		let (dependencies, steps) = fake_dependencies(scenario);
 
-		assert!(run(dependencies, false).await.is_err());
+		assert!(run(dependencies, false, false).await.is_err());
 
 		assert_eq!(recorded(&steps), ["validate"]);
 		Ok(())
@@ -437,7 +464,7 @@ mod tests {
 		];
 		let (dependencies, steps) = fake_dependencies(scenario);
 
-		let Err(error) = run(dependencies, false).await else {
+		let Err(error) = run(dependencies, false, false).await else {
 			return Err(report!(ErrorMarker::io_failure()));
 		};
 
@@ -455,7 +482,7 @@ mod tests {
 			scenario.discard_fails = true;
 			let (dependencies, _) = fake_dependencies(scenario);
 
-			let Err(error) = run(dependencies, false).await else {
+			let Err(error) = run(dependencies, false, false).await else {
 				return Err(report!(ErrorMarker::io_failure()));
 			};
 
@@ -474,7 +501,7 @@ mod tests {
 		scenario.load_order_fails = true;
 		let (dependencies, steps) = fake_dependencies(scenario);
 
-		let Err(error) = run(dependencies, false).await else {
+		let Err(error) = run(dependencies, false, false).await else {
 			return Err(report!(ErrorMarker::io_failure()));
 		};
 
@@ -491,6 +518,25 @@ mod tests {
 		);
 		assert!(retained_profiles(&error).is_empty());
 		assert_eq!(recorded(&steps).last().map(String::as_str), Some("discard"));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn game_data_winners_are_exported_and_timed_only_with_the_flag() -> Result<(), ErrorMarker> {
+		for include_game_data in [false, true] {
+			let mut scenario = scenario()?;
+			scenario.include_game_data = include_game_data;
+			let (dependencies, steps) = fake_dependencies(scenario);
+
+			let output = run(dependencies, include_game_data, false)
+				.await
+				.context(ErrorMarker::io_failure())?;
+
+			let base = output.files.iter().any(|file| file.path.as_str() == "Data/Base.esm");
+			assert_eq!(base, include_game_data);
+			assert_eq!(output.total_bytes, if include_game_data { 16 } else { 12 });
+			assert!(recorded(&steps).contains(&"load_order".to_owned()));
+		}
 		Ok(())
 	}
 }

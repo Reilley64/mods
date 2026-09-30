@@ -14,7 +14,7 @@ mods install ARCHIVE [--name NAME] [--replace] [--choice GROUP=OPTION]... [--dry
 mods conflicts list [--compare-content]
 mods conflicts inspect MOD_NAME [--compare-content]
 mods conflicts explain PATH [--compare-content]
-mods export OUTPUT [--include-saves] [--dry-run]
+mods export OUTPUT [--include-saves] [--include-game-data] [--dry-run]
 mods exec [--output-target NAME] [--cwd PATH] -- PROGRAM [ARGS]...
 ```
 

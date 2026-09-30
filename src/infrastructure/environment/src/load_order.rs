@@ -21,13 +21,14 @@ use tokio::fs::metadata;
 use tokio_util::sync::CancellationToken;
 
 const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
+const INVALIDATION_KEY: &str = "fallout - invalidation.bsa";
 
 /// A Data-root winner that may get a load-order time.
 struct RootFile {
 	path: DataRelativePath,
 	physical_path: PathBuf,
-	/// Export copies every winner except the game's own Data files.
-	exported: bool,
+	/// Export copies the game's own Data files only with `include_game_data`.
+	game_data: bool,
 }
 
 /// The plan inputs for load-order times, copied so the future does not borrow the plan.
@@ -50,18 +51,21 @@ impl LoadOrderInputs {
 			path: DataRelativePath::new(INVALIDATION_ARCHIVE.to_owned())
 				.context(ErrorMarker::invalid_data_path())?,
 			physical_path: prepared.cache_directory.join(INVALIDATION_ARCHIVE),
-			exported: true,
+			game_data: false,
 		};
 
 		let files = prepared
 			.winners
 			.iter()
 			.zip(&prepared.visible_files)
-			.filter(|(_, file)| file.path.components().count() == 1)
+			// The generated invalidation archive replaces any Data copy of it.
+			.filter(|(_, file)| {
+				file.path.components().count() == 1 && file.path.comparison_key() != INVALIDATION_KEY
+			})
 			.map(|(winner, file)| RootFile {
 				path: file.path.clone(),
 				physical_path: file.physical_path.clone(),
-				exported: winner.identity() != ProviderIdentity::SteamData,
+				game_data: winner.identity() == ProviderIdentity::SteamData,
 			})
 			.chain([invalidation])
 			.collect();
@@ -104,8 +108,11 @@ impl LoadOrderInputs {
 			let path = match &target {
 				LoadOrderTarget::Sources if modified == time => continue,
 				LoadOrderTarget::Sources => file.physical_path,
-				LoadOrderTarget::Export(_) if !file.exported => continue,
-				LoadOrderTarget::Export(output) => output.join("Data").join(file.path.as_str()),
+				LoadOrderTarget::Export {
+					include_game_data: false,
+					..
+				} if file.game_data => continue,
+				LoadOrderTarget::Export { output, .. } => output.join("Data").join(file.path.as_str()),
 			};
 			set_modified(&path, time).await.context(ErrorMarker::io_failure())?;
 		}
@@ -115,7 +122,8 @@ impl LoadOrderInputs {
 
 impl EnvironmentAdapter {
 	/// Sets the times on the winning files for exec, or on the output copies for
-	/// export. Exec skips files that already have their time.
+	/// export. Exec skips files that already have their time. Export skips the
+	/// game's own Data files unless it copied them.
 	pub fn set_load_order_times_port(&self) -> SetLoadOrderTimes {
 		Arc::new(|plan: &EnvironmentPlan, target, cancellation| {
 			let inputs = plan
@@ -239,11 +247,14 @@ mod tests {
 				("Mod.esp", false),
 				("Mod - Main.bsa", false),
 				("Textures/Mod.dds", false),
+				("Fallout - Invalidation.bsa", true),
 			],
 		)?;
 		let plugin = root.join("overwrite/Mod.esp");
 		let texture = root.join("overwrite/Textures/Mod.dds");
 		let texture_time = modified(&texture)?;
+		let game_invalidation = root.join("game/Data").join(INVALIDATION_ARCHIVE);
+		let game_invalidation_time = modified(&game_invalidation)?;
 		set_read_only(&plugin, true)?;
 
 		let timed = EnvironmentAdapter
@@ -270,6 +281,8 @@ mod tests {
 				);
 			}
 			assert_eq!(modified(&texture)?, texture_time);
+			// The generated archive replaces a game Data copy, which keeps its time.
+			assert_eq!(modified(&game_invalidation)?, game_invalidation_time);
 			Ok(())
 		});
 		set_read_only(&plugin, false)?;

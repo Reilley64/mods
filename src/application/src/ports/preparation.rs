@@ -48,8 +48,9 @@ pub enum LoadOrderTarget {
 	/// The winning files in the game's Data folder, the Data Mods, and Overwrite.
 	/// The virtual file system shows each file with its own time.
 	Sources,
-	/// The copies in this export output folder. The game's own Data files are not there.
-	Export(PathBuf),
+	/// The copies in an export output folder. The game's own Data files are there
+	/// only with `include_game_data`.
+	Export { output: PathBuf, include_game_data: bool },
 }
 
 /// Derived profile INIs in a temporary directory. Dropping the handle keeps
