@@ -428,6 +428,16 @@ On this branch, as separate commits:
 
 Then an independent spec and standards review, Windows validation, and install.
 
+### Decision: enforce load order through plugin and BSA times
+
+The user approved one shared step that both commands run:
+
+- Plugins (`.esm`, `.esp`) get modification times in `loadorder.txt` order, starting at 2000-01-01 00:00 UTC, one minute per position. Plugins missing from `loadorder.txt` come after the listed ones, in their current modification-time order.
+- A BSA that loads through a plugin name (its name starts with the plugin's name, case-insensitive) gets the same time as its plugin. BSAs named in the derived `sArchiveList`, and any other BSA without a plugin, come before all plugins.
+- exec runs the step before launch. It sets times on the real winning files, including files in the Game Installation's Data folder (approved), the Data Mods, and Overwrite. usvfs cannot present fake times.
+- export runs the step after writing, on the copies in the output folder only. Export stops setting times on every other file, so fix G's per-file time copy goes away. The attributes-only file open stays for this step, because plugins and BSAs can be read-only.
+- The `load_order_not_enforced` warning no longer applies once the order is enforced.
+
 ### Decisions on the tokio::fs follow-ups
 
 - Walk timing accepted: the exec inventory walk over 20,000 files went from a median of 21.0 ms to 27.6 ms with tokio::fs.
