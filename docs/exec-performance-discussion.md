@@ -438,6 +438,10 @@ The user approved one shared step that both commands run:
 - export runs the step after writing, on the copies in the output folder only. Export stops setting times on every other file, so fix G's per-file time copy goes away. The attributes-only file open stays for this step, because plugins and BSAs can be read-only.
 - The `load_order_not_enforced` warning no longer applies once the order is enforced.
 
+### Decision: export can include the game's own Data winners
+
+The user approved a new optional export flag. Its default name is `--include-game-data`, which the user can rename before merge. Without the flag, export behaves as today. With it, export also copies every winning file whose provider is the Game Installation's Data folder: vanilla and DLC plugins and BSAs, plus loose `Music`, `Sound`, `Video`, `Shaders`, and `NVSE` files. Files that a Data Mod or Overwrite overrides stay as they are, and the exported folder becomes a complete Data folder. The load-order time step then also covers the base game plugins and BSAs. The generated `Fallout - Invalidation.bsa` still wins over any copy in the game's Data folder. Game root files (executables, the xNVSE loader, DLLs) stay out of scope. CLI syntax: `mods [--environment PATH] export OUTPUT [--include-saves] [--include-game-data] [--dry-run]`.
+
 ### Decisions on the tokio::fs follow-ups
 
 - Walk timing accepted: the exec inventory walk over 20,000 files went from a median of 21.0 ms to 27.6 ms with tokio::fs.
