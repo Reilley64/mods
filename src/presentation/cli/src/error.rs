@@ -3,6 +3,7 @@ use application::ErrorCode;
 use application::ErrorMarker;
 use application::export::CompletedExport;
 use application::export::RetainedExport;
+use application::ports::LoadOrderFile;
 use application::ports::RetainedProfile;
 use rootcause::Report;
 use std::path::Path;
@@ -26,8 +27,17 @@ pub(crate) fn execution_exit_status(code: ErrorCode) -> u32 {
 	}
 }
 
+/// Names the plugin or archive whose load-order time could not be read or set.
+fn load_order_file<C>(report: &Report<C>) -> String {
+	report.iter_reports()
+		.find_map(|entry| entry.downcast_current_context::<LoadOrderFile>())
+		.map(|file| format!("load_order_file = {}\n", quote(&file.path.display().to_string())))
+		.unwrap_or_default()
+}
+
 pub(crate) fn execution_error<C>(report: &Report<C>) -> String {
 	let mut text = application_error(report);
+	text.push_str(&load_order_file(report));
 
 	if let Some(retained) = report
 		.iter_reports()
@@ -47,6 +57,7 @@ pub(crate) fn execution_error<C>(report: &Report<C>) -> String {
 
 pub(crate) fn export_error<C>(report: &Report<C>, output: &Path) -> String {
 	let mut text = application_error(report);
+	text.push_str(&load_order_file(report));
 
 	if let Some(retained) = report
 		.iter_reports()
@@ -144,6 +155,7 @@ mod tests {
 	use application::ErrorCode;
 	use application::ErrorMarker;
 	use application::execution::ExecuteProgramError;
+	use application::ports::LoadOrderFile;
 	use application::ports::RetainedProfile;
 	use application::settings::ListSettingsError;
 	use rootcause::report;
@@ -167,6 +179,22 @@ mod tests {
 		assert!(text.contains("after all managed processes have stopped"));
 		assert!(!text.contains("ExecuteProgramError"));
 		assert!(!text.contains("RetainedProfile"));
+	}
+
+	#[test]
+	fn load_order_errors_name_the_failing_file() {
+		let mut report =
+			report!(ErrorMarker::io_failure().with_phase("load_order")).context(ExecuteProgramError);
+		report.children_mut().push(report!(LoadOrderFile {
+			path: PathBuf::from("C:\\Game\\Data\\FalloutNV.esm")
+		})
+		.into_dynamic()
+		.into_cloneable());
+
+		let text = super::execution_error(&report);
+		assert!(text.contains("phase = load_order"));
+		assert!(text.contains("load_order_file = \"C:\\\\Game\\\\Data\\\\FalloutNV.esm\"\n"));
+		assert!(super::export_error(&report, Path::new("C:\\output")).contains("load_order_file = "));
 	}
 
 	#[test]

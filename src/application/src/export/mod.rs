@@ -8,6 +8,7 @@ pub use types::CompletedExport;
 pub use types::ExportFile;
 pub use types::ExportListing;
 pub use types::ExportProvider;
+pub use types::ExportSelection;
 pub use types::ExportSources;
 pub use types::ListExportFiles;
 pub use types::RetainedExport;

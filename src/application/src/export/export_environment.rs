@@ -5,6 +5,7 @@ use super::WriteExport;
 use crate::ErrorMarker;
 use crate::export::CompletedExport;
 use crate::export::ExportFile;
+use crate::export::ExportSelection;
 use crate::export::RetainedExport;
 use crate::ports::DiscardStagedProfile;
 use crate::ports::LoadOrderTarget;
@@ -103,7 +104,15 @@ pub async fn export_environment(
 	let exported = async {
 		let listing = dependencies
 			.list_export_files
-			.call((&plan, &staged, include_saves, include_game_data, cancellation.clone()))
+			.call((
+				&plan,
+				&staged,
+				ExportSelection {
+					include_saves,
+					include_game_data,
+				},
+				cancellation.clone(),
+			))
 			.await?;
 
 		let (files, total_bytes) = plan_inventory(listing.files, include_game_data)?;
@@ -314,10 +323,10 @@ mod tests {
 				}))
 			}),
 			list_export_files: Arc::new(
-				move |_: &EnvironmentPlan, staged: &StagedProfile, saves, game_data, _| {
+				move |_: &EnvironmentPlan, staged: &StagedProfile, selection: ExportSelection, _| {
 					assert_eq!(staged.directory, PathBuf::from("stage"));
-					assert_eq!(game_data, include_game_data);
-					record(&listed, format!("list:saves={saves}"));
+					assert_eq!(selection.include_game_data, include_game_data);
+					record(&listed, format!("list:saves={}", selection.include_saves));
 					complete(Ok(ExportListing {
 						files: files.clone(),
 						sources: ExportSources(AdapterState::new("sources")),

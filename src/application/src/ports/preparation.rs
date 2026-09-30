@@ -42,6 +42,18 @@ pub enum ProfilePurpose {
 	Export,
 }
 
+/// Report attachment for the file whose load-order time could not be read or
+/// set. Presentation may expose this typed path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadOrderFile {
+	pub path: PathBuf,
+}
+impl fmt::Display for LoadOrderFile {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str("load-order file")
+	}
+}
+
 /// Which copies of the Data-root plugins and archives get load-order times.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadOrderTarget {

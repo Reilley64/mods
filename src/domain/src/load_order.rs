@@ -18,10 +18,29 @@ pub struct LoadOrderCandidate<T> {
 	pub modified: SystemTime,
 }
 
+/// Sort key for plugins. Field order is the sort order: listed plugins first,
+/// by `loadorder.txt` position, then unlisted ones by current time and name.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PluginRank {
+	unlisted: bool,
+	position: Option<usize>,
+	modified: SystemTime,
+	key: String,
+}
+
 struct Plugin<T> {
-	rank: (bool, Option<usize>, SystemTime, String),
+	rank: PluginRank,
 	stem: String,
 	file: T,
+}
+
+/// Whether a Data path can get a load-order time: a plugin (`.esm`, `.esp`) or an
+/// archive (`.bsa`) at the Data root, matched case-insensitively.
+pub fn takes_load_order_time(path: &DataRelativePath) -> bool {
+	path.components().count() == 1
+		&& path.comparison_key()
+			.rsplit_once('.')
+			.is_some_and(|(_, extension)| matches!(extension, "esm" | "esp" | "bsa"))
 }
 
 /// Gives Data-root plugins and archives modification times that make the game
@@ -37,13 +56,16 @@ struct Plugin<T> {
 ///
 /// An archive whose stem starts with a plugin stem loads with that plugin and
 /// gets its time; the longest matching stem wins. Names match case-insensitively.
-/// Files outside the Data root and other file types get no time.
+/// Files outside the Data root and other file types get no time. A UTF-8 byte
+/// order mark at the start of `load_order` is ignored.
 pub fn load_order_times<T>(
 	candidates: Vec<LoadOrderCandidate<T>>,
 	load_order: &str,
 	archive_list: &[&str],
 ) -> Vec<(T, SystemTime)> {
 	let listed: Vec<_> = load_order
+		.strip_prefix('\u{feff}')
+		.unwrap_or(load_order)
 		.lines()
 		.filter(|line| !line.is_empty() && !line.starts_with('#'))
 		.map(case_fold_key)
@@ -54,14 +76,19 @@ pub fn load_order_times<T>(
 	let mut archives = Vec::new();
 	for candidate in candidates
 		.into_iter()
-		.filter(|candidate| candidate.path.components().count() == 1)
+		.filter(|candidate| takes_load_order_time(&candidate.path))
 	{
 		let key = candidate.path.comparison_key().to_owned();
 		match key.rsplit_once('.') {
 			Some((stem, "esm" | "esp")) => {
 				let position = listed.iter().position(|name| *name == key);
 				plugins.push(Plugin {
-					rank: (position.is_none(), position, candidate.modified, key.clone()),
+					rank: PluginRank {
+						unlisted: position.is_none(),
+						position,
+						modified: candidate.modified,
+						key: key.clone(),
+					},
 					stem: stem.to_owned(),
 					file: candidate.file,
 				});
@@ -266,6 +293,18 @@ mod tests {
 		)?;
 
 		assert_eq!(timed, expected(&[("Mod.esp", 0)]));
+		Ok(())
+	}
+
+	#[test]
+	fn a_byte_order_mark_does_not_hide_the_first_listed_plugin() -> Result<(), InvalidDataRelativePath> {
+		let timed = positions(
+			&[("Mod.esp", 1), ("FalloutNV.esm", 2)],
+			"\u{feff}FalloutNV.esm\r\nMod.esp\r\n",
+			&[],
+		)?;
+
+		assert_eq!(timed, expected(&[("FalloutNV.esm", 0), ("Mod.esp", 1)]));
 		Ok(())
 	}
 }

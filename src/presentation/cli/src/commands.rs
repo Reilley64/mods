@@ -124,6 +124,8 @@ pub(crate) struct ExportArgs {
 	pub(crate) include_saves: bool,
 	/// Also export the winning files from the game's own Data folder, such as the
 	/// base game and DLC plugins and BSAs, so the output is a complete Data folder.
+	/// Recommended for a full game setup: without it, the destination's base game
+	/// plugins keep their dates and can load after the exported mod plugins.
 	/// Game root files, such as executables and DLLs, are never exported.
 	#[arg(long)]
 	pub(crate) include_game_data: bool,

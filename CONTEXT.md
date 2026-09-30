@@ -21,7 +21,7 @@ The association between one Mod Environment and one Game Installation, including
 _Avoid_: Profile, global game setting
 
 **Game Installation**:
-The Steam-managed Fallout: New Vegas installation that supplies the clean shared base for one or more Mod Environments.
+The Steam-managed Fallout: New Vegas installation that supplies the shared base for one or more Mod Environments. Its file contents stay unchanged, but `exec` sets the modification times of its Data-root plugins and BSAs to enforce the running environment's load order, as it does for plugins and BSAs in Data Mods and Overwrite. Environments that share an installation set these times again on each run, so two of them must not run at the same time.
 _Avoid_: Mod Environment, profile
 
 **Profile State**:

@@ -621,6 +621,7 @@ mod tests {
 	use application::export::ExportFile;
 	use application::export::ExportListing;
 	use application::export::ExportProvider;
+	use application::export::ExportSelection;
 	use application::export::ExportSources;
 	use application::installation::InstallArchiveDependencies;
 	use application::ports::AdapterState;
@@ -881,7 +882,7 @@ mod tests {
 			prepare_environment_plan: Arc::new(|_| failed()),
 			project_profile: Arc::new(|_: &EnvironmentPlan| failed()),
 			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
-			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _, _| failed()),
+			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _| failed()),
 			write_export: Arc::new(|_, _, _, _| failed()),
 			set_load_order_times: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
 			discard_staged_profile: Arc::new(|_| failed()),
@@ -891,8 +892,7 @@ mod tests {
 	/// Export ports that list one profile file and record whether it was written.
 	fn export_dependencies(
 		expected_output: PathBuf,
-		include_saves: bool,
-		include_game_data: bool,
+		expected_selection: ExportSelection,
 		written: Arc<AtomicBool>,
 	) -> ExportEnvironmentDependencies {
 		ExportEnvironmentDependencies {
@@ -926,9 +926,8 @@ mod tests {
 				})
 			}),
 			list_export_files: Arc::new(
-				move |_: &EnvironmentPlan, _: &StagedProfile, saves, game_data, _| {
-					assert_eq!(saves, include_saves);
-					assert_eq!(game_data, include_game_data);
+				move |_: &EnvironmentPlan, _: &StagedProfile, selection: ExportSelection, _| {
+					assert_eq!(selection, expected_selection);
 					Box::pin(async {
 						Ok(ExportListing {
 							files: vec![ExportFile {
@@ -1067,10 +1066,15 @@ mod tests {
 	async fn export_dispatch_previews_without_publication_and_publishes_quietly() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let published = Arc::new(AtomicBool::new(false));
-		for (dry_run, include) in [(true, true), (false, false)] {
+		for dry_run in [true, false] {
+			// The preview selects both optional kinds of content; the publication selects neither.
+			let selection = ExportSelection {
+				include_saves: dry_run,
+				include_game_data: dry_run,
+			};
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 			dependencies.export_environment =
-				export_dependencies(temp.path().join("payload"), include, include, published.clone());
+				export_dependencies(temp.path().join("payload"), selection, published.clone());
 			let arguments = if dry_run {
 				arguments![
 					"mods",

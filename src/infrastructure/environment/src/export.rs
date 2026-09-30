@@ -6,6 +6,7 @@ use application::ErrorMarker;
 use application::export::ExportFile;
 use application::export::ExportListing;
 use application::export::ExportProvider;
+use application::export::ExportSelection;
 use application::export::ExportSources;
 use application::export::ListExportFiles;
 use application::export::RetainedExport;
@@ -58,11 +59,7 @@ impl EnvironmentAdapter {
 	/// they are copied.
 	pub fn list_export_files_port(&self) -> ListExportFiles {
 		Arc::new(
-			|plan: &EnvironmentPlan,
-			 staged: &StagedProfile,
-			 include_saves,
-			 include_game_data,
-			 cancellation| {
+			|plan: &EnvironmentPlan, staged: &StagedProfile, selection: ExportSelection, cancellation| {
 				// The port borrows the plan, so the future owns a copy of the prepared environment.
 				let prepared = plan.state.downcast_ref::<PreparedLaunch>().cloned();
 				let staged = staged.directory.clone();
@@ -71,20 +68,14 @@ impl EnvironmentAdapter {
 					let prepared = prepared
 						.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 
-					let sources = list_sources(
-						&prepared,
-						&staged,
-						include_saves,
-						include_game_data,
-						&cancellation,
-					)
-					.await?;
+					let sources =
+						list_sources(&prepared, &staged, selection, &cancellation).await?;
 
 					Ok(ExportListing {
 						files: sources.iter().map(|source| source.entry.clone()).collect(),
 						sources: ExportSources(AdapterState::new(ExportSourceTable {
 							sources,
-							include_saves,
+							include_saves: selection.include_saves,
 						})),
 					})
 				}) as PortFuture<_>
@@ -149,13 +140,12 @@ async fn check_destination(root: &EnvironmentRoot, output: &Path) -> Result<(), 
 async fn list_sources(
 	prepared: &PreparedLaunch,
 	staged: &Path,
-	include_saves: bool,
-	include_game_data: bool,
+	selection: ExportSelection,
 	cancellation: &CancellationToken,
 ) -> Result<Vec<ExportSource>, ErrorMarker> {
 	let mut sources = Vec::new();
 	for (winner, file) in prepared.winners.iter().zip(&prepared.visible_files) {
-		if winner.identity() == ProviderIdentity::SteamData && !include_game_data {
+		if winner.identity() == ProviderIdentity::SteamData && !selection.include_game_data {
 			continue;
 		}
 
@@ -200,7 +190,7 @@ async fn list_sources(
 	)
 	.await?;
 
-	if include_saves {
+	if selection.include_saves {
 		capture_saves(&mut sources, &profile.join("saves"), "profile/saves", cancellation).await?;
 	}
 
@@ -466,7 +456,15 @@ mod tests {
 
 		for (saves, game_data) in [(false, false), (true, false), (false, true)] {
 			let listing = list
-				.call((&plan, &staged, saves, game_data, CancellationToken::new()))
+				.call((
+					&plan,
+					&staged,
+					ExportSelection {
+						include_saves: saves,
+						include_game_data: game_data,
+					},
+					CancellationToken::new(),
+				))
 				.await?;
 
 			let paths: Vec<_> = listing.files.iter().map(|file| file.path.as_str()).collect();
@@ -554,7 +552,15 @@ mod tests {
 		let (plan, staged) = stage(&root, &binding).await?;
 		let listing = EnvironmentAdapter
 			.list_export_files_port()
-			.call((&plan, &staged, true, false, CancellationToken::new()))
+			.call((
+				&plan,
+				&staged,
+				ExportSelection {
+					include_saves: true,
+					include_game_data: false,
+				},
+				CancellationToken::new(),
+			))
 			.await?;
 
 		EnvironmentAdapter
@@ -594,7 +600,15 @@ mod tests {
 		let (plan, staged) = stage(&root, &binding).await?;
 		let listing = EnvironmentAdapter
 			.list_export_files_port()
-			.call((&plan, &staged, false, false, CancellationToken::new()))
+			.call((
+				&plan,
+				&staged,
+				ExportSelection {
+					include_saves: false,
+					include_game_data: false,
+				},
+				CancellationToken::new(),
+			))
 			.await?;
 
 		let timed = async {
@@ -665,7 +679,15 @@ mod tests {
 		let (plan, staged) = stage(&root, &binding).await?;
 		let listing = EnvironmentAdapter
 			.list_export_files_port()
-			.call((&plan, &staged, false, true, CancellationToken::new()))
+			.call((
+				&plan,
+				&staged,
+				ExportSelection {
+					include_saves: false,
+					include_game_data: true,
+				},
+				CancellationToken::new(),
+			))
 			.await?;
 
 		let timed = async {

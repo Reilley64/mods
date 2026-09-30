@@ -533,6 +533,33 @@ Gate dispositions for change I:
 
 Full check: `bun run check` exit 0; 428 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
 
+### Review repair for changes H and I
+
+Review: `/tmp/load-order-review.md` (H at 3fa9ebf, I at 4042a97). Windows validation at 4042a97 passed (447 workspace tests).
+
+- **BOM in `loadorder.txt` (finding 3):** `load_order_times` ignores a UTF-8 byte order mark at the start of the text. Before, the first entry was keyed as `"\u{feff}falloutnv.esm"`, so `FalloutNV.esm` became unlisted and got a time after every listed plugin. Test: `a_byte_order_mark_does_not_hide_the_first_listed_plugin`. The projection still reads the raw text and can still warn about that entry; that gap existed before H and is unchanged.
+- **Failing file named (finding 4):** a failed `metadata` or `set_modified` keeps `io_failure` and `phase = load_order`, and now also carries a typed `application::ports::LoadOrderFile { path }` attachment. The CLI prints it as `load_order_file = "..."` for exec and export (`error.rs`, test `load_order_errors_name_the_failing_file`). Adapter test: `a_failure_names_the_file_and_other_root_files_are_not_read`.
+- **Only plugins and archives are read (finding 5):** new `domain::takes_load_order_time(path)` (Data root and `.esm`, `.esp`, or `.bsa`). The adapter filters with it before `metadata`, and `load_order_times` uses the same predicate. The test above deletes a root `Readme.txt` and the step still succeeds.
+- **Second exec run (review item 4c):** test `a_second_exec_run_changes_no_times`. After the first run it removes all access to the timed files on Unix (`0o000`), so any open for a time change fails, then runs again and compares times. With the skip arm removed, the test fails, so it proves that files with the right time are not opened.
+- **CONTEXT.md (finding 8):** the Game Installation is now "the shared base"; its contents stay unchanged, but `exec` sets the times of its Data-root plugins and BSAs, and environments that share it must not run at the same time.
+- **execution.md (finding 8):** `loadorder.txt` is the order authority; exec sets the times again on every run, so a timestamp-only sort by LOOT or xEdit under exec is reverted unless it also updates `loadorder.txt`. The same paragraph warns against concurrent environments on one installation, and the failure text names `load_order_file`. `troubleshooting.md` mentions `load_order_file`.
+- **Nits:** `ListExportFiles` takes an `ExportSelection { include_saves, include_game_data }` instead of two unnamed `bool`s. The use case keeps its two named parameters and builds the selection. The plugin sort key is now a named `PluginRank { unlisted, position, modified, key }`, whose field order is the sort order.
+
+Decision on review finding 1 (a no-flag export ranks mod plugins before the destination's Steam-dated DLC masters): option C. The 2000-01-01 base stays, with no code change. `export.md` now says that without `--include-game-data` the destination's own base game and DLC plugins keep their dates, the exported mod plugins are timed from 2000-01-01 and can sort before the DLC masters they need, and the flag is recommended when the output is a full game setup. The `--include-game-data` help text says the same in one sentence.
+
+Not changed here: the in-game Windows check of BSA priority and archive invalidation (finding 2), the three places that decide the export output set (finding 6), inactive plugins taking an archive (finding 7), and the split profile-INI rules and empty-stem plugin (nits).
+
+Gate dispositions for this repair:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/export/types.rs` | Reason comments (0.57, first run) | Fixed. The field Rustdoc that restated the field names was removed; the struct summary states the non-obvious rule (game root files are never exported). |
+| `application/src/export/types.rs`, `export_environment.rs`, `ports/preparation.rs`, `infrastructure/environment/src/export.rs`, `load_order.rs`, `presentation/cli/src/runner.rs` | Use-case parameters | Accepted. `ExportSelection` is a named port input, not an unrelated bag; the use case keeps named parameters with the token last; the other files are adapters, port types, or tests. |
+| `application/src/ports/mod.rs` | Capability modules and public APIs (0.49) | Accepted. It re-exports `LoadOrderFile`, which presentation must name to print the path. |
+| `infrastructure/environment/src/export.rs` | Rustdoc format (0.35, first run) | Accepted as a false positive. This repair changed only test calls in the file. Its ordinary `//` comments are inside function bodies and explain code, and every item comment uses `///`. |
+
+Full check: `bun run check` exit 0; 432 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests. Windows-target clippy for `application`, `infrastructure-environment`, and `domain` is clean.
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

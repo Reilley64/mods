@@ -442,6 +442,10 @@ The user approved one shared step that both commands run:
 
 The user approved a new optional export flag. Its default name is `--include-game-data`, which the user can rename before merge. Without the flag, export behaves as today. With it, export also copies every winning file whose provider is the Game Installation's Data folder: vanilla and DLC plugins and BSAs, plus loose `Music`, `Sound`, `Video`, `Shaders`, and `NVSE` files. Files that a Data Mod or Overwrite overrides stay as they are, and the exported folder becomes a complete Data folder. The load-order time step then also covers the base game plugins and BSAs. The generated `Fallout - Invalidation.bsa` still wins over any copy in the game's Data folder. Game root files (executables, the xNVSE loader, DLLs) stay out of scope. CLI syntax: `mods [--environment PATH] export OUTPUT [--include-saves] [--include-game-data] [--dry-run]`.
 
+### Decision: keep the 2000-01-01 base and recommend `--include-game-data`
+
+Review finding: an export made without `--include-game-data` times the exported mod plugins from 2000-01-01, while the destination keeps its own Steam dates on the base-game and DLC masters (2000-01-01 to 2000-01-10). Mod plugins can then sort before those masters. The user chose option C: keep the base date, add no warning, and recommend the flag in the docs.
+
 ### Decisions on the tokio::fs follow-ups
 
 - Walk timing accepted: the exec inventory walk over 20,000 files went from a median of 21.0 ms to 27.6 ms with tokio::fs.

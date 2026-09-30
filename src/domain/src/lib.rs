@@ -62,6 +62,7 @@ pub use installation::ResolvedOptionType;
 pub use installation::Sha256Digest;
 pub use load_order::LoadOrderCandidate;
 pub use load_order::load_order_times;
+pub use load_order::takes_load_order_time;
 pub use mods::InstalledMod;
 pub use mods::InvalidModName;
 pub use mods::ModName;

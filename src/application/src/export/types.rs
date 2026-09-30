@@ -58,12 +58,17 @@ impl fmt::Display for CompletedExport {
 
 /// Requires a new output directory outside the environment.
 pub type ValidateExportDestination = Arc<dyn Fn(PathBuf) -> PortFuture<()> + Send + Sync>;
-/// Lists every file the game sees with its size. The game's own Data files are
-/// listed only with `include_game_data`; saves only with `include_saves`.
-///
-/// Arguments: plan, staged profile, `include_saves`, `include_game_data`, cancellation.
+/// Optional export content. Without `include_game_data`, winners from the game's
+/// own Data folder are left out; game root files are never exported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportSelection {
+	pub include_saves: bool,
+	pub include_game_data: bool,
+}
+
+/// Lists the files the game sees under exec, as selected, with their sizes.
 pub type ListExportFiles = Arc<
-	dyn Fn(&EnvironmentPlan, &StagedProfile, bool, bool, CancellationToken) -> PortFuture<ExportListing>
+	dyn Fn(&EnvironmentPlan, &StagedProfile, ExportSelection, CancellationToken) -> PortFuture<ExportListing>
 		+ Send
 		+ Sync,
 >;

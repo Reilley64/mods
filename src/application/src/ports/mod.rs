@@ -59,6 +59,7 @@ pub use game_platform::ValidateGameInstallation;
 pub use preparation::DiscardStagedProfile;
 pub use preparation::EnvironmentPlan;
 pub use preparation::EnvironmentProvider;
+pub use preparation::LoadOrderFile;
 pub use preparation::LoadOrderTarget;
 pub use preparation::PrepareEnvironmentPlan;
 pub use preparation::ProfileProjection;

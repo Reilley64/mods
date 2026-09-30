@@ -4,6 +4,7 @@ use crate::derived_profile::selected_archive_list;
 use crate::files::set_modified;
 use application::ErrorMarker;
 use application::ports::EnvironmentPlan;
+use application::ports::LoadOrderFile;
 use application::ports::LoadOrderTarget;
 use application::ports::PortFuture;
 use application::ports::SetLoadOrderTimes;
@@ -12,9 +13,12 @@ use domain::LoadOrderCandidate;
 use domain::ProviderIdentity;
 use domain::derived_archive_list;
 use domain::load_order_times;
+use domain::takes_load_order_time;
+use rootcause::Report;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::metadata;
@@ -60,7 +64,7 @@ impl LoadOrderInputs {
 			.zip(&prepared.visible_files)
 			// The generated invalidation archive replaces any Data copy of it.
 			.filter(|(_, file)| {
-				file.path.components().count() == 1 && file.path.comparison_key() != INVALIDATION_KEY
+				takes_load_order_time(&file.path) && file.path.comparison_key() != INVALIDATION_KEY
 			})
 			.map(|(winner, file)| RootFile {
 				path: file.path.clone(),
@@ -86,9 +90,9 @@ impl LoadOrderInputs {
 
 			let modified = metadata(&file.physical_path)
 				.await
-				.context(ErrorMarker::io_failure())?
-				.modified()
-				.context(ErrorMarker::io_failure())?;
+				.and_then(|metadata| metadata.modified())
+				.context(ErrorMarker::io_failure())
+				.map_err(|error| naming(error, &file.physical_path))?;
 
 			candidates.push(LoadOrderCandidate {
 				path: file.path.clone(),
@@ -114,10 +118,22 @@ impl LoadOrderInputs {
 				} if file.game_data => continue,
 				LoadOrderTarget::Export { output, .. } => output.join("Data").join(file.path.as_str()),
 			};
-			set_modified(&path, time).await.context(ErrorMarker::io_failure())?;
+			set_modified(&path, time)
+				.await
+				.context(ErrorMarker::io_failure())
+				.map_err(|error| naming(error, &path))?;
 		}
 		Ok(())
 	}
+}
+
+/// Attaches the file that failed, so the user can find it.
+fn naming(mut error: Report<ErrorMarker>, path: &Path) -> Report<ErrorMarker> {
+	error.children_mut()
+		.push(report!(LoadOrderFile { path: path.to_owned() })
+			.into_dynamic()
+			.into_cloneable());
+	error
 }
 
 impl EnvironmentAdapter {
@@ -287,5 +303,75 @@ mod tests {
 		});
 		set_read_only(&plugin, false)?;
 		checked
+	}
+
+	#[tokio::test]
+	async fn a_second_exec_run_changes_no_times() -> Result<(), ErrorMarker> {
+		let temp = TempDir::new().context(ErrorMarker::io_failure())?;
+		let root = temp.path();
+		let plan = plan(
+			root,
+			&[("FalloutNV.esm", true), ("Mod.esp", false), ("Mod - Main.bsa", false)],
+		)?;
+		let files = [
+			root.join("game/Data/FalloutNV.esm"),
+			root.join("overwrite/Mod.esp"),
+			root.join("overwrite/Mod - Main.bsa"),
+			root.join("cache").join(INVALIDATION_ARCHIVE),
+		];
+		let port = EnvironmentAdapter.set_load_order_times_port();
+		port.call((&plan, LoadOrderTarget::Sources, CancellationToken::new()))
+			.await?;
+		let first = files.iter().map(|path| modified(path)).collect::<Result<Vec<_>, _>>()?;
+
+		// Without read access, opening a file to set its time fails on Unix, so the
+		// second run must not open any file that already has its time.
+		#[cfg(unix)]
+		for path in &files {
+			fs::set_permissions(path, fs::Permissions::from_mode(0o000))
+				.context(ErrorMarker::io_failure())?;
+		}
+		let second = port
+			.call((&plan, LoadOrderTarget::Sources, CancellationToken::new()))
+			.await;
+		#[cfg(unix)]
+		for path in &files {
+			fs::set_permissions(path, fs::Permissions::from_mode(0o644))
+				.context(ErrorMarker::io_failure())?;
+		}
+
+		second?;
+		let again = files.iter().map(|path| modified(path)).collect::<Result<Vec<_>, _>>()?;
+		assert_eq!(again, first);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn a_failure_names_the_file_and_other_root_files_are_not_read() -> Result<(), ErrorMarker> {
+		let temp = TempDir::new().context(ErrorMarker::io_failure())?;
+		let root = temp.path();
+		let plan = plan(root, &[("Mod.esp", false), ("Readme.txt", false)])?;
+		let plugin = root.join("overwrite/Mod.esp");
+		fs::remove_file(root.join("overwrite/Readme.txt")).context(ErrorMarker::io_failure())?;
+		fs::remove_file(&plugin).context(ErrorMarker::io_failure())?;
+		let port = EnvironmentAdapter.set_load_order_times_port();
+
+		let Err(error) = port
+			.call((&plan, LoadOrderTarget::Sources, CancellationToken::new()))
+			.await
+		else {
+			return Err(report!(ErrorMarker::io_failure()));
+		};
+
+		let named = error
+			.iter_reports()
+			.find_map(|cause| cause.downcast_current_context::<LoadOrderFile>())
+			.map(|file| file.path.clone());
+		assert_eq!(named, Some(plugin.clone()));
+
+		// The missing readme is not a plugin or archive, so it is never read.
+		fs::write(&plugin, b"plugin").context(ErrorMarker::io_failure())?;
+		port.call((&plan, LoadOrderTarget::Sources, CancellationToken::new()))
+			.await
 	}
 }
