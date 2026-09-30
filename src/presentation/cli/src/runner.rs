@@ -1072,9 +1072,11 @@ mod tests {
 				include_saves: dry_run,
 				include_game_data: dry_run,
 			};
+
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 			dependencies.export_environment =
 				export_dependencies(temp.path().join("payload"), selection, published.clone());
+
 			let arguments = if dry_run {
 				arguments![
 					"mods",
