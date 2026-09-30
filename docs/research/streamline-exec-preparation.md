@@ -421,6 +421,33 @@ Gate dispositions for the repair:
 | `application/src/export/export_environment.rs` | Import placement and use (0.32) | Accepted as a false positive. After the qualified `rootcause::Report` in the test was replaced, the file has no block-local import and no repeated qualified path. Only standard `fmt::`, `tracing::instrument` and enum-variant paths remain. |
 | `presentation/cli/src/error.rs` | Phase spacing | Accepted. The retained-stage block keeps the lookup, the completed-output line, and the advice together as one output step. |
 
+### Read-only sources in export (fix G)
+
+Bug from the user's Windows machine: export stopped after `Data/UIO/supported.txt`, whose source `mods/UIO - User Interface Organizer/UIO/supported.txt` is read-only. `tokio::fs::copy` carries the read-only state to the copy (the attribute on Windows, the mode on Unix). The old `set_modified` then opened the copy for writing to set its time, and that failed with access denied. The SafeDir export before this branch wrote the bytes itself, so no read-only state carried over.
+
+Fix: `set_modified` now opens the copy only with the right to change its times, then calls `File::set_modified` on a blocking thread.
+
+- Windows: `OpenOptionsExt::access_mode(FILE_WRITE_ATTRIBUTES)`. The read-only attribute denies data writes and deletion, not attribute or time changes. The constant comes from the `windows` crate (new feature `Win32_Storage_FileSystem` for `infrastructure-environment`).
+- Other platforms: a read-only handle. `futimens` with explicit times needs file ownership, not write permission.
+- The copy keeps its read-only state. Nothing clears it.
+
+Why not `filetime`: the task suggested `filetime::set_file_mtime`. Its 0.2.29 source (`src/windows.rs`) opens the path with `OpenOptions::new().write(true)`, which requests generic write access and fails on a read-only file in the same way. `fs-set-times` 0.20.3 tries write access and then read access, and then calls `SetFileTime`, which needs `FILE_WRITE_ATTRIBUTES` and so also fails with a read handle. Neither crate fixes this case, so the fix uses the standard library directly and adds no dependency.
+
+Regression test `export_copies_a_read_only_source_with_its_bytes_and_time` makes `overwrite/Opaque.bsa` read-only through std permissions (mode 0444 on Unix, the read-only attribute on Windows), exports it, and checks that the export succeeds, the bytes and the time match, and the copy is still read-only. The test restores write access afterwards so the temporary directory can be removed on Windows. On macOS the test failed without the fix (`PermissionDenied` from the open in `set_modified`, `export.rs:393`) and passes with it. It was not run on Windows here; `cargo clippy --target x86_64-pc-windows-msvc -p infrastructure-environment --all-targets` passes.
+
+Other places in this branch that write to a file that may be read-only. None of them uses the time-setting open, so this fix does not apply; they are listed for a decision:
+
+- INI preservation (`StagedProfileInis::preserve_inner`) writes the child's edits into the canonical profile INI with `tokio::fs::write`. A read-only canonical INI makes preservation fail; the staged INIs are kept and reported as `retained_execution_inis`.
+- Install and profile maintenance overwrite canonical files with `tokio::fs::write`: `profile/modlist.txt` (`transactions.rs`), `profile/plugins.txt` and `profile/loadorder.txt` (`profile.rs`), and `mods.toml` (`settings/manifest_writer.rs`). A read-only file makes the command fail with `io_failure`. I did not check whether the code before this branch handled read-only copies of these files.
+- Not affected: extraction creates new files in a new mod folder and does not copy archive attributes; the staged profile INIs, the export stage, and missing `meta.toml` files are all new files; reading a read-only canonical INI during staging works.
+
+Gate dispositions for fix G:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/export.rs` | Use-case parameters; Phase spacing; Narrow custom implementations; Use-case declaration order | Accepted as inapplicable, as recorded for Part 2. `set_modified` is a private infrastructure helper. It uses the standard library's `OpenOptionsExt::access_mode` because neither `filetime` nor `fs-set-times` opens a file with only `FILE_WRITE_ATTRIBUTES` (see above). |
+| `application/src/export/export_environment.rs` | Cancellation state preservation (0.52, first seen after the review repair) | Accepted, the same deviation as for `derived_profile.rs`: the use case removes the export stage after cancellation, because the stage holds only derived copies. |
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

@@ -21,7 +21,7 @@ tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
 tokio-util = { workspace = true, features = ["rt"] }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

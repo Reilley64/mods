@@ -21,12 +21,14 @@ use domain::ProviderIdentity;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+use std::fs::OpenOptions as StdOpenOptions;
 use std::io;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::fs::OpenOptions;
 use tokio::fs::canonicalize;
 use tokio::fs::copy;
 use tokio::fs::create_dir;
@@ -36,6 +38,8 @@ use tokio::fs::read_dir;
 use tokio::fs::try_exists;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
+#[cfg(windows)]
+use windows::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
 
 /// Where a listed file is copied from, and whose modification time the copy gets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,20 +389,26 @@ async fn copy_files(
 }
 
 /// Gives the copy the source modification time, which the game uses to order archives and plugins.
+///
+/// A copy keeps a read-only source's read-only state, so the file is opened only
+/// with the right to change its times: `FILE_WRITE_ATTRIBUTES` on Windows, and a
+/// read-only handle elsewhere, where the owner may set times without write access.
 async fn set_modified(path: &Path, modified: SystemTime) -> Result<(), ErrorMarker> {
-	let file = OpenOptions::new()
-		.write(true)
-		.open(path)
-		.await
-		.context(ErrorMarker::io_failure())?
-		.into_std()
-		.await;
+	let path = path.to_owned();
 
-	spawn_blocking(move || file.set_modified(modified))
-		.await
-		.map_err(io::Error::other)
-		.context(ErrorMarker::io_failure())?
-		.context(ErrorMarker::io_failure())
+	spawn_blocking(move || {
+		let mut options = StdOpenOptions::new();
+		#[cfg(windows)]
+		options.access_mode(FILE_WRITE_ATTRIBUTES.0);
+		#[cfg(not(windows))]
+		options.read(true);
+
+		options.open(&path)?.set_modified(modified)
+	})
+	.await
+	.map_err(io::Error::other)
+	.context(ErrorMarker::io_failure())?
+	.context(ErrorMarker::io_failure())
 }
 
 #[cfg(test)]
@@ -415,6 +425,8 @@ mod tests {
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
 	use std::fs;
+	#[cfg(unix)]
+	use std::os::unix::fs::PermissionsExt;
 	use tempfile::TempDir;
 
 	async fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding, PathBuf), ErrorMarker> {
@@ -613,5 +625,52 @@ mod tests {
 		assert!(ini.contains("SLocalSavePath=Saves\\"));
 		assert!(ini.contains("sArchiveList=Fallout - Invalidation.bsa, Original.bsa"));
 		discard(staged).await
+	}
+
+	#[tokio::test]
+	async fn export_copies_a_read_only_source_with_its_bytes_and_time() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding, output) = fixture().await?;
+		let source = root.as_path().join("overwrite/Opaque.bsa");
+		set_read_only(&source, true)?;
+		let (plan, staged) = stage(&root, &binding).await?;
+		let listing = EnvironmentAdapter
+			.list_export_files_port()
+			.call((&plan, &staged, false, CancellationToken::new()))
+			.await?;
+
+		let written = EnvironmentAdapter
+			.write_export_port(root.clone())
+			.call((listing.sources, listing.files, output.clone(), CancellationToken::new()))
+			.await;
+
+		let copy = output.join("Data/Opaque.bsa");
+		let checked = written.and_then(|()| {
+			assert_eq!(fs::read(&copy).context(ErrorMarker::io_failure())?, b"opaque");
+			assert_eq!(modified(&copy)?, modified(&source)?);
+			assert!(fs::metadata(&copy)
+				.context(ErrorMarker::io_failure())?
+				.permissions()
+				.readonly());
+			Ok(())
+		});
+		for path in [source, copy] {
+			if path.exists() {
+				set_read_only(&path, false)?;
+			}
+		}
+		discard(staged).await?;
+		checked
+	}
+
+	/// Sets or clears the read-only state; the test restores it so the temporary
+	/// directory can be removed on Windows.
+	fn set_read_only(path: &Path, read_only: bool) -> Result<(), ErrorMarker> {
+		let mut permissions = fs::metadata(path).context(ErrorMarker::io_failure())?.permissions();
+		#[cfg(unix)]
+		permissions.set_mode(if read_only { 0o444 } else { 0o644 });
+		#[cfg(not(unix))]
+		permissions.set_readonly(read_only);
+
+		fs::set_permissions(path, permissions).context(ErrorMarker::io_failure())
 	}
 }
