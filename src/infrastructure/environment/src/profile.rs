@@ -11,7 +11,10 @@ use application::ports::InitializationProfileSources;
 use application::ports::ProfileFileDisposition;
 use application::ports::ProfileFileRecord;
 use domain::ModName;
+use domain::ProfileIniPurpose;
+use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
+use domain::derive_profile_ini;
 use encoding_rs::WINDOWS_1252;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -32,8 +35,6 @@ pub(crate) const PROFILE_FILES: [&str; 8] = [
 	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
-const MANAGED_ARCHIVE_KEYS: [&str; 3] = ["bInvalidateOlderFiles", "SInvalidationFile", "sArchiveList"];
-const MANAGED_GENERAL_KEYS: [&str; 2] = ["bUseMyGamesDirectory", "SLocalSavePath"];
 pub(crate) const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_SAVE_ENTRIES: usize = 100_000;
 
@@ -60,14 +61,6 @@ pub(crate) fn stage_profile(
 	if source_map.len() != PROFILE_FILES.len() || PROFILE_FILES.iter().any(|name| !source_map.contains_key(name)) {
 		return Err(report!(ErrorMarker::game_install_invalid()));
 	}
-	let original_fallout = source_map.get("Fallout.ini").copied().flatten();
-	let original_custom = source_map.get("FalloutCustom.ini").copied().flatten();
-	let tail_source = original_custom
-		.and_then(last_archive_list)
-		.or_else(|| original_fallout.and_then(last_archive_list))
-		.or_else(|| last_archive_list(&sources.fallout_default_ini))
-		.unwrap_or_default();
-	let archive_list = normalized_archive_list(&tail_source);
 
 	let mut records = Vec::with_capacity(PROFILE_FILES.len());
 	for name in PROFILE_FILES {
@@ -77,22 +70,19 @@ pub(crate) fn stage_profile(
 
 		let contents = source_map.get(name).copied().flatten();
 		let (output, disposition) = match (name, contents) {
-			("Fallout.ini", Some(contents)) => (
-				Some(patch_fallout_ini(contents, &archive_list)?),
-				ProfileFileDisposition::Imported,
-			),
+			("Fallout.ini", Some(contents)) => {
+				(Some(canonical_ini(name, contents)?), ProfileFileDisposition::Imported)
+			}
 			("Fallout.ini", None) => (
-				Some(patch_fallout_ini(&sources.fallout_default_ini, &archive_list)?),
+				Some(canonical_ini(name, &sources.fallout_default_ini)?),
 				ProfileFileDisposition::SeededFromGame,
 			),
-			("FalloutPrefs.ini", Some(contents)) => (
-				Some(strip_save_routing_keys(contents)?),
-				ProfileFileDisposition::Imported,
-			),
-			("FalloutCustom.ini", Some(contents)) => (
-				Some(strip_custom_routing_keys(contents)?),
-				ProfileFileDisposition::Imported,
-			),
+			("FalloutPrefs.ini", Some(contents)) => {
+				(Some(canonical_ini(name, contents)?), ProfileFileDisposition::Imported)
+			}
+			("FalloutCustom.ini", Some(contents)) => {
+				(Some(canonical_ini(name, contents)?), ProfileFileDisposition::Imported)
+			}
 			("plugins.txt" | "loadorder.txt", None) => {
 				(Some(Vec::new()), ProfileFileDisposition::CreatedEmpty)
 			}
@@ -212,18 +202,7 @@ fn validate_profile_mode(
 	}
 	let fallout = read_regular_file(profile, "Fallout.ini", cancellation)?;
 	let text = decode(&fallout)?.0;
-	let keys = archive_values(&text);
-	if keys.get("binvalidateolderfiles")
-		.is_none_or(|values| values.as_slice() != ["1"])
-		|| keys.get("sinvalidationfile")
-			.is_none_or(|values| values.as_slice() != [""])
-		|| keys.get("sarchivelist")
-			.is_none_or(|values| values.len() != 1 || !archive_list_valid(values[0]))
-		|| contains_keys_outside_section(&text, "Archive", &MANAGED_ARCHIVE_KEYS)
-		|| general_values(&text, "bUseMyGamesDirectory").as_slice() != ["1"]
-		|| general_values(&text, "SLocalSavePath").as_slice() != ["__mods_saves\\"]
-		|| contains_keys_outside_section(&text, "General", &MANAGED_GENERAL_KEYS)
-	{
+	if !canonical_profile_routing_valid("Fallout.ini", &text) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
@@ -233,9 +212,7 @@ fn validate_profile_mode(
 
 		let bytes = read_regular_file(profile, name, cancellation)?;
 		let text = decode(&bytes)?.0;
-		if contains_keys(&text, &MANAGED_GENERAL_KEYS)
-			|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
-		{
+		if !canonical_profile_routing_valid(name, &text) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
@@ -488,192 +465,12 @@ fn read_regular_file(
 	)
 }
 
-fn patch_fallout_ini(bytes: &[u8], archive_list: &str) -> Result<Vec<u8>, ErrorMarker> {
+fn canonical_ini(name: &str, bytes: &[u8]) -> Result<Vec<u8>, ErrorMarker> {
 	let (text, encoding) = decode(bytes)?;
-	let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
-	let mut lines: Vec<String> = text.lines().map(ToOwned::to_owned).collect();
-	remove_keys_any_section(&mut lines, &MANAGED_ARCHIVE_KEYS);
-	remove_keys_any_section(&mut lines, &MANAGED_GENERAL_KEYS);
-	insert_section_values(
-		&mut lines,
-		"General",
-		&[
-			"bUseMyGamesDirectory=1".to_owned(),
-			"SLocalSavePath=__mods_saves\\".to_owned(),
-		],
-	);
-	insert_section_values(
-		&mut lines,
-		"Archive",
-		&[
-			"bInvalidateOlderFiles=1".to_owned(),
-			"SInvalidationFile=".to_owned(),
-			format!("sArchiveList={archive_list}"),
-		],
-	);
-	encode(&(lines.join(newline) + newline), encoding)
-}
-
-fn strip_save_routing_keys(bytes: &[u8]) -> Result<Vec<u8>, ErrorMarker> {
-	strip_routing_keys(bytes, false)
-}
-
-fn strip_custom_routing_keys(bytes: &[u8]) -> Result<Vec<u8>, ErrorMarker> {
-	strip_routing_keys(bytes, true)
-}
-
-fn strip_routing_keys(bytes: &[u8], strip_archive: bool) -> Result<Vec<u8>, ErrorMarker> {
-	let (text, encoding) = decode(bytes)?;
-	let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
-	let trailing = text.ends_with('\n');
-	let mut lines: Vec<String> = text.lines().map(ToOwned::to_owned).collect();
-	if strip_archive {
-		remove_keys_any_section(&mut lines, &MANAGED_ARCHIVE_KEYS);
-	}
-	remove_keys_any_section(&mut lines, &MANAGED_GENERAL_KEYS);
-	let mut result = lines.join(newline);
-	if trailing {
-		result.push_str(newline);
-	}
-	encode(&result, encoding)
-}
-
-fn remove_keys_any_section(lines: &mut Vec<String>, keys: &[&str]) {
-	lines.retain(|line| {
-		let Some((key, _)) = line.split_once('=') else {
-			return true;
-		};
-		!keys.iter().any(|managed| managed.eq_ignore_ascii_case(key.trim()))
-	});
-}
-
-fn insert_section_values(lines: &mut Vec<String>, section: &str, values: &[String]) {
-	let header = format!("[{section}]");
-	let start = lines
-		.iter()
-		.position(|line| section_name(line).is_some_and(|name| name.eq_ignore_ascii_case(section)));
-	if let Some(start) = start {
-		let end = lines
-			.iter()
-			.enumerate()
-			.skip(start + 1)
-			.find(|(_, line)| section_name(line).is_some())
-			.map_or(lines.len(), |(index, _)| index);
-		for (offset, value) in values.iter().enumerate() {
-			lines.insert(end + offset, value.clone());
-		}
-	} else {
-		if lines.last().is_some_and(|line| !line.is_empty()) {
-			lines.push(String::new());
-		}
-		lines.push(header);
-		lines.extend(values.iter().cloned());
-	}
-}
-
-fn last_archive_list(bytes: &[u8]) -> Option<String> {
-	let (text, _) = decode(bytes).ok()?;
-	let mut current_section = "";
-	let mut last_value = None;
-	for line in text.lines() {
-		if let Some(section) = section_name(line) {
-			current_section = section;
-			continue;
-		}
-		if current_section.eq_ignore_ascii_case("Archive")
-			&& let Some((key, value)) = line.split_once('=')
-			&& key.trim().eq_ignore_ascii_case("sArchiveList")
-		{
-			last_value = Some(value.trim().to_owned());
-		}
-	}
-	last_value
-}
-
-fn normalized_archive_list(source: &str) -> String {
-	let mut values = vec!["Fallout - Invalidation.bsa".to_owned()];
-	values.extend(source
-		.split(',')
-		.map(str::trim)
-		.filter(|value| !value.is_empty() && !is_invalidation_archive(value))
-		.map(ToOwned::to_owned));
-	values.join(", ")
-}
-
-fn archive_list_valid(value: &str) -> bool {
-	let values: Vec<_> = value
-		.split(',')
-		.map(str::trim)
-		.filter(|item| !item.is_empty())
-		.collect();
-	values.first().is_some_and(|first| is_invalidation_archive(first))
-		&& values.iter().filter(|item| is_invalidation_archive(item)).count() == 1
-}
-
-fn is_invalidation_archive(value: &str) -> bool {
-	case_fold_key(value) == "fallout - invalidation.bsa"
-}
-
-fn archive_values(text: &str) -> HashMap<String, Vec<&str>> {
-	section_values(text, "Archive", &MANAGED_ARCHIVE_KEYS)
-}
-
-fn general_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
-	section_values(text, "General", &[key])
-		.remove(&key.to_ascii_lowercase())
-		.unwrap_or_default()
-}
-
-fn contains_keys(text: &str, keys: &[&str]) -> bool {
-	text.lines().any(|line| {
-		line.split_once('=')
-			.is_some_and(|(key, _)| keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim())))
-	})
-}
-
-fn contains_keys_outside_section(text: &str, section: &str, keys: &[&str]) -> bool {
-	let mut current_section = "";
-	for line in text.lines() {
-		if let Some(found) = section_name(line) {
-			current_section = found;
-			continue;
-		}
-		if !current_section.eq_ignore_ascii_case(section)
-			&& line.split_once('=').is_some_and(|(key, _)| {
-				keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim()))
-			}) {
-			return true;
-		}
-	}
-	false
-}
-
-fn section_values<'a>(text: &'a str, wanted_section: &str, wanted_keys: &[&str]) -> HashMap<String, Vec<&'a str>> {
-	let mut result: HashMap<String, Vec<&str>> = HashMap::new();
-	let mut current_section = "";
-	for line in text.lines() {
-		if let Some(section) = section_name(line) {
-			current_section = section;
-			continue;
-		}
-		if !current_section.eq_ignore_ascii_case(wanted_section) {
-			continue;
-		}
-		let Some((key, value)) = line.split_once('=') else {
-			continue;
-		};
-		if wanted_keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim())) {
-			result.entry(key.trim().to_ascii_lowercase())
-				.or_default()
-				.push(value.trim());
-		}
-	}
-	result
-}
-
-fn section_name(line: &str) -> Option<&str> {
-	let line = line.trim();
-	line.strip_prefix('[')?.strip_suffix(']').map(str::trim)
+	encode(
+		&derive_profile_ini(name, &text, ProfileIniPurpose::Canonical, ""),
+		encoding,
+	)
 }
 
 #[derive(Clone, Copy)]
@@ -712,7 +509,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Encoding), ErrorMarker> {
 	}
 }
 
-fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, ErrorMarker> {
+pub(crate) fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, ErrorMarker> {
 	match encoding {
 		Encoding::Utf8 => Ok(text.as_bytes().to_vec()),
 		Encoding::Utf8Bom => Ok([&[0xef, 0xbb, 0xbf], text.as_bytes()].concat()),
@@ -739,7 +536,6 @@ mod tests {
 	use super::MAX_PROFILE_BYTES;
 	use super::MAX_SAVE_ENTRIES;
 	use super::PROFILE_FILES;
-	use super::general_values;
 	use super::is_activatable_plugin_name;
 	use super::remove_unavailable_lines;
 	use super::stage_profile;
@@ -752,6 +548,7 @@ mod tests {
 	use application::ports::InitializationProfileSources;
 	use application::ports::ProfileFileDisposition;
 	use application::ports::ProfileSource;
+	use domain::canonical_profile_routing_valid;
 	use domain::case_fold_key;
 	use std::collections::HashSet;
 	use std::error::Error;
@@ -873,10 +670,11 @@ mod tests {
 		assert_eq!(records[6].disposition, ProfileFileDisposition::CreatedEmpty);
 		assert!(fs::read_dir(temp.path().join("saves"))?.next().is_none());
 		let fallout = fs::read_to_string(temp.path().join("Fallout.ini"))?;
-		assert!(fallout.contains("sArchiveList=Fallout - Invalidation.bsa, Custom.bsa"));
-		assert!(fallout.contains("SLocalSavePath=__mods_saves\\"));
+		assert!(fallout.contains("sArchiveList=Default.bsa"));
+		assert!(!fallout.contains("bInvalidateOlderFiles"));
+		assert!(fallout.contains("SLocalSavePath=Saves\\"));
 		let custom = fs::read_to_string(temp.path().join("FalloutCustom.ini"))?;
-		assert!(!custom.to_ascii_lowercase().contains("sarchivelist"));
+		assert!(custom.contains("sArchiveList=Custom.bsa"));
 		assert!(!custom.to_ascii_lowercase().contains("slocalsavepath"));
 		Ok(())
 	}
@@ -957,19 +755,16 @@ mod tests {
 		stage_profile(&profile, &sources, &CancellationToken::new()).map_err(|_| "stage failed")?;
 
 		let fallout = fs::read_to_string(temp.path().join("Fallout.ini"))?;
-		assert_eq!(general_values(&fallout, "bUseMyGamesDirectory"), ["1"]);
-		assert_eq!(general_values(&fallout, "SLocalSavePath"), ["__mods_saves\\"]);
+		assert!(canonical_profile_routing_valid("Fallout.ini", &fallout));
 		assert!(fallout.contains("; keep fallout comment"));
 		assert!(fallout.contains("bOther=keep"));
 		assert_eq!(fallout.to_ascii_lowercase().matches("busemygamesdirectory").count(), 1);
 		assert_eq!(fallout.to_ascii_lowercase().matches("slocalsavepath").count(), 1);
-		for key in ["binvalidateolderfiles", "sinvalidationfile", "sarchivelist"] {
-			assert_eq!(fallout.to_ascii_lowercase().matches(key).count(), 1);
-		}
+		assert_eq!(fallout.matches("bInvalidateOlderFiles=0").count(), 2);
+		assert!(fallout.contains("sArchiveList=Misplaced.bsa"));
 		for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
 			let text = fs::read_to_string(temp.path().join(name))?;
-			assert!(general_values(&text, "bUseMyGamesDirectory").is_empty());
-			assert!(general_values(&text, "SLocalSavePath").is_empty());
+			assert!(canonical_profile_routing_valid(name, &text));
 			assert!(!text.to_ascii_lowercase().contains("busemygamesdirectory"));
 			assert!(!text.to_ascii_lowercase().contains("slocalsavepath"));
 			assert!(text.contains("; keep nonfallout comment"));
@@ -1011,8 +806,7 @@ mod tests {
 		stage_profile(&profile, &sources, &CancellationToken::new()).map_err(|_| "stage failed")?;
 
 		let fallout = fs::read_to_string(temp.path().join("Fallout.ini"))?;
-		assert_eq!(general_values(&fallout, "bUseMyGamesDirectory"), ["1"]);
-		assert_eq!(general_values(&fallout, "SLocalSavePath"), ["__mods_saves\\"]);
+		assert!(canonical_profile_routing_valid("Fallout.ini", &fallout));
 		Ok(())
 	}
 

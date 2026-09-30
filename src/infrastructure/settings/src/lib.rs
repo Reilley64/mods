@@ -512,7 +512,7 @@ mod tests {
 		fs::write(
 			temp.path().join("profile/Fallout.ini"),
 			concat!(
-				"[General]\nbUseMyGamesDirectory=1\nSLocalSavePath=__mods_saves\\\n",
+				"[General]\nbUseMyGamesDirectory=1\nSLocalSavePath=Saves\\\n",
 				"[Archive]\nbInvalidateOlderFiles=1\n",
 				"SInvalidationFile=\n",
 				"sArchiveList=Fallout - Invalidation.bsa\n",
@@ -902,7 +902,7 @@ mod tests {
 	}
 
 	#[test]
-	fn misplaced_managed_archive_keys_are_invalid() -> Result<()> {
+	fn user_authored_archive_keys_are_preserved() -> Result<()> {
 		for (name, contents) in [
 			(
 				"Fallout.ini",
@@ -931,7 +931,7 @@ mod tests {
 				fs::write(path, contents)?;
 			}
 
-			assert!(SettingsAdapter::with_environment(root, Vec::new()).load().is_err());
+			assert!(SettingsAdapter::with_environment(root, Vec::new()).load().is_ok());
 		}
 		Ok(())
 	}
@@ -963,7 +963,7 @@ mod tests {
 			temp.path().join("profile/Fallout.ini"),
 			concat!(
 				"[General]\n",
-				"SLocalSavePath=__mods_saves\\\n",
+				"SLocalSavePath=Saves\\\n",
 				"bUseMyGamesDirectory=0\n",
 				"busemygamesdirectory=1\n",
 				"[Archive]\n",

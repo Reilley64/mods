@@ -2,6 +2,7 @@ use super::ExecutionAdapter;
 use application::ErrorMarker;
 use application::execution::ExecuteProgramOutput;
 use application::execution::ExecutionWarning;
+use application::execution::RetainedExecutionInis;
 use application::ports::ProgressEvent;
 use application::ports::ReportProgress;
 use domain::OutputTarget;
@@ -25,6 +26,7 @@ use infrastructure_execution::VisibleProfileFile;
 use infrastructure_execution::build_profile_configuration;
 use infrastructure_execution::supervise;
 use infrastructure_game_platform::GamePlatformAdapter;
+use rootcause::Report;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
@@ -150,25 +152,6 @@ impl ExecutionAdapter {
 				}
 			})
 			.collect();
-		let mut mappings = profile.profile_files;
-		mappings.push(profile.invalidation_mapping);
-		let configuration = ViewConfiguration::new(
-			prepared.data_directory.clone(),
-			prepared.providers
-				.iter()
-				.map(|provider| ProviderRoot {
-					identity: provider.identity.clone(),
-					root: provider.root.clone(),
-					enabled: provider.enabled,
-				})
-				.collect(),
-			prepared.winners.clone(),
-			selected_output_mod,
-			profile.profile_directories,
-			mappings,
-			profile.saves,
-		)
-		.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
 
 		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
 		let current_binding = validate_game.call((effective_binding, cancellation.clone())).await?;
@@ -176,99 +159,161 @@ impl ExecutionAdapter {
 			return Err(report!(ErrorMarker::environment_invalid(Some("execution"))));
 		}
 
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
-		let view = VirtualGameView::configure(&configuration)
+		let inis = environment.derive_execution_inis(&self.root, &prepared, &cancellation)?;
+		let retained_path = inis.path().to_owned();
+		let mut inis_retained = true;
+		let result = async {
+			let mut mappings = profile.profile_files;
+			for mapping in &mut mappings {
+				if let Some(name) = mapping.source.file_name()
+					&& name.to_str().is_some_and(|name| name.ends_with(".ini"))
+				{
+					mapping.source = inis.path().join(name);
+				}
+			}
+			mappings.push(profile.invalidation_mapping);
+			let configuration = ViewConfiguration::new(
+				prepared.data_directory.clone(),
+				prepared.providers
+					.iter()
+					.map(|provider| ProviderRoot {
+						identity: provider.identity.clone(),
+						root: provider.root.clone(),
+						enabled: provider.enabled,
+					})
+					.collect(),
+				prepared.winners.clone(),
+				selected_output_mod,
+				profile.profile_directories,
+				mappings,
+				profile.saves,
+			)
 			.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
 
-		if let Err(mut failure) = environment.revalidate_execution(&self.root, &prepared, &cancellation) {
-			if let Err(cleanup) = view.close() {
-				failure.children_mut().push(cleanup.into_dynamic().into_cloneable());
+			if cancellation.is_cancelled() {
+				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			return Err(failure);
-		}
 
-		if cancellation.is_cancelled() {
-			view.close().context(ErrorMarker::vfs_failed().with_phase("cleanup"))?;
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
+			let view = VirtualGameView::configure(&configuration)
+				.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
 
-		let mut private_streams = self
-			.capture
-			.as_ref()
-			.map(|capture| capture.prepare(self.force_cancellation.clone()))
-			.transpose()?;
+			if let Err(mut failure) =
+				environment.revalidate_execution_with_inis(&self.root, &prepared, &inis, &cancellation)
+			{
+				if let Err(cleanup) = view.close() {
+					failure.children_mut().push(cleanup.into_dynamic().into_cloneable());
+				}
+				return Err(failure);
+			}
 
-		let launched = view
-			.launch(LaunchRequest {
-				new_process_group: self.capture.is_some(),
-				application: &launch.application,
-				command_line: &launch.command_line,
-				directory: &launch.directory,
-				standard_streams: private_streams
-					.as_ref()
-					.and_then(|streams| streams.borrowed())
-					.or_else(|| inherited_streams.as_ref().map(InheritedStreams::borrowed)),
-			})
-			.map_err(|error| {
-				let native = error
-					.iter_reports()
-					.find_map(|report| report.downcast_current_context::<NativeFailure>());
-				let marker = if let Some(native) = native {
-					if native.cleanup_status != 0 {
-						ErrorMarker::vfs_failed().with_phase("cleanup")
-					} else if native.native_error == 740 {
-						ErrorMarker::elevation_required()
-					} else if matches!(native.native_error, 2 | 3 | 5 | 193 | 216 | 267) {
-						ErrorMarker::program_launch_failed()
+			if cancellation.is_cancelled() {
+				view.close().context(ErrorMarker::vfs_failed().with_phase("cleanup"))?;
+				return Err(report!(ErrorMarker::operation_cancelled()));
+			}
+
+			let mut private_streams = self
+				.capture
+				.as_ref()
+				.map(|capture| capture.prepare(self.force_cancellation.clone()))
+				.transpose()?;
+
+			let launched = view
+				.launch(LaunchRequest {
+					new_process_group: self.capture.is_some(),
+					application: &launch.application,
+					command_line: &launch.command_line,
+					directory: &launch.directory,
+					standard_streams: private_streams
+						.as_ref()
+						.and_then(|streams| streams.borrowed())
+						.or_else(|| inherited_streams.as_ref().map(InheritedStreams::borrowed)),
+				})
+				.map_err(|error| {
+					let native = error
+						.iter_reports()
+						.find_map(|report| report.downcast_current_context::<NativeFailure>());
+					let marker = if let Some(native) = native {
+						if native.cleanup_status != 0 {
+							ErrorMarker::vfs_failed().with_phase("cleanup")
+						} else if native.native_error == 740 {
+							ErrorMarker::elevation_required()
+						} else if matches!(native.native_error, 2 | 3 | 5 | 193 | 216 | 267) {
+							ErrorMarker::program_launch_failed()
+						} else {
+							ErrorMarker::vfs_failed().with_phase("vfs_setup")
+						}
 					} else {
-						ErrorMarker::vfs_failed().with_phase("vfs_setup")
-					}
-				} else {
-					ErrorMarker::execution_supervision_failed().with_phase("launch")
-				};
-				error.context(marker)
-			});
-		if let Some(streams) = &mut private_streams {
-			streams.close_child_ends();
+						ErrorMarker::execution_supervision_failed().with_phase("launch")
+					};
+					error.context(marker)
+				});
+			if let Some(streams) = &mut private_streams {
+				streams.close_child_ends();
+			}
+
+			let mut process = launched?;
+
+			if let Some(progress) = &progress {
+				progress.call((ProgressEvent::ExecutionPrepared,)).await;
+			}
+
+			let outcome = supervise(&mut process, cancellation, self.force_cancellation.clone())
+				.await
+				.context(ErrorMarker::execution_supervision_failed().with_phase("running"));
+			let drained = process.job_is_empty();
+			drop(process);
+			if !drained.as_ref().is_ok_and(|empty| *empty) {
+				let mut failure = report!(RetainedExecutionInis {
+					path: inis.path().to_owned()
+				})
+				.context(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"));
+				if let Err(error) = drained {
+					failure.children_mut().push(error.into_dynamic().into_cloneable());
+				}
+				if let Err(error) = outcome {
+					failure.children_mut().push(error.into_dynamic().into_cloneable());
+				}
+				return Err(failure);
+			}
+
+			inis.preserve()?;
+			inis_retained = false;
+
+			if let Some(streams) = private_streams {
+				streams.finish()?;
+			}
+
+			let outcome = outcome?;
+
+			if environment
+				.check_execution_with_spool(
+					&self.root,
+					&binding,
+					self.capture.as_ref().and_then(|capture| capture.directory()),
+					&CancellationToken::new(),
+				)
+				.is_err()
+			{
+				warnings.push(ExecutionWarning::ProfileStateInvalid);
+			}
+			if outcome.forced {
+				return Err(report!(ErrorMarker::operation_cancelled().with_phase("cleanup")));
+			}
+
+			Ok(ExecuteProgramOutput {
+				status: ProcessStatus::new(outcome.status),
+				warnings,
+			})
 		}
-
-		let mut process = launched?;
-
-		if let Some(progress) = &progress {
-			progress.call((ProgressEvent::ExecutionPrepared,)).await;
-		}
-
-		let outcome = supervise(&mut process, cancellation, self.force_cancellation.clone())
-			.await
-			.context(ErrorMarker::execution_supervision_failed().with_phase("running"));
-		drop(process);
-		if let Some(streams) = private_streams {
-			streams.finish()?;
-		}
-
-		let outcome = outcome?;
-
-		if environment
-			.check_execution_with_spool(
-				&self.root,
-				&binding,
-				self.capture.as_ref().and_then(|capture| capture.directory()),
-				&CancellationToken::new(),
-			)
-			.is_err()
-		{
-			warnings.push(ExecutionWarning::ProfileStateInvalid);
-		}
-		if outcome.forced {
-			return Err(report!(ErrorMarker::operation_cancelled().with_phase("cleanup")));
-		}
-
-		Ok(ExecuteProgramOutput {
-			status: ProcessStatus::new(outcome.status),
-			warnings,
+		.await;
+		result.map_err(|mut error: Report<ErrorMarker>| {
+			if inis_retained {
+				error.children_mut()
+					.push(report!(RetainedExecutionInis { path: retained_path })
+						.into_dynamic()
+						.into_cloneable());
+			}
+			error
 		})
 	}
 }

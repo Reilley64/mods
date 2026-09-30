@@ -20,6 +20,7 @@ use same_file::Handle;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::fs::FileTimes;
 use std::io;
 use std::io::Read;
 use std::io::Write;
@@ -27,6 +28,7 @@ use std::path::Component;
 use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
+use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
 #[cfg(windows)]
 use windows::Win32::Foundation::GENERIC_WRITE;
@@ -57,6 +59,26 @@ impl SafeFile {
 
 	pub(crate) fn write_chunk(&mut self, contents: &[u8]) -> Result<(), io::Error> {
 		self.inner.write_all(contents).into_report()
+	}
+
+	pub(crate) fn set_modified(&self, modified: SystemTime) -> Result<(), io::Error> {
+		self.inner
+			.try_clone()
+			.into_report()?
+			.into_std()
+			.set_times(FileTimes::new().set_modified(modified))
+			.into_report()?;
+
+		if self.inner
+			.metadata()
+			.into_report()?
+			.modified()
+			.into_report()?
+			.into_std() != modified
+		{
+			return Err(report!(io::Error::other("modification time was not preserved")));
+		}
+		Ok(())
 	}
 
 	pub(crate) fn finish(&self) -> Result<(), io::Error> {
