@@ -4,6 +4,7 @@ use crate::ports::CheckProfileState;
 use crate::ports::CreateVirtualFileSystem;
 use crate::ports::FinishProgramOutput;
 use crate::ports::LaunchProgram;
+use crate::ports::LoadOrderTarget;
 use crate::ports::PrepareEnvironmentPlan;
 use crate::ports::PreserveExecutionProfile;
 use crate::ports::ProfilePurpose;
@@ -12,6 +13,7 @@ use crate::ports::ProjectProfile;
 use crate::ports::ReportProgress;
 use crate::ports::ResolveLaunchTarget;
 use crate::ports::RetainedProfile;
+use crate::ports::SetLoadOrderTimes;
 use crate::ports::StageProfile;
 use crate::ports::SuperviseProgram;
 use crate::preparation::PreparedEnvironment;
@@ -35,6 +37,7 @@ pub struct ExecuteProgramDependencies {
 	pub resolve_launch_target: ResolveLaunchTarget,
 	pub prepare_environment_plan: PrepareEnvironmentPlan,
 	pub project_profile: ProjectProfile,
+	pub set_load_order_times: SetLoadOrderTimes,
 	pub stage_profile: StageProfile,
 	pub create_virtual_file_system: CreateVirtualFileSystem,
 	pub launch_program: LaunchProgram,
@@ -135,6 +138,19 @@ pub async fn execute_program(
 	} else {
 		None
 	};
+
+	// The game orders plugins and archives by modification time, and the virtual
+	// file system shows each winning file with its own time. The step runs before
+	// staging, so a failure leaves nothing to retain.
+	dependencies
+		.set_load_order_times
+		.call((&plan, LoadOrderTarget::Sources, cancellation.clone()))
+		.await
+		.map_err(|mut error| {
+			error.current_context_mut().set_phase_if_missing("load_order");
+			error
+		})
+		.context(ExecuteProgramError)?;
 
 	let staged = dependencies
 		.stage_profile
@@ -237,6 +253,7 @@ mod tests {
 	use crate::ports::EnvironmentPlan;
 	use crate::ports::EnvironmentProvider;
 	use crate::ports::LaunchTarget;
+	use crate::ports::LoadOrderTarget;
 	use crate::ports::PortFuture;
 	use crate::ports::ProfileProjection;
 	use crate::ports::ProfilePurpose;
@@ -287,6 +304,7 @@ mod tests {
 		warnings: Vec<ProfileWarning>,
 		cancel_after_file_system: bool,
 		supervision: Supervision,
+		load_order_fails: bool,
 		preservation_fails: bool,
 		profile_state_valid: bool,
 	}
@@ -314,6 +332,7 @@ mod tests {
 			warnings: Vec::new(),
 			cancel_after_file_system: false,
 			supervision: Supervision::Exited,
+			load_order_fails: false,
 			preservation_fails: false,
 			profile_state_valid: true,
 		})
@@ -356,6 +375,7 @@ mod tests {
 		let resolved = record_step("resolve");
 		let prepared = record_step("prepare");
 		let projected = record_step("project");
+		let timed = record_step("load_order");
 		let staged = record_step("stage");
 		let launched = record_step("launch");
 		let supervised = record_step("supervise");
@@ -387,6 +407,15 @@ mod tests {
 				complete(Ok(ProfileProjection {
 					warnings: scenario.warnings.clone(),
 				}))
+			}),
+			set_load_order_times: Arc::new(move |plan: &EnvironmentPlan, target, _| {
+				assert_eq!(plan.state.downcast_ref::<&str>(), Some(&"plan"));
+				assert_eq!(target, LoadOrderTarget::Sources);
+				timed();
+				if scenario.load_order_fails {
+					return complete(Err(report!(ErrorMarker::io_failure())));
+				}
+				complete(Ok(()))
 			}),
 			stage_profile: Arc::new(move |_: &EnvironmentPlan, purpose: ProfilePurpose, _| {
 				assert_eq!(purpose, ProfilePurpose::Execution);
@@ -539,7 +568,6 @@ mod tests {
 	async fn composes_steps_in_order_and_maps_warnings() -> Result<(), ErrorMarker> {
 		let mut scenario = default_scenario()?;
 		scenario.warnings = vec![
-			ProfileWarning::LoadOrderNotEnforced,
 			ProfileWarning::Unavailable {
 				file: "Plugins.TXT".into(),
 				plugin: "Missing.esp".into(),
@@ -574,6 +602,7 @@ mod tests {
 				"resolve",
 				"prepare",
 				"project",
+				"load_order",
 				"stage",
 				"create:target",
 				"launch",
@@ -589,7 +618,6 @@ mod tests {
 		assert_eq!(
 			output.warnings,
 			[
-				ExecutionWarning::Plugin(PluginWarning::LoadOrderNotEnforced),
 				ExecutionWarning::Plugin(PluginWarning::StalePluginEntry {
 					name: "Missing.esp".into()
 				}),
@@ -679,6 +707,7 @@ mod tests {
 				"resolve",
 				"prepare",
 				"project",
+				"load_order",
 				"stage",
 				"create:overwrite",
 				"close",
@@ -778,7 +807,7 @@ mod tests {
 			&ErrorMarker::operation_cancelled().with_phase("cleanup")
 		));
 		assert!(retained_paths(&error).is_empty());
-		assert_eq!(recorded(&steps)[8..], ["supervise", "preserve", "finish", "check"]);
+		assert_eq!(recorded(&steps)[9..], ["supervise", "preserve", "finish", "check"]);
 		Ok(())
 	}
 
@@ -836,6 +865,31 @@ mod tests {
 
 		assert_eq!(*error.current_context(), ExecuteProgramError);
 		assert!(has_marker(&error, &ErrorMarker::program_not_found()));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn a_failed_load_order_step_stops_before_staging_with_its_own_phase() -> Result<(), ErrorMarker> {
+		let mut scenario = default_scenario()?;
+		scenario.load_order_fails = true;
+		let (dependencies, steps) = fake_dependencies(scenario);
+
+		let Err(error) = run(dependencies, OutputTarget::Overwrite, CancellationToken::new()).await else {
+			return Err(report!(ErrorMarker::execution_supervision_failed()));
+		};
+
+		assert!(has_marker(&error, &ErrorMarker::io_failure().with_phase("load_order")));
+		assert!(retained_paths(&error).is_empty());
+		assert_eq!(
+			recorded(&steps),
+			[
+				"progress:PreparingExecution",
+				"resolve",
+				"prepare",
+				"project",
+				"load_order"
+			]
+		);
 		Ok(())
 	}
 }

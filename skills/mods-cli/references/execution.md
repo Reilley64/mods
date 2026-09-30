@@ -39,6 +39,18 @@ The tool and `--example-argument` above are placeholders: use the actual tool's 
 
 ## Runtime limits
 
-The released usvfs setup maps provider roots, not every per-file analytical winner. Tombstone suppression in conflict/installation analysis is not guaranteed during execution. Plugin diagnostics describe the analytical Data projection, not an observed runtime view. Projected plugin order is advisory and is **not enforced through virtual timestamps**. Canonical Profile State supplies mappings; analytical lists do not rewrite those files.
+The released usvfs setup maps provider roots, not every per-file analytical winner. Tombstone suppression in conflict/installation analysis is not guaranteed during execution. Plugin diagnostics describe the analytical Data projection, not an observed runtime view. Canonical Profile State supplies mappings; analytical lists do not rewrite those files.
 
-Report `load_order_not_enforced`, stale/duplicate plugin entries, unlisted plugins, and invalid retained Profile State warnings accurately. Do not promise safe execution from a preview or conflict report, or claim that root mapping and all write/delete cases follow the analytical model.
+## Load order through file times
+
+The game orders plugins and BSAs by modification time, and usvfs shows each file with its own time. So before it launches the program, `exec` sets the modification times of the winning plugins (`.esm`, `.esp`) and BSAs at the Data root. It changes the **real files**: files in the Game Installation's `Data` folder, in Data Mods, and in Overwrite. Read-only files are supported, and they stay read-only. Files that already have their time are not changed. Other files keep their times.
+
+- Times start at 2000-01-01 00:00 UTC and add one minute per position.
+- BSAs named in the derived `sArchiveList` come first, in list order. The list starts with `Fallout - Invalidation.bsa`, followed by the list from `FalloutCustom.ini` or `Fallout.ini`.
+- Other BSAs that no plugin loads come next, in their current modification-time order.
+- Plugins follow in `loadorder.txt` order. `loadorder.txt` lists active and inactive plugins, so every present plugin gets a time. Plugins missing from `loadorder.txt` come after the listed ones, in their current modification-time order, and cause an `unlisted_plugin` warning.
+- A BSA whose name starts with a plugin's name (case-insensitive) gets that plugin's time. If more than one plugin name matches, the longest one wins.
+
+If setting a time fails, `exec` stops before it stages profile INIs or launches anything, and nothing is retained. The error reports `phase = load_order`; see [troubleshooting](troubleshooting.md).
+
+Report stale/duplicate plugin entries, unlisted plugins, and invalid retained Profile State warnings accurately. Do not promise safe execution from a preview or conflict report, or claim that root mapping and all write/delete cases follow the analytical model.

@@ -448,6 +448,55 @@ Gate dispositions for fix G:
 | `infrastructure/environment/src/export.rs` | Use-case parameters; Phase spacing; Narrow custom implementations; Use-case declaration order | Accepted as inapplicable, as recorded for Part 2. `set_modified` is a private infrastructure helper. It uses the standard library's `OpenOptionsExt::access_mode` because neither `filetime` nor `fs-set-times` opens a file with only `FILE_WRITE_ATTRIBUTES` (see above). |
 | `application/src/export/export_environment.rs` | Cancellation state preservation (0.52, first seen after the review repair) | Accepted, the same deviation as for `derived_profile.rs`: the use case removes the export stage after cancellation, because the stage holds only derived copies. |
 
+### Load order through plugin and BSA times (change H)
+
+Decision: `docs/exec-performance-discussion.md`, "Decision: enforce load order through plugin and BSA times". Both commands now run one shared step that gives the Data-root plugins and BSAs modification times in load order.
+
+Design:
+
+- Pure ordering: `domain::load_order_times(candidates, load_order, archive_list)` in `domain/src/load_order.rs`. Each `LoadOrderCandidate<T>` has a caller handle `file`, its `DataRelativePath`, and its current time. It returns `(file, time)` pairs in time order. The rules:
+  - Positions start at 2000-01-01T00:00:00Z and add one minute each.
+  - First the archives named in the derived archive list, in list order. Then other archives that no plugin loads, in current-time order (ties by name). Then plugins in `loadorder.txt` order, then unlisted plugins in current-time order (ties by name).
+  - An archive whose stem starts with a plugin stem gets that plugin's time. The longest stem wins; for equal stems (`Mod.esm` and `Mod.esp`) the earlier plugin wins. Membership in the archive list takes precedence over a plugin match.
+  - Names match case-insensitively (`case_fold_key`). Only Data-root files count. Every present plugin gets a time, because `loadorder.txt` lists active and inactive plugins. `loadorder.txt` names that are not present take no position.
+- The derived archive list is now one domain function, `derived_archive_list`, which `derive_profile_ini` also uses. The canonical list selection (`FalloutCustom.ini`, then `Fallout.ini`, then the built-in default) is now `selected_archive_list` in `derived_profile.rs`, shared by staging and the new step. The step reads the canonical texts from the plan, so it does not read the INIs again.
+- Shared port: `SetLoadOrderTimes = Fn(&EnvironmentPlan, LoadOrderTarget, CancellationToken)` in `application::ports::preparation`, with `LoadOrderTarget::{Sources, Export(PathBuf)}`. It is one step with one capability, like `StageProfile` with `ProfilePurpose`. `PreparationPorts` builds it for both compositions from `EnvironmentAdapter::set_load_order_times_port` (`environment/src/load_order.rs`).
+- The adapter takes the Data-root winners of the plan plus the generated `Fallout - Invalidation.bsa` from `cache`, reads their current times, and calls the pure function. It then sets each time with the attributes-only open from fix G, now `files::set_modified`:
+  - `Sources` (exec): the physical winning files, in the game's `Data`, the Data Mods, and Overwrite, plus the cache invalidation archive. A file that already has its time is skipped, so a second run opens no files.
+  - `Export(output)`: `output/Data/<name>` for every exported file. Winners from the game's own Data are not exported, so they are skipped. They still take their positions, so exported plugins keep the same times as under exec.
+- exec: the step runs after projection and the output-target check, and before staging, so the VFS is created after it. A failure gets `phase = load_order` (set with `set_phase_if_missing`, as in `install_archive`) and carries no `RetainedProfile`, because nothing is staged yet.
+- export: the step runs after `WriteExport`, only when not `dry_run`. A failure gets `phase = load_order` and carries `RetainedExport`, because the output is written but not finished. The stage is still discarded.
+- `WriteExport` no longer sets any time. A copy keeps the time that `tokio::fs::copy` gives it: the source time on Windows (`CopyFileExW`), the copy time on macOS and Linux. `ExportSource.modified` and the `ExportOrigin.time_source` indirection are removed, so staged INIs no longer take their canonical file's time.
+- `ProfileWarning::LoadOrderNotEnforced` and `PluginWarning::LoadOrderNotEnforced` are removed, with their CLI text, tests, and the skill reference. The `unlisted_plugin` text no longer says "projected order uses backing-file modification time". It now says the plugin gets a load-order time after the listed plugins, in current modification-time order. `docs/acceptance/issue-33.md` still names the old warning; it records past evidence, so it is unchanged.
+
+Tests:
+
+- Pure ordering (`domain/src/load_order.rs`): archive-list archives first in list order, then archives without a plugin by current time; listed plugins (case-insensitive, comments and blank lines skipped, missing names skipped) then unlisted plugins by current time; archives take the time of the longest matching plugin stem, case-insensitively, and the archive list overrides a plugin match; only Data-root plugins and archives get a time.
+- exec use case: `set_load_order_times` runs with `LoadOrderTarget::Sources` between `project` and `stage`, so before `create`. A failed step stops before staging with `phase = load_order` and nothing retained.
+- export use case: the step runs with `LoadOrderTarget::Export("/output")` after `write` and before `discard`. A failed step reports `phase = load_order` and `RetainedExport`, and the stage is still removed.
+- Adapter, exec (`load_order.rs`): times on the cache invalidation archive, a game Data BSA and master, a read-only Overwrite plugin, and its archive; a nested texture keeps its time.
+- Adapter, export (`export.rs`, `export_times_output_plugins_and_archives_in_load_order`, replacing the fix G test): the source plugin and two archives are read-only; export and the step succeed, the bytes match, the copy stays read-only, the output plugins and archives get their load-order times, `FalloutNV.esm` is not exported, and a nested Data file and `profile/Fallout.ini` keep times from after 2000-01-02. This passes on macOS; it was not run on Windows here.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain --all-targets -- -D warnings` passes. It could not compile `infrastructure-execution` (usvfs-sys), `infrastructure-dependencies`, or the `mods` CLI (zstd-sys through the dependencies crate). The one Windows-only change there, the new `set_load_order_times` field in `execution_adapter/native.rs`, was checked by reading.
+
+Skill and README updates: `execution.md` has a new "Load order through file times" section and no longer names `load_order_not_enforced`. `export.md` describes copy times and the output retiming. `troubleshooting.md` has a row for `phase = load_order`. `README.md` no longer says that exec does not enforce plugin order.
+
+The projection tests in `infrastructure/execution/src/profile.rs` now expect one warning fewer each (6 and 2), because the projection no longer adds `LoadOrderNotEnforced`.
+
+Gate dispositions for change H:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/load_order.rs` | Use-case parameters (0.55); Phase spacing (0.28); Use-case declaration order (0.11) | Accepted as inapplicable. The file holds an adapter port and a private helper, not a use case. `LoadOrderInputs::apply(self, target, cancellation)` takes the token last; `LoadOrderInputs` is the plan data that the port copies so the future does not borrow the plan. Phases in `apply` are separated by blank lines. |
+| `domain/src/load_order.rs` | Phase spacing (0.30); Use-case parameters (0.14) | Accepted. Classification, sorting, and time assignment are separated by blank lines. It is a pure domain function with no dependencies or token. |
+| `domain/src/profile_state.rs` | Focused use-case orchestration (0.32) | Accepted as a false positive. `profile_state.rs` is the domain capability module for profile INIs, not a use-case file; `derived_archive_list` is a profile-INI rule shared by `derive_profile_ini` and the load-order step. |
+| `application/src/ports/mod.rs` | Capability modules and public APIs (0.50) | Accepted. It re-exports the new `SetLoadOrderTimes` port and `LoadOrderTarget`, which the adapter and composition crates must name, like the other preparation ports. |
+| `application/src/execution/execute_program.rs` | Cancellation state preservation (0.52, new) | Accepted as a false positive. The new step runs before staging and removes nothing; on cancellation it returns `operation_cancelled` with `phase = load_order`. Times already set stay set; they are derived from the profile and are set again on the next run. |
+| `infrastructure/environment/src/files.rs` | Prefer Option and Result combinators (0.51); Use-case parameters; declaration order | Accepted. The `match` in the existing `read_optional` maps `NotFound` to `None` and keeps other errors, which is three-way branching. The new `set_modified` uses combinators only. The file has no use case. |
+| `infrastructure/environment/src/export.rs`, `derived_profile.rs`, `application/src/export/export_environment.rs`, `execute_program.rs`, `infrastructure/dependencies/src/*` | Use-case parameters; Phase spacing; Test public behavior; Callable port invocation | Unchanged dispositions from earlier sections. The Callable port invocation findings on `environment_preparation.rs` (now 0.72) and `native.rs` remain false positives and still need a `/coding-style-gate` override. |
+
+Full check: `bun run check` exit 0; 424 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

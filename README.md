@@ -46,7 +46,7 @@ New Data Mods start disabled. The released CLI has no enable command. Installati
 
 Run `mods <command> --help` for the installed command's options. See the [command reference](skills/mods-cli/references/commands.md) for examples.
 
-Conflict analysis does not inspect BSA members or prove runtime compatibility. Managed execution does not guarantee analytical Tombstone suppression or enforce projected plugin order through virtual timestamps. Read the [conflict and execution guide](skills/mods-cli/references/execution.md) before relying on those results.
+Conflict analysis does not inspect BSA members or prove runtime compatibility. Managed execution does not guarantee analytical Tombstone suppression. It enforces load order by setting the modification times of plugin and BSA files, including files in the game's `Data` folder. Read the [conflict and execution guide](skills/mods-cli/references/execution.md) before relying on those results.
 
 Preview before exporting. The output must be a new folder outside the Environment Root and Game Installation. Export does not install into a game or launch it.
 

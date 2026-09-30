@@ -263,7 +263,6 @@ pub fn build_profile_projection(input: ProfileProjectionInput<'_>) -> Result<Pro
 			activation_sources,
 		});
 	}
-	warnings.push(ProfileWarning::LoadOrderNotEnforced);
 
 	Ok(ProjectedProfile { plugins, warnings })
 }
@@ -392,7 +391,7 @@ mod tests {
 			]
 		);
 		assert_eq!(output.plugins[2].activation_sources, [ActivationSource::NamFile]);
-		assert_eq!(output.warnings.len(), 7);
+		assert_eq!(output.warnings.len(), 6);
 		assert_eq!(files[1].text, "Absent.esp\r\nB.esp\r\nb.ESP\r\n");
 		Ok(())
 	}
@@ -507,7 +506,7 @@ mod tests {
 			],
 			&[],
 		)?;
-		assert_eq!(output.warnings.len(), 3);
+		assert_eq!(output.warnings.len(), 2);
 		let result = build(
 			&[
 				ProfileText {

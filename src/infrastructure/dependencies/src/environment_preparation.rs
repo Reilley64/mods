@@ -7,6 +7,7 @@ use application::ports::PortFuture;
 use application::ports::PrepareEnvironmentPlan;
 use application::ports::ProfileProjection;
 use application::ports::ProjectProfile;
+use application::ports::SetLoadOrderTimes;
 use application::ports::StageProfile;
 use application::ports::StagedProfile;
 use domain::EnvironmentRoot;
@@ -31,6 +32,7 @@ pub(crate) struct PreparationPorts {
 	pub project_profile: ProjectProfile,
 	pub stage_profile: StageProfile,
 	pub discard_staged_profile: DiscardStagedProfile,
+	pub set_load_order_times: SetLoadOrderTimes,
 }
 
 // The ports create every plan they consume, so another handle type is a
@@ -104,6 +106,7 @@ impl PreparationPorts {
 					inis.discard().await
 				}) as PortFuture<_>
 			}),
+			set_load_order_times: EnvironmentAdapter.set_load_order_times_port(),
 		}
 	}
 }

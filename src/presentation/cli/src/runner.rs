@@ -882,6 +882,7 @@ mod tests {
 			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
 			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _| failed()),
 			write_export: Arc::new(|_, _, _, _| failed()),
+			set_load_order_times: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
 			discard_staged_profile: Arc::new(|_| failed()),
 		}
 	}
@@ -908,7 +909,9 @@ mod tests {
 			project_profile: Arc::new(|_: &EnvironmentPlan| {
 				Box::pin(async {
 					Ok(ProfileProjection {
-						warnings: vec![ProfileWarning::LoadOrderNotEnforced],
+						warnings: vec![ProfileWarning::Unlisted {
+							plugin: "Unlisted.esp".into(),
+						}],
 					})
 				})
 			}),
@@ -939,6 +942,7 @@ mod tests {
 				written.store(true, Ordering::SeqCst);
 				Box::pin(async { Ok(()) })
 			}),
+			set_load_order_times: Arc::new(|_: &EnvironmentPlan, _, _| Box::pin(async { Ok(()) })),
 			discard_staged_profile: Arc::new(|_| Box::pin(async { Ok(()) })),
 		}
 	}
@@ -1076,7 +1080,7 @@ mod tests {
 			})
 			.await?;
 			assert_eq!(outcome.status, 0);
-			assert!(outcome.stderr.starts_with("warning [load_order_not_enforced]"));
+			assert!(outcome.stderr.starts_with("warning [unlisted_plugin]"));
 			if dry_run {
 				assert!(outcome.stdout.contains("files.count = 1"));
 				assert!(outcome.stdout.contains("total_bytes = 17"));
@@ -1133,7 +1137,6 @@ mod tests {
 				Ok(ExecuteProgramOutput {
 					status: ProcessStatus::new(259),
 					warnings: vec![
-						ExecutionWarning::Plugin(PluginWarning::LoadOrderNotEnforced),
 						ExecutionWarning::Plugin(PluginWarning::StalePluginEntry {
 							name: "Missing.esp".into(),
 						}),
@@ -1165,7 +1168,7 @@ mod tests {
 		assert!(outcome.stdout.is_empty());
 		assert_eq!(
 			outcome.stderr,
-			"warning [load_order_not_enforced]: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.\nwarning [stale_plugin_entry]: analysis projection: plugins.txt entry \"Missing.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [stale_load_order_entry]: analysis projection: loadorder.txt entry \"Ordered.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [duplicate_plugin_entry]: duplicate entry \"Duplicate.esp\" in \"plugins.txt\"; analysis projection uses the first occurrence; canonical file is unchanged.\nwarning [unlisted_plugin]: analysis projection: \"Unlisted.esp\" is absent from loadorder.txt; projected order uses backing-file modification time.\nwarning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n"
+			"warning [stale_plugin_entry]: analysis projection: plugins.txt entry \"Missing.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [stale_load_order_entry]: analysis projection: loadorder.txt entry \"Ordered.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [duplicate_plugin_entry]: duplicate entry \"Duplicate.esp\" in \"plugins.txt\"; analysis projection uses the first occurrence; canonical file is unchanged.\nwarning [unlisted_plugin]: \"Unlisted.esp\" is absent from loadorder.txt; it gets a load-order time after the listed plugins, in current modification-time order.\nwarning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n"
 		);
 		Ok(())
 	}

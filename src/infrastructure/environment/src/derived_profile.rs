@@ -37,6 +37,14 @@ const INI_FILES: [&str; 5] = [
 /// double space before `Fallout - Misc.bsa`. Localized editions were not checked.
 const FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST: &str = "Fallout - Textures.bsa, Fallout - Textures2.bsa, Fallout - Meshes.bsa, Fallout - Voices1.bsa, Fallout - Sound.bsa,  Fallout - Misc.bsa";
 
+/// The canonical `sArchiveList` value: `FalloutCustom.ini` overrides
+/// `Fallout.ini`, and without either assignment the game's default applies.
+pub(crate) fn selected_archive_list<'a>(fallout: Option<&'a str>, custom: Option<&'a str>) -> &'a str {
+	custom.and_then(profile_archive_list)
+		.or_else(|| fallout.and_then(profile_archive_list))
+		.unwrap_or(FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProfileIniInputs {
 	files: Vec<(&'static str, Option<Vec<u8>>)>,
@@ -46,8 +54,8 @@ struct ProfileIniInputs {
 impl ProfileIniInputs {
 	async fn read(profile: &Path, cancellation: &CancellationToken) -> Result<Self, ErrorMarker> {
 		let mut files = Vec::new();
-		let mut fallout_list = None;
-		let mut custom_list = None;
+		let mut fallout = None;
+		let mut custom = None;
 		for name in INI_FILES {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
@@ -65,17 +73,14 @@ impl ProfileIniInputs {
 				return Err(report!(ErrorMarker::environment_invalid(Some("profile_ini"))));
 			}
 			if name == "Fallout.ini" {
-				fallout_list = profile_archive_list(&text).map(ToOwned::to_owned);
-			}
-			if name == "FalloutCustom.ini" {
-				custom_list = profile_archive_list(&text).map(ToOwned::to_owned);
+				fallout = Some(text);
+			} else if name == "FalloutCustom.ini" {
+				custom = Some(text);
 			}
 			files.push((name, Some(bytes)));
 		}
 
-		let archive_list = custom_list
-			.or(fallout_list)
-			.unwrap_or_else(|| FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST.to_owned());
+		let archive_list = selected_archive_list(fallout.as_deref(), custom.as_deref()).to_owned();
 
 		Ok(Self { files, archive_list })
 	}

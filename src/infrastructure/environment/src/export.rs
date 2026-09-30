@@ -21,14 +21,9 @@ use domain::ProviderIdentity;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
-use std::fs::OpenOptions as StdOpenOptions;
-use std::io;
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::fs::canonicalize;
 use tokio::fs::copy;
 use tokio::fs::create_dir;
@@ -36,31 +31,11 @@ use tokio::fs::create_dir_all;
 use tokio::fs::metadata;
 use tokio::fs::read_dir;
 use tokio::fs::try_exists;
-use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
-#[cfg(windows)]
-use windows::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
-
-/// Where a listed file is copied from, and whose modification time the copy gets.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ExportOrigin {
-	path: PathBuf,
-	time_source: PathBuf,
-}
-
-impl ExportOrigin {
-	fn new(path: PathBuf) -> Self {
-		Self {
-			time_source: path.clone(),
-			path,
-		}
-	}
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExportSource {
 	path: PathBuf,
-	modified: SystemTime,
 	entry: ExportFile,
 }
 
@@ -175,7 +150,7 @@ async fn list_sources(
 
 		capture_file(
 			&mut sources,
-			ExportOrigin::new(file.physical_path.clone()),
+			file.physical_path.clone(),
 			format!("Data/{}", file.path),
 			ExportProvider::Data(winner.identity()),
 			cancellation,
@@ -185,7 +160,7 @@ async fn list_sources(
 
 	let profile = &prepared.profile_directory;
 	for name in PROFILE_FILES.into_iter().chain(["modlist.txt"]) {
-		// Staged INIs carry the export routing; each copy keeps its canonical file's time.
+		// Staged INIs carry the export routing.
 		let path = if name.ends_with(".ini") {
 			staged.join(name)
 		} else {
@@ -197,10 +172,7 @@ async fn list_sources(
 
 		capture_file(
 			&mut sources,
-			ExportOrigin {
-				path,
-				time_source: profile.join(name),
-			},
+			path,
 			format!("profile/{name}"),
 			ExportProvider::Profile,
 			cancellation,
@@ -210,7 +182,7 @@ async fn list_sources(
 
 	capture_file(
 		&mut sources,
-		ExportOrigin::new(prepared.cache_directory.join("Fallout - Invalidation.bsa")),
+		prepared.cache_directory.join("Fallout - Invalidation.bsa"),
 		"Data/Fallout - Invalidation.bsa".to_owned(),
 		ExportProvider::GeneratedInvalidation,
 		cancellation,
@@ -226,7 +198,7 @@ async fn list_sources(
 
 async fn capture_file(
 	sources: &mut Vec<ExportSource>,
-	origin: ExportOrigin,
+	path: PathBuf,
 	destination: String,
 	provider: ExportProvider,
 	cancellation: &CancellationToken,
@@ -235,16 +207,10 @@ async fn capture_file(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let file = metadata(&origin.path).await.context(ErrorMarker::io_failure())?;
+	let file = metadata(&path).await.context(ErrorMarker::io_failure())?;
 	if !file.is_file() {
 		return Err(report!(ErrorMarker::environment_root_unsafe()));
 	}
-
-	let modified = metadata(&origin.time_source)
-		.await
-		.context(ErrorMarker::io_failure())?
-		.modified()
-		.context(ErrorMarker::io_failure())?;
 
 	let entry = ExportFile {
 		source_id: sources.len(),
@@ -253,11 +219,7 @@ async fn capture_file(
 		bytes: file.len(),
 	};
 
-	sources.push(ExportSource {
-		path: origin.path,
-		modified,
-		entry,
-	});
+	sources.push(ExportSource { path, entry });
 	Ok(())
 }
 
@@ -299,7 +261,7 @@ async fn capture_saves(
 		} else {
 			capture_file(
 				sources,
-				ExportOrigin::new(child),
+				child,
 				format!("{destination}/{name}"),
 				ExportProvider::Profile,
 				cancellation,
@@ -379,36 +341,13 @@ async fn copy_files(
 			create_dir_all(parent).await.context(ErrorMarker::io_failure())?;
 		}
 
+		// The copy keeps whatever time the copy gives it: the source time on
+		// Windows, the copy time elsewhere. Load-order times are a separate step.
 		copy(&source.path, &destination)
 			.await
 			.context(ErrorMarker::io_failure())?;
-
-		set_modified(&destination, source.modified).await?;
 	}
 	Ok(())
-}
-
-/// Gives the copy the source modification time, which the game uses to order archives and plugins.
-///
-/// A copy keeps a read-only source's read-only state, so the file is opened only
-/// with the right to change its times: `FILE_WRITE_ATTRIBUTES` on Windows, and a
-/// read-only handle elsewhere, where the owner may set times without write access.
-async fn set_modified(path: &Path, modified: SystemTime) -> Result<(), ErrorMarker> {
-	let path = path.to_owned();
-
-	spawn_blocking(move || {
-		let mut options = StdOpenOptions::new();
-		#[cfg(windows)]
-		options.access_mode(FILE_WRITE_ATTRIBUTES.0);
-		#[cfg(not(windows))]
-		options.read(true);
-
-		options.open(&path)?.set_modified(modified)
-	})
-	.await
-	.map_err(io::Error::other)
-	.context(ErrorMarker::io_failure())?
-	.context(ErrorMarker::io_failure())
 }
 
 #[cfg(test)]
@@ -419,6 +358,7 @@ mod tests {
 	use application::ports::EnvironmentPlan;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
+	use application::ports::LoadOrderTarget;
 	use application::ports::ProfilePurpose;
 	use application::ports::ProfileSource;
 	use application::ports::StagedProfile;
@@ -427,6 +367,9 @@ mod tests {
 	use std::fs;
 	#[cfg(unix)]
 	use std::os::unix::fs::PermissionsExt;
+	use std::time::Duration;
+	use std::time::SystemTime;
+	use std::time::UNIX_EPOCH;
 	use tempfile::TempDir;
 
 	async fn fixture() -> Result<(TempDir, EnvironmentRoot, GameBinding, PathBuf), ErrorMarker> {
@@ -593,7 +536,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn export_copies_sources_and_staged_inis_with_source_times() -> Result<(), ErrorMarker> {
+	async fn export_copies_sources_and_staged_inis() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding, output) = fixture().await?;
 		let (plan, staged) = stage(&root, &binding).await?;
 		let listing = EnvironmentAdapter
@@ -606,19 +549,13 @@ mod tests {
 			.call((listing.sources, listing.files, output.clone(), CancellationToken::new()))
 			.await?;
 
-		let opaque = root.as_path().join("overwrite/Opaque.bsa");
 		assert_eq!(
 			fs::read(output.join("Data/Opaque.bsa")).context(ErrorMarker::io_failure())?,
 			b"opaque"
 		);
-		assert_eq!(modified(&output.join("Data/Opaque.bsa"))?, modified(&opaque)?);
 		assert_eq!(
 			fs::read(output.join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?,
 			fs::read(staged.directory.join("Fallout.ini")).context(ErrorMarker::io_failure())?
-		);
-		assert_eq!(
-			modified(&output.join("profile/Fallout.ini"))?,
-			modified(&root.as_path().join("profile/Fallout.ini"))?
 		);
 		assert!(output.join("profile/saves/example.fos").is_file());
 		let ini = fs::read_to_string(output.join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?;
@@ -627,39 +564,95 @@ mod tests {
 		discard(staged).await
 	}
 
+	/// Also a regression test for read-only sources: a copy keeps the read-only
+	/// state, and setting its time must not need write access.
 	#[tokio::test]
-	async fn export_copies_a_read_only_source_with_its_bytes_and_time() -> Result<(), ErrorMarker> {
+	async fn export_times_output_plugins_and_archives_in_load_order() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding, output) = fixture().await?;
-		let source = root.as_path().join("overwrite/Opaque.bsa");
-		set_read_only(&source, true)?;
+		let plugin = root.as_path().join("overwrite/Mod.esp");
+		let archives = [
+			root.as_path().join("overwrite/Opaque.bsa"),
+			root.as_path().join("overwrite/Mod - Main.bsa"),
+		];
+		load_order_fixture(&root)?;
+		for path in archives.iter().chain([&plugin]) {
+			set_read_only(path, true)?;
+		}
 		let (plan, staged) = stage(&root, &binding).await?;
 		let listing = EnvironmentAdapter
 			.list_export_files_port()
 			.call((&plan, &staged, false, CancellationToken::new()))
 			.await?;
 
-		let written = EnvironmentAdapter
-			.write_export_port(root.clone())
-			.call((listing.sources, listing.files, output.clone(), CancellationToken::new()))
-			.await;
+		let timed = async {
+			EnvironmentAdapter
+				.write_export_port(root.clone())
+				.call((listing.sources, listing.files, output.clone(), CancellationToken::new()))
+				.await?;
 
-		let copy = output.join("Data/Opaque.bsa");
-		let checked = written.and_then(|()| {
-			assert_eq!(fs::read(&copy).context(ErrorMarker::io_failure())?, b"opaque");
-			assert_eq!(modified(&copy)?, modified(&source)?);
-			assert!(fs::metadata(&copy)
+			EnvironmentAdapter
+				.set_load_order_times_port()
+				.call((&plan, LoadOrderTarget::Export(output.clone()), CancellationToken::new()))
+				.await
+		}
+		.await;
+
+		let data = output.join("Data");
+		let checked = timed.and_then(|()| {
+			assert_eq!(
+				fs::read(data.join("Mod.esp")).context(ErrorMarker::io_failure())?,
+				b"plugin"
+			);
+			assert!(fs::metadata(data.join("Mod.esp"))
 				.context(ErrorMarker::io_failure())?
 				.permissions()
 				.readonly());
+			// The invalidation archive, the archive without a plugin, the game's
+			// FalloutNV.esm (not exported), and then Mod.esp with its archive.
+			for (name, position) in [
+				("Fallout - Invalidation.bsa", 0),
+				("Opaque.bsa", 1),
+				("Mod.esp", 3),
+				("Mod - Main.bsa", 3),
+			] {
+				assert_eq!(modified(&data.join(name))?, load_order_time(position), "{name}");
+			}
+			assert!(!data.join("FalloutNV.esm").exists());
+			for other in [
+				data.join("Textures/nested/meta.toml"),
+				output.join("profile/Fallout.ini"),
+			] {
+				assert!(modified(&other)? > load_order_time(60 * 24), "{}", other.display());
+			}
 			Ok(())
 		});
-		for path in [source, copy] {
-			if path.exists() {
-				set_read_only(&path, false)?;
+		for path in archives.iter().chain([&plugin]) {
+			set_read_only(path, false)?;
+		}
+		for name in ["Opaque.bsa", "Mod - Main.bsa", "Mod.esp"] {
+			if data.join(name).exists() {
+				set_read_only(&data.join(name), false)?;
 			}
 		}
 		discard(staged).await?;
 		checked
+	}
+
+	/// Adds a plugin with a matching archive and lists it after the game's master.
+	fn load_order_fixture(root: &EnvironmentRoot) -> Result<(), ErrorMarker> {
+		fs::write(root.as_path().join("overwrite/Mod.esp"), b"plugin").context(ErrorMarker::io_failure())?;
+		fs::write(root.as_path().join("overwrite/Mod - Main.bsa"), b"archive")
+			.context(ErrorMarker::io_failure())?;
+		fs::write(
+			root.as_path().join("profile/loadorder.txt"),
+			b"FalloutNV.esm\r\nMod.esp\r\n",
+		)
+		.context(ErrorMarker::io_failure())
+	}
+
+	/// The time of a load-order position: 2000-01-01T00:00:00Z plus one minute each.
+	fn load_order_time(position: u64) -> SystemTime {
+		UNIX_EPOCH + Duration::from_secs(946_684_800 + 60 * position)
 	}
 
 	/// Sets or clears the read-only state; the test restores it so the temporary

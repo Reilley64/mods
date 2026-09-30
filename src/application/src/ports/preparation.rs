@@ -21,19 +21,9 @@ pub struct EnvironmentPlan {
 /// An advisory analytical plugin-projection diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileWarning {
-	Unavailable {
-		file: String,
-		plugin: String,
-	},
-	Duplicate {
-		file: String,
-		plugin: String,
-	},
-	Unlisted {
-		plugin: String,
-	},
-	/// The analytical projection is advisory; nothing enforces its order.
-	LoadOrderNotEnforced,
+	Unavailable { file: String, plugin: String },
+	Duplicate { file: String, plugin: String },
+	Unlisted { plugin: String },
 }
 
 /// The validated analytical plugin projection of the canonical profile.
@@ -50,6 +40,16 @@ pub enum ProfilePurpose {
 	Execution,
 	/// Copies for a standalone exported game layout.
 	Export,
+}
+
+/// Which copies of the Data-root plugins and archives get load-order times.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadOrderTarget {
+	/// The winning files in the game's Data folder, the Data Mods, and Overwrite.
+	/// The virtual file system shows each file with its own time.
+	Sources,
+	/// The copies in this export output folder. The game's own Data files are not there.
+	Export(PathBuf),
 }
 
 /// Derived profile INIs in a temporary directory. Dropping the handle keeps
@@ -78,3 +78,7 @@ pub type StageProfile =
 	Arc<dyn Fn(&EnvironmentPlan, ProfilePurpose, CancellationToken) -> PortFuture<StagedProfile> + Send + Sync>;
 /// Removes a staged profile that holds no edits to keep.
 pub type DiscardStagedProfile = Arc<dyn Fn(StagedProfile) -> PortFuture<()> + Send + Sync>;
+/// Gives the Data-root plugins and archives of the plan modification times in
+/// load order, because the game orders them by time.
+pub type SetLoadOrderTimes =
+	Arc<dyn Fn(&EnvironmentPlan, LoadOrderTarget, CancellationToken) -> PortFuture<()> + Send + Sync>;

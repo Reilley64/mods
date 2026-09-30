@@ -8,6 +8,7 @@ mod export;
 pub use derived_profile::StagedProfileInis;
 mod files;
 mod hashing;
+mod load_order;
 mod manifest;
 mod profile;
 mod profile_activation;

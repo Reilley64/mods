@@ -62,6 +62,7 @@ pub type ValidateExportDestination = Arc<dyn Fn(PathBuf) -> PortFuture<()> + Sen
 pub type ListExportFiles = Arc<
 	dyn Fn(&EnvironmentPlan, &StagedProfile, bool, CancellationToken) -> PortFuture<ExportListing> + Send + Sync,
 >;
-/// Copies the files into a new output directory and gives each copy its source time.
+/// Copies the files into a new output directory. Each copy keeps the time the
+/// platform copy gives it; load-order times are a separate step.
 pub type WriteExport =
 	Arc<dyn Fn(ExportSources, Vec<ExportFile>, PathBuf, CancellationToken) -> PortFuture<()> + Send + Sync>;

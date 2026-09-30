@@ -36,6 +36,7 @@ Errors normally begin `error [code]: message`. Optional details include phase, f
 | `program_not_found`, `program_unsupported`, `program_launch_failed`, `invalid_working_directory` | Check actual executable path, PATH lookup, arguments, supported target, and cwd |
 | `vfs_failed`, `execution_supervision_failed` | Check matching native runtime/prerequisites and collect diagnostics; do not retry execution without authorization |
 | Execution failure with `retained_execution_inis` | After all managed processes have stopped, inspect retained INI edits before deciding any manual cleanup; do not discard them blindly |
+| Error with `phase = load_order` | Setting a plugin or BSA modification time failed. For `exec`, nothing was launched or retained. For `export`, the output folder is reported as `retained_partial_output`. Check that the files exist and that the user may change their times, for example in a protected game folder. Do not change permissions without the user's approval |
 | Export failure with `retained_partial_output` | Inspect the named destination folder before manual cleanup or retry; it can hold partial files |
 | Export failure with `retained_export_stage` | The named `temp` folder holds only derived profile INIs for export. Delete it before the next `exec` or `export` |
 | `manual_cleanup_required` | The Environment Root `temp` folder is not empty, for example because of retained execution INIs. Stop and inspect it with the user; there is no documented automatic cleanup command |

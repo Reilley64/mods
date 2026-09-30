@@ -5,11 +5,14 @@ use super::WriteExport;
 use crate::ErrorMarker;
 use crate::export::CompletedExport;
 use crate::export::ExportFile;
+use crate::export::RetainedExport;
 use crate::ports::DiscardStagedProfile;
+use crate::ports::LoadOrderTarget;
 use crate::ports::PrepareEnvironmentPlan;
 use crate::ports::ProfilePurpose;
 use crate::ports::ProjectProfile;
 use crate::ports::RetainedProfile;
+use crate::ports::SetLoadOrderTimes;
 use crate::ports::StageProfile;
 use crate::preparation::PluginWarning;
 use crate::preparation::PreparedEnvironment;
@@ -30,6 +33,7 @@ pub struct ExportEnvironmentDependencies {
 	pub stage_profile: StageProfile,
 	pub list_export_files: ListExportFiles,
 	pub write_export: WriteExport,
+	pub set_load_order_times: SetLoadOrderTimes,
 	pub discard_staged_profile: DiscardStagedProfile,
 }
 
@@ -51,15 +55,16 @@ impl fmt::Display for ExportEnvironmentError {
 
 /// Copies what the game sees under exec into a new standalone folder.
 ///
-/// Export shares preparation, projection, and profile staging with exec. It
-/// stages the derived profile INIs in the environment's `temp` directory, copies
-/// them into the output, and then removes the stage on every path, including
+/// Export shares preparation, projection, profile staging, and load-order times
+/// with exec. It stages the derived profile INIs in the environment's `temp`
+/// directory, copies them into the output, gives the output plugins and archives
+/// their load-order times, and then removes the stage on every path, including
 /// `dry_run` and failures.
 ///
 /// # Errors
 ///
 /// Returns [`ExportEnvironmentError`] with the failing step's marker. A failed
-/// write also carries `RetainedExport`, and a stage that cannot be removed
+/// write or load-order step also carries `RetainedExport`, and a stage that cannot be removed
 /// carries [`RetainedProfile`]. If only the removal failed after a write, the
 /// error also carries [`CompletedExport`].
 #[tracing::instrument(skip_all)]
@@ -104,8 +109,23 @@ pub async fn export_environment(
 		if !dry_run {
 			dependencies
 				.write_export
-				.call((listing.sources, files.clone(), output.clone(), cancellation))
+				.call((listing.sources, files.clone(), output.clone(), cancellation.clone()))
 				.await?;
+
+			// The copies keep whatever time the copy gives them, so only the plugins
+			// and archives get times, in load order.
+			dependencies
+				.set_load_order_times
+				.call((&plan, LoadOrderTarget::Export(output.clone()), cancellation))
+				.await
+				.map_err(|mut error| {
+					error.current_context_mut().set_phase_if_missing("load_order");
+					error.children_mut()
+						.push(report!(RetainedExport { path: output.clone() })
+							.into_dynamic()
+							.into_cloneable());
+					error
+				})?;
 		}
 
 		Ok::<_, Report<ErrorMarker>>((files, total_bytes))
@@ -173,6 +193,7 @@ mod tests {
 		files: Vec<ExportFile>,
 		destination_valid: bool,
 		write_fails: bool,
+		load_order_fails: bool,
 		discard_fails: bool,
 	}
 
@@ -221,6 +242,7 @@ mod tests {
 			],
 			destination_valid: true,
 			write_fails: false,
+			load_order_fails: false,
 			discard_fails: false,
 		})
 	}
@@ -238,10 +260,12 @@ mod tests {
 		let discarded = step("discard");
 		let listed = steps.clone();
 		let written = steps.clone();
+		let timed = steps.clone();
 		let Scenario {
 			files,
 			destination_valid,
 			write_fails,
+			load_order_fails,
 			discard_fails,
 		} = scenario;
 
@@ -264,7 +288,9 @@ mod tests {
 			project_profile: Arc::new(move |_: &EnvironmentPlan| {
 				projected();
 				complete(Ok(ProfileProjection {
-					warnings: vec![ProfileWarning::LoadOrderNotEnforced],
+					warnings: vec![ProfileWarning::Unlisted {
+						plugin: "Unlisted.esp".into(),
+					}],
 				}))
 			}),
 			stage_profile: Arc::new(move |_: &EnvironmentPlan, purpose, _| {
@@ -288,6 +314,15 @@ mod tests {
 				assert_eq!(output, PathBuf::from("/output"));
 				record(&written, format!("write:{}", files.len()));
 				if write_fails {
+					return complete(Err(report!(ErrorMarker::io_failure())));
+				}
+				complete(Ok(()))
+			}),
+			set_load_order_times: Arc::new(move |plan: &EnvironmentPlan, target, _| {
+				assert_eq!(plan.state.downcast_ref::<&str>(), Some(&"plan"));
+				assert_eq!(target, LoadOrderTarget::Export(PathBuf::from("/output")));
+				record(&timed, "load_order");
+				if load_order_fails {
 					return complete(Err(report!(ErrorMarker::io_failure())));
 				}
 				complete(Ok(()))
@@ -338,7 +373,12 @@ mod tests {
 			["validate", "prepare", "project", "stage", "list:saves=true", "discard"]
 		);
 		assert!(!output.published);
-		assert_eq!(output.warnings, [PluginWarning::LoadOrderNotEnforced]);
+		assert_eq!(
+			output.warnings,
+			[PluginWarning::UnlistedPlugin {
+				name: "Unlisted.esp".into()
+			}]
+		);
 		assert_eq!(output.total_bytes, 12);
 		assert!(output
 			.files
@@ -349,7 +389,8 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn export_writes_the_planned_files_before_removing_the_stage() -> Result<(), ErrorMarker> {
+	async fn export_writes_the_planned_files_and_sets_load_order_times_before_removing_the_stage()
+	-> Result<(), ErrorMarker> {
 		let (dependencies, steps) = fake_dependencies(scenario()?);
 
 		let output = run(dependencies, false).await.context(ErrorMarker::io_failure())?;
@@ -364,6 +405,7 @@ mod tests {
 				"stage",
 				"list:saves=true",
 				"write:3",
+				"load_order",
 				"discard"
 			]
 		);
@@ -423,6 +465,32 @@ mod tests {
 				.any(|cause| cause.downcast_current_context::<CompletedExport>().is_some());
 			assert_eq!(completed, !write_fails);
 		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn a_failed_load_order_step_keeps_the_output_and_still_removes_the_stage() -> Result<(), ErrorMarker> {
+		let mut scenario = scenario()?;
+		scenario.load_order_fails = true;
+		let (dependencies, steps) = fake_dependencies(scenario);
+
+		let Err(error) = run(dependencies, false).await else {
+			return Err(report!(ErrorMarker::io_failure()));
+		};
+
+		let marker = error
+			.iter_reports()
+			.find_map(|cause| cause.downcast_current_context::<ErrorMarker>());
+		assert_eq!(marker.and_then(ErrorMarker::phase), Some("load_order"));
+		let retained = error
+			.iter_reports()
+			.find_map(|cause| cause.downcast_current_context::<RetainedExport>());
+		assert_eq!(
+			retained.map(|retained| retained.path.clone()),
+			Some(PathBuf::from("/output"))
+		);
+		assert!(retained_profiles(&error).is_empty());
+		assert_eq!(recorded(&steps).last().map(String::as_str), Some("discard"));
 		Ok(())
 	}
 }

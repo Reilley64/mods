@@ -16,6 +16,7 @@ impl Resources {
 			stage_profile: preparation.stage_profile,
 			list_export_files: self.environment.list_export_files_port(),
 			write_export: self.environment.write_export_port(self.root.clone()),
+			set_load_order_times: preparation.set_load_order_times,
 			discard_staged_profile: preparation.discard_staged_profile,
 		}
 	}

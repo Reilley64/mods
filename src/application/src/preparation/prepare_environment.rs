@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 /// A user-facing diagnostic from the advisory analytical plugin projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginWarning {
-	LoadOrderNotEnforced,
 	StalePluginEntry { name: String },
 	StaleLoadOrderEntry { name: String },
 	DuplicatePluginEntry { file: String, name: String },
@@ -40,7 +39,6 @@ pub(crate) async fn prepare_environment(
 		.warnings
 		.into_iter()
 		.map(|warning| match warning {
-			ProfileWarning::LoadOrderNotEnforced => PluginWarning::LoadOrderNotEnforced,
 			ProfileWarning::Unavailable { file, plugin } if file.eq_ignore_ascii_case("plugins.txt") => {
 				PluginWarning::StalePluginEntry { name: plugin }
 			}

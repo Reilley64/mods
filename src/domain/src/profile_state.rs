@@ -296,13 +296,7 @@ pub fn derive_profile_ini(name: &str, text: &str, purpose: ProfileIniPurpose, ar
 		newline,
 	);
 	if archive {
-		let mut archives: Vec<_> = archive_list
-			.split(',')
-			.map(str::trim)
-			.filter(|value| !value.is_empty() && case_fold_key(value) != "fallout - invalidation.bsa")
-			.collect();
-		// Mod Organizer 2 also lists its invalidation archive first.
-		archives.insert(0, "Fallout - Invalidation.bsa");
+		let archives = derived_archive_list(archive_list);
 
 		append_ini_section(
 			&mut output,
@@ -316,6 +310,17 @@ pub fn derive_profile_ini(name: &str, text: &str, purpose: ProfileIniPurpose, ar
 		);
 	}
 	output
+}
+
+/// The `sArchiveList` entries of a derived profile: the invalidation archive
+/// first, as Mod Organizer 2 also lists it, then the canonical entries.
+pub fn derived_archive_list(archive_list: &str) -> Vec<&str> {
+	let canonical = archive_list
+		.split(',')
+		.map(str::trim)
+		.filter(|value| !value.is_empty() && case_fold_key(value) != "fallout - invalidation.bsa");
+
+	["Fallout - Invalidation.bsa"].into_iter().chain(canonical).collect()
 }
 
 /// Restores every canonical managed assignment, including duplicate and

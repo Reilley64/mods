@@ -80,6 +80,7 @@ impl ExecutionAdapter {
 			}),
 			prepare_environment_plan: preparation.prepare_environment_plan,
 			project_profile: preparation.project_profile,
+			set_load_order_times: preparation.set_load_order_times,
 			stage_profile: preparation.stage_profile,
 			create_virtual_file_system: Arc::new(
 				|plan: EnvironmentPlan,
