@@ -9,6 +9,7 @@ use crate::diagnostics::DiagnosticSession;
 use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
 use crate::error;
+use crate::export_output;
 use crate::operation;
 use crate::output;
 use crate::path_resolution::resolve_path;
@@ -24,6 +25,8 @@ use application::environment::initialize_environment;
 use application::execution::ExecuteProgramDependencies;
 use application::execution::ExecutionWarning;
 use application::execution::execute_program;
+use application::export::ExportEnvironmentDependencies;
+use application::export::export_environment;
 use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
 use application::installation::install_archive;
@@ -55,7 +58,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
 pub(crate) struct Dependencies {
 	pub(crate) execution_force_cancellation: CancellationToken,
 	pub(crate) execute_program: ExecuteProgramDependencies,
@@ -64,6 +66,7 @@ pub(crate) struct Dependencies {
 	pub(crate) get_setting: GetSettingDependencies,
 	pub(crate) set_game_directory: SetGameDirectoryDependencies,
 	pub(crate) install_archive: InstallArchiveDependencies,
+	pub(crate) export_environment: ExportEnvironmentDependencies,
 	pub(crate) list_effective_conflicts: ListEffectiveConflictsDependencies,
 	pub(crate) inspect_mod_conflicts: InspectModConflictsDependencies,
 	pub(crate) explain_path: ExplainPathDependencies,
@@ -129,6 +132,7 @@ pub(crate) async fn execute(
 			command: ConflictsCommand::Explain { .. },
 		} => "conflicts.explain",
 		Command::Exec(_) => "exec",
+		Command::Export(_) => "export",
 	};
 	let (mut session, diagnostic_warning) =
 		match DiagnosticSession::start(root.as_path(), cli.log_level, operation_name) {
@@ -380,6 +384,35 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				}
 			}
 		},
+		Command::Export(arguments) => {
+			let output_path = resolve_path(&arguments.output, &startup);
+
+			match export_environment(
+				dependencies.export_environment,
+				output_path.clone(),
+				arguments.include_saves,
+				arguments.dry_run,
+				operation::ctrl_c_token(),
+			)
+			.await
+			{
+				Ok(result) => RunOutcome {
+					status: 0,
+					stdout: if arguments.dry_run {
+						export_output::preview(&output_path, &result)
+					} else {
+						String::new()
+					},
+					stderr: String::new(),
+				},
+				Err(report) => RunOutcome {
+					status: error::application_marker(&report)
+						.map_or(1, |marker| error::exit_status(marker.code())),
+					stdout: String::new(),
+					stderr: error::export_error(&report, &output_path),
+				},
+			}
+		}
 		Command::Exec(arguments) => {
 			let output_target = if let Some(name) = arguments.output_target {
 				let Ok(name) = ModName::new(name) else {
@@ -454,7 +487,7 @@ fn execution_report_outcome<E>(report: &Report<E>) -> RunOutcome {
 		status: error::application_marker(report)
 			.map_or(125, |marker| error::execution_exit_status(marker.code())),
 		stdout: String::new(),
-		stderr: error::application_error(report),
+		stderr: error::execution_error(report),
 	}
 }
 
@@ -541,6 +574,11 @@ mod tests {
 	use application::execution::ExecuteProgramDependencies;
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
+	use application::execution::RetainedExecutionInis;
+	use application::export::ExportEnvironmentDependencies;
+	use application::export::ExportFile;
+	use application::export::ExportProvider;
+	use application::export::PreparedExport;
 	use application::installation::InstallArchiveDependencies;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
@@ -572,6 +610,7 @@ mod tests {
 	use std::fs::read_to_string;
 	use std::fs::write;
 	use std::path::Path;
+	use std::path::PathBuf;
 	use std::sync::Arc;
 	use std::sync::atomic::AtomicBool;
 	use std::sync::atomic::Ordering;
@@ -789,6 +828,11 @@ mod tests {
 				}),
 			},
 			install_archive,
+			export_environment: ExportEnvironmentDependencies {
+				prepare_export: Arc::new(|_, _, _| {
+					Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
+				}),
+			},
 			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
 			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
 			explain_path: unavailable_explain_path_dependencies(),
@@ -817,6 +861,99 @@ mod tests {
 				}),
 			},
 		))
+	}
+
+	#[tokio::test]
+	async fn exec_failure_keeps_status_and_reports_retained_ini_path_without_raw_report()
+	-> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		dependencies.execute_program.run_managed_program = Arc::new(|_, _, _, _, _, _| {
+			let mut failure =
+				report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"));
+			failure.children_mut().push(report!(RetainedExecutionInis {
+				path: PathBuf::from("C:\\private\\inis")
+			})
+			.into_dynamic()
+			.into_cloneable());
+			Box::pin(async move { Err(failure) }) as PortFuture<_>
+		});
+
+		let outcome = run(
+			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+		assert_eq!(outcome.status, 125);
+		assert!(outcome.stdout.is_empty());
+		assert!(outcome
+			.stderr
+			.contains("retained_execution_inis = \"C:\\\\private\\\\inis\""));
+		assert!(outcome.stderr.contains("after all managed processes have stopped"));
+		assert!(!outcome.stderr.contains("ExecuteProgramError"));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn export_dispatch_previews_without_publication_and_publishes_quietly() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let published = Arc::new(AtomicBool::new(false));
+		for (dry_run, include_saves) in [(true, true), (false, false)] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			let published_for_port = published.clone();
+			let expected_output = temp.path().join("payload");
+			dependencies.export_environment.prepare_export = Arc::new(move |output, saves, _| {
+				assert_eq!(output, expected_output);
+				assert_eq!(saves, include_saves);
+				let published = published_for_port.clone();
+				Box::pin(async move {
+					Ok(PreparedExport {
+						files: vec![ExportFile {
+							source_id: 0,
+							path: DataRelativePath::new("profile/Fallout.ini".to_owned())
+								.map_err(|_| report!(ErrorMarker::invalid_data_path()))?,
+							provider: ExportProvider::Profile,
+							bytes: 17,
+						}],
+						publish: Arc::new(move |_, _| {
+							published.store(true, Ordering::SeqCst);
+							Box::pin(async { Ok(()) }) as PortFuture<_>
+						}),
+					})
+				}) as PortFuture<_>
+			});
+			let arguments = if dry_run {
+				arguments![
+					"mods",
+					"--log-level",
+					"off",
+					"export",
+					"payload",
+					"--include-saves",
+					"--dry-run"
+				]
+			} else {
+				arguments!["mods", "--log-level", "off", "export", "payload"]
+			};
+			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+				Ok(dependencies)
+			})
+			.await?;
+			assert_eq!(outcome.status, 0);
+			assert!(outcome.stderr.is_empty());
+			if dry_run {
+				assert!(outcome.stdout.contains("files.count = 1"));
+				assert!(outcome.stdout.contains("total_bytes = 17"));
+				assert!(!published.load(Ordering::SeqCst));
+				assert!(!temp.path().join("payload").exists());
+			} else {
+				assert!(outcome.stdout.is_empty());
+				assert!(published.load(Ordering::SeqCst));
+			}
+		}
+		Ok(())
 	}
 
 	#[tokio::test]
