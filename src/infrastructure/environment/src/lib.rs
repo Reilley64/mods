@@ -122,9 +122,12 @@ impl EnvironmentAdapter {
 
 		let records =
 			write_initial_profile(&root_dir.join("profile"), &plan.profile_sources, cancellation).await?;
-		write(root_dir.join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes())
-			.await
-			.context(ErrorMarker::environment_root_unsafe())?;
+		write(
+			root_dir.join("cache/Fallout - Invalidation.bsa"),
+			INVALIDATION_ARCHIVE_BYTES,
+		)
+		.await
+		.context(ErrorMarker::environment_root_unsafe())?;
 
 		// `mods.toml` goes last, so a partial layout is never mistaken for an initialized environment.
 		write_manifest(root_dir, &plan).await?;
@@ -444,17 +447,22 @@ async fn assess_open(
 	Ok(InitializationTargetAssessment::Available)
 }
 
-fn empty_bsa_bytes() -> Vec<u8> {
-	let mut bytes = Vec::with_capacity(36);
-	bytes.extend_from_slice(b"BSA\0");
-	bytes.extend_from_slice(&0x68_u32.to_le_bytes());
-	bytes.extend_from_slice(&36_u32.to_le_bytes());
-	bytes.extend_from_slice(&0x3_u32.to_le_bytes());
-	for _ in 0..5 {
-		bytes.extend_from_slice(&0_u32.to_le_bytes());
-	}
-	bytes
-}
+/// The generated `Fallout - Invalidation.bsa`. The game does not honor an archive without
+/// files as the invalidation archive, so archived textures keep winning over loose files.
+/// These bytes match the dummy archive that Mod Organizer 2 writes for version 0x68: one
+/// root folder holding `dummy.dds`, with the texture file flag set.
+const INVALIDATION_ARCHIVE_BYTES: [u8; 83] = [
+	// Header: magic, version 0x68, folder records at 36, directory and file names flags,
+	// one folder, one file, folder names length 1, file names length 10, texture flag.
+	0x42, 0x53, 0x41, 0x00, 0x68, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00,
+	0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+	// Folder record: empty-name hash, one file, name offset.
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3E, 0x00, 0x00, 0x00,
+	// Folder block: the empty folder name, then the `dummy.dds` record with size zero.
+	0x00, 0xF9, 0xED, 0x05, 0x64, 0xFD, 0xC6, 0x50, 0x8E, 0x00, 0x00, 0x00, 0x00, 0x52, 0x00, 0x00, 0x00,
+	// File names, then four zero bytes.
+	0x64, 0x75, 0x6D, 0x6D, 0x79, 0x2E, 0x64, 0x64, 0x73, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
 
 /// Checks a freshly initialized environment: the exact layout, empty providers, the profile, the manifest,
 /// and the generated archive.
@@ -492,7 +500,7 @@ async fn validate_bsa_file(cache: &Path, cancellation: &CancellationToken) -> Re
 	let bytes = read(cache.join("Fallout - Invalidation.bsa"))
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;
-	if bytes != empty_bsa_bytes() {
+	if bytes != INVALIDATION_ARCHIVE_BYTES {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	Ok(())
@@ -579,6 +587,18 @@ mod tests {
 			.expect("temp must read")
 			.next()
 			.is_none());
+
+		// The game ignores an invalidation archive without files, so the generated archive
+		// must hold one folder with one texture file, as Mod Organizer 2's archive does.
+		let archive =
+			fs::read(root.as_path().join("cache/Fallout - Invalidation.bsa")).expect("archive must read");
+		let field = |offset: usize| archive.get(offset..offset + 4).map(|bytes| bytes.to_vec());
+		assert_eq!(archive.len(), 83);
+		assert_eq!(archive.get(..8), Some(&b"BSA\0\x68\0\0\0"[..]));
+		assert_eq!(field(16), Some(vec![1, 0, 0, 0]));
+		assert_eq!(field(20), Some(vec![1, 0, 0, 0]));
+		assert_eq!(field(32), Some(vec![2, 0, 0, 0]));
+		assert_eq!(archive.get(69..79), Some(&b"dummy.dds\0"[..]));
 	}
 
 	#[tokio::test]

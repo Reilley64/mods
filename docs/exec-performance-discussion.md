@@ -187,7 +187,7 @@ JIP resolves Custom.ini support, but does not change its replacement semantics f
 
 ### What validate_bsa_file and validate_exact_entries do
 
-The user asked about these helpers. `validate_bsa_file` opens only the generated `cache/Fallout - Invalidation.bsa` and compares its entire content with `empty_bsa_bytes()`. It reads up to expected length plus one byte so extra bytes also fail. Missing, unreadable, truncated or different contents fail. This is not a scan or validation of all vanilla/mod BSA archives; it checks the small generated invalidation artifact.
+The user asked about these helpers. `validate_bsa_file` opens only the generated `cache/Fallout - Invalidation.bsa` and compares its entire content with `INVALIDATION_ARCHIVE_BYTES` (see the invalidation archive decision below). It reads up to expected length plus one byte so extra bytes also fail. Missing, unreadable, truncated or different contents fail. This is not a scan or validation of all vanilla/mod BSA archives; it checks the small generated invalidation artifact.
 
 `validate_exact_entries` enumerates the immediate children of a directory, rejects names outside a supplied allowlist or repeated exact names, caps observed entries at the allowlist length, and requests metadata for each entry. Despite its name, it does not check that all allowed names are present: it does not require the remaining-name set to be empty. Other open/read checks establish required entries. It is nonrecursive and does not read file contents or enforce file type itself. An empty allowlist requires an empty directory. No decision to remove these checks was made in this question.
 
@@ -455,6 +455,10 @@ The user decided to drop `loadorder.txt`. The expected users order plugins throu
 - `stale_load_order_entry` goes away. `unlisted_plugin` goes away too, because a plugin missing from `plugins.txt` is simply inactive. `stale_plugin_entry` and `duplicate_plugin_entry` stay, for `plugins.txt`.
 - The user's current environment loads in the same order: its 75 `plugins.txt` lines match `loadorder.txt` exactly.
 - Docs and skills tell users and agents to reorder `plugins.txt` lines to change the load order.
+
+### Decision: generate a non-empty invalidation archive
+
+The user reported broken faces with Character Kit Remake: lips too low, a flat ear, and smeared eyes on male NPCs. A magenta test texture showed that the loose CKR `textures\characters\male\HeadHuman.dds` lost to the vanilla copy in `Fallout - Textures.bsa` for every male head, although the profile INIs listed `Fallout - Invalidation.bsa` first, set `SInvalidationFile=` and set `bInvalidateOlderFiles=1`. The generated archive was a 36-byte header with no folders or files. When the cache file was replaced with the 83-byte archive that Mod Organizer 2 writes (one root folder holding `dummy.dds`, texture file flag set), the loose texture won in game. The user approved generating MO2's bytes exactly. `mods init` now writes `INVALIDATION_ARCHIVE_BYTES`, and the init layout check expects them. Exec and export already read this cache file. Existing environments are not repaired, because there are no migrations before 1.0.0; re-initialize, or copy the archive from a new environment.
 
 ### Decisions on the tokio::fs follow-ups
 

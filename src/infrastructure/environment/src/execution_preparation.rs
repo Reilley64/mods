@@ -765,7 +765,7 @@ mod tests {
 		assert_eq!(prepared.winners.len(), 1);
 		let archive = fs::read(prepared.cache_directory.join("Fallout - Invalidation.bsa"))
 			.context(ErrorMarker::io_failure())?;
-		assert_eq!(archive.len(), 36);
+		assert_eq!(archive.len(), 83);
 		assert_eq!(&archive[..12], &[66, 83, 65, 0, 104, 0, 0, 0, 36, 0, 0, 0]);
 		assert!(!prepared.profile_files.iter().any(|file| file.name == "plugins.txt"));
 		assert!(!prepared.profile_files.iter().any(|file| file.name == "loadorder.txt"));
