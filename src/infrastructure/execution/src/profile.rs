@@ -186,21 +186,18 @@ pub fn build_profile_projection(input: ProfileProjectionInput<'_>) -> Result<Pro
 		if line.is_empty() || line.starts_with('#') {
 			continue;
 		}
-		let Some(path) = plugin_path(line) else {
-			return Err(report!(ProfileProjectionError {
+		let path = plugin_path(line).ok_or_else(|| {
+			report!(ProfileProjectionError {
 				file: name.into(),
 				line: index + 1,
 				value: line.into(),
 				expected: "bare .esm or .esp filename"
-			}));
-		};
+			})
+		})?;
 		let key = path.comparison_key().to_owned();
 		if !seen.insert(key.clone()) {
 			if duplicate_warnings.insert(key) {
-				warnings.push(ProfileWarning::Duplicate {
-					file: name.into(),
-					plugin: line.into(),
-				});
+				warnings.push(ProfileWarning::Duplicate { plugin: line.into() });
 			}
 			continue;
 		}

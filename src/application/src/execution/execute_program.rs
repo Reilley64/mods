@@ -572,7 +572,6 @@ mod tests {
 				plugin: "Missing.esp".into(),
 			},
 			ProfileWarning::Duplicate {
-				file: "plugins.txt".into(),
 				plugin: "Duplicate.esp".into(),
 			},
 		];
@@ -614,7 +613,6 @@ mod tests {
 					name: "Missing.esp".into()
 				}),
 				ExecutionWarning::Plugin(PluginWarning::DuplicatePluginEntry {
-					file: "plugins.txt".into(),
 					name: "Duplicate.esp".into()
 				}),
 				ExecutionWarning::ProfileStateInvalid,

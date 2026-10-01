@@ -3,7 +3,7 @@ mod inventory;
 use self::inventory::ExecutionInventory;
 use crate::EnvironmentAdapter;
 use crate::StagedProfileInis;
-use crate::active_code_page::decode as decode_active_code_page;
+use crate::active_code_page::decode_plugin_list;
 use crate::files::read_optional;
 use crate::profile::PROFILE_FILES;
 use crate::profile::decode;
@@ -138,7 +138,7 @@ impl EnvironmentAdapter {
 			};
 
 			let text = if name == "plugins.txt" {
-				decode_active_code_page(&bytes)?
+				decode_plugin_list(&bytes)?
 			} else {
 				decode(&bytes).context(ErrorMarker::environment_invalid(None))?.0
 			};
@@ -823,6 +823,28 @@ mod tests {
 			fs::read(&plugins).context(ErrorMarker::io_failure())?,
 			b"# retained edit\r\nMissing.esp\r\n"
 		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn a_plugins_txt_byte_order_mark_is_removed_before_decoding() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
+		fs::write(
+			root.as_path().join("profile/plugins.txt"),
+			b"\xef\xbb\xbfFalloutNV.esm\r\n",
+		)
+		.context(ErrorMarker::io_failure())?;
+
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
+
+		let plugins = prepared
+			.profile_files
+			.iter()
+			.find(|file| file.name == "plugins.txt")
+			.map(|file| file.text.as_str());
+		assert_eq!(plugins, Some("FalloutNV.esm\r\n"));
 		Ok(())
 	}
 }

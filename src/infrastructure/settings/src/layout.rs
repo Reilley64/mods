@@ -1,4 +1,5 @@
 use application::ErrorMarker;
+use domain::IGNORED_PROFILE_FILES;
 use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
 use encoding_rs::WINDOWS_1252;
@@ -41,8 +42,6 @@ const PROFILE_FILES: [&str; 7] = [
 	"plugins.txt",
 	"Plugins.fnvviewsettings",
 ];
-/// Former Profile State files that are accepted and never read.
-const IGNORED_PROFILE_FILES: [&str; 1] = ["loadorder.txt"];
 /// Validates the canonical Mod Environment layout for settings commands.
 ///
 /// Only entry names, entry types, and file contents are checked. Links are
@@ -237,7 +236,8 @@ fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
 }
 
 fn validate_plugin_list(bytes: &[u8]) -> Result<(), ErrorMarker> {
-	let text = decode_active_code_page(bytes)?;
+	// A UTF-8 byte order mark is not part of the first plugin name.
+	let text = decode_active_code_page(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes))?;
 	if text.replace("\r\n", "").contains(['\r', '\n']) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}

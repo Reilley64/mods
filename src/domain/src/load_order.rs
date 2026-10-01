@@ -8,6 +8,8 @@ use std::time::UNIX_EPOCH;
 /// 2000-01-01T00:00:00Z, the time of the first load-order position.
 const FIRST_POSITION: Duration = Duration::from_secs(946_684_800);
 const POSITION_STEP: u64 = 60;
+/// The game always loads its base master first, wherever `plugins.txt` lists it.
+const BASE_MASTER: &str = "falloutnv.esm";
 
 /// One Data winner with its current modification time. `file` is the caller's
 /// handle for the file that gets the time.
@@ -18,10 +20,11 @@ pub struct LoadOrderCandidate<T> {
 	pub modified: SystemTime,
 }
 
-/// Sort key for plugins. Field order is the sort order: listed plugins first,
-/// by `plugins.txt` line, then unlisted ones by current time and name.
+/// Sort key for plugins. Field order is the sort order: `FalloutNV.esm` first,
+/// then listed plugins by `plugins.txt` line, then unlisted ones by current time and name.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct PluginRank {
+	after_base_master: bool,
 	unlisted: bool,
 	position: Option<usize>,
 	modified: SystemTime,
@@ -50,8 +53,9 @@ pub fn takes_load_order_time(path: &DataRelativePath) -> bool {
 ///
 /// 1. Archives named in `archive_list`, in list order.
 /// 2. Other archives that no plugin loads, in current-time order.
-/// 3. Plugins (`.esm`, `.esp`) in `plugins.txt` line order, then plugins missing
-///    from it in current-time order. `plugins.txt` lists the active plugins; the
+/// 3. `FalloutNV.esm`, which the game always loads first, then the other plugins
+///    (`.esm`, `.esp`) in `plugins.txt` line order, then plugins missing from it
+///    in current-time order. `plugins.txt` lists the active plugins; the
 ///    others are inactive, and they still get times after the listed ones.
 ///
 /// An archive whose stem starts with a plugin stem loads with that plugin and
@@ -84,6 +88,7 @@ pub fn load_order_times<T>(
 				let position = listed.iter().position(|name| *name == key);
 				plugins.push(Plugin {
 					rank: PluginRank {
+						after_base_master: key != BASE_MASTER,
 						unlisted: position.is_none(),
 						position,
 						modified: candidate.modified,
@@ -305,6 +310,19 @@ mod tests {
 		)?;
 
 		assert_eq!(timed, expected(&[("FalloutNV.esm", 0), ("Mod.esp", 1)]));
+		Ok(())
+	}
+
+	#[test]
+	fn the_base_master_comes_first_wherever_plugins_txt_lists_it() -> Result<(), InvalidDataRelativePath> {
+		let files = [("Mod.esp", 1), ("Dlc.esm", 2), ("FalloutNV.esm", 3)];
+
+		let later = positions(&files, "Dlc.esm\r\nfalloutnv.ESM\r\nMod.esp\r\n", &[])?;
+		let missing = positions(&files, "Dlc.esm\r\nMod.esp\r\n", &[])?;
+
+		let expected = expected(&[("FalloutNV.esm", 0), ("Dlc.esm", 1), ("Mod.esp", 2)]);
+		assert_eq!(later, expected);
+		assert_eq!(missing, expected);
 		Ok(())
 	}
 }

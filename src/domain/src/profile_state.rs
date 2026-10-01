@@ -170,6 +170,10 @@ mod tests {
 	}
 }
 
+/// Former Profile State files that an environment may still hold. They are
+/// accepted and never read; `plugins.txt` alone holds the load order.
+pub const IGNORED_PROFILE_FILES: [&str; 1] = ["loadorder.txt"];
+
 const ARCHIVE_KEYS: [&str; 3] = ["bInvalidateOlderFiles", "SInvalidationFile", "sArchiveList"];
 const ROUTING_KEYS: [&str; 2] = ["bUseMyGamesDirectory", "SLocalSavePath"];
 

@@ -22,13 +22,9 @@ pub struct EnvironmentPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileWarning {
 	/// A `plugins.txt` entry that no Data winner provides.
-	Unavailable {
-		plugin: String,
-	},
-	Duplicate {
-		file: String,
-		plugin: String,
-	},
+	Unavailable { plugin: String },
+	/// A repeated `plugins.txt` entry; the first occurrence counts.
+	Duplicate { plugin: String },
 }
 
 /// The validated analytical plugin projection of the canonical profile.

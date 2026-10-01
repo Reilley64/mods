@@ -48,7 +48,8 @@ The game orders plugins and BSAs by modification time, and usvfs shows each file
 - Times start at 2000-01-01 00:00 UTC and add one minute per position.
 - BSAs named in the derived `sArchiveList` come first, in list order. The list starts with `Fallout - Invalidation.bsa`, followed by the list from `FalloutCustom.ini` or `Fallout.ini`.
 - Other BSAs that no plugin loads come next, in their current modification-time order.
-- Plugins follow in `plugins.txt` line order. A UTF-8 byte order mark at the start of the file is ignored. Present plugins that `plugins.txt` does not list are inactive; they come after the listed ones, in their current modification-time order, and the game does not load them.
+- `FalloutNV.esm` always comes first among the plugins, because the game always loads it first, even when `plugins.txt` lists it later or not at all.
+- The other plugins follow in `plugins.txt` line order. A UTF-8 byte order mark at the start of `plugins.txt` is removed before the file is read, so it never becomes part of the first plugin name. Present plugins that `plugins.txt` does not list are inactive; they come after the listed ones, in their current modification-time order, and the game does not load them.
 - A BSA whose name starts with a plugin's name (case-insensitive) gets that plugin's time. If more than one plugin name matches, the longest one wins.
 
 `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Profile State has no `loadorder.txt`; an existing one is ignored. `exec` sets the times again from `plugins.txt` on every run. A tool that sorts plugins only by changing their times, for example LOOT or xEdit run under `exec`, is reverted on the next run unless it also reorders `plugins.txt`. Mod Environments that share a Game Installation set the times of its plugins and BSAs on each run, so do not run two of them at the same time.

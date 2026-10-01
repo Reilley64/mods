@@ -69,6 +69,7 @@ pub use mods::ModName;
 pub use mods::ModPriority;
 pub use paths::DataRelativePath;
 pub use paths::InvalidDataRelativePath;
+pub use profile_state::IGNORED_PROFILE_FILES;
 pub use profile_state::ProfileIniPurpose;
 pub use profile_state::canonical_profile_routing_valid;
 pub use profile_state::derive_profile_ini;

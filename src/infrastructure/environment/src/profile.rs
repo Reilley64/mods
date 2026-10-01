@@ -1,4 +1,4 @@
-use crate::active_code_page::decode as decode_active_code_page;
+use crate::active_code_page::decode_plugin_list;
 use crate::active_code_page::encode as encode_active_code_page;
 use crate::files::read_optional;
 use crate::snapshot::visible_plugins;
@@ -7,6 +7,7 @@ use application::ports::InitializationProfileSources;
 use application::ports::ProfileFileDisposition;
 use application::ports::ProfileFileRecord;
 use domain::GameBinding;
+use domain::IGNORED_PROFILE_FILES;
 use domain::ProfileIniPurpose;
 use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
@@ -34,10 +35,6 @@ pub(crate) const PROFILE_FILES: [&str; 7] = [
 	"plugins.txt",
 	"Plugins.fnvviewsettings",
 ];
-
-/// Former Profile State files that an environment may still hold. They are
-/// accepted and never read; `plugins.txt` alone holds the load order.
-pub(crate) const IGNORED_PROFILE_FILES: [&str; 1] = ["loadorder.txt"];
 
 pub(crate) async fn write_initial_profile(
 	profile: &Path,
@@ -204,7 +201,7 @@ async fn validate_profile_mode(
 	}
 
 	let plugins = read_regular_file(profile, "plugins.txt", cancellation).await?;
-	validate_plugin_text(&decode_active_code_page(&plugins)?, true)?;
+	validate_plugin_text(&decode_plugin_list(&plugins)?, true)?;
 
 	let modlist = read_regular_file(profile, "modlist.txt", cancellation).await?;
 	if require_empty && !modlist.is_empty() {
@@ -266,7 +263,7 @@ pub(crate) async fn update_plugin_list(
 	let profile = root.join("profile");
 
 	let plugins_bytes = read_regular_file(&profile, "plugins.txt", cancellation).await?;
-	let plugins_text = decode_active_code_page(&plugins_bytes)?;
+	let plugins_text = decode_plugin_list(&plugins_bytes)?;
 	let plugins_output = remove_unavailable_lines(&plugins_text, &unavailable);
 
 	if plugins_output != plugins_text {

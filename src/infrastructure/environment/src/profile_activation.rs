@@ -1,4 +1,4 @@
-use crate::active_code_page::decode as decode_active_code_page;
+use crate::active_code_page::decode_plugin_list;
 use crate::files::read_optional;
 use crate::profile::PROFILE_FILES;
 use crate::profile::is_activatable_plugin_name;
@@ -28,7 +28,7 @@ impl ProfileActivation {
 			.await
 			.context(ErrorMarker::environment_invalid(None))?;
 
-		let plugin_text = decode_active_code_page(&plugin_bytes)?;
+		let plugin_text = decode_plugin_list(&plugin_bytes)?;
 		let mut active_plugins = plugin_text
 			.split_terminator("\r\n")
 			.filter(|line| !line.is_empty() && !line.starts_with('#'))

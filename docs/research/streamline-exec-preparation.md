@@ -249,6 +249,8 @@ The new "Prefer Option and Result combinators" rule was applied to the code writ
 
 ### No staging for initialization and installation
 
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
 The user decided that initialization and installation also write directly.
 
 - Initialization creates `mods`, `profile`, `overwrite`, `cache`, and `temp` in the Environment Root, writes the Profile State and the support BSA, and writes `mods.toml` last. A partial layout without `mods.toml` makes a retry fail with `environment_root_not_empty`, so it is never mistaken for an initialized environment. The layout check runs on the root. `publication.rs`, `publish_initialization`, `LayoutLocation`, and `validate_stage` are removed; the check is now `validate_layout`. `stage_profile` is now `write_initial_profile`.
@@ -331,6 +333,8 @@ Windows-only code: `native.rs` and the Windows parts of `infrastructure-executio
 Parent decisions after Part 1: the three exec order changes and the removal of the `ProfileProjection` handle are accepted.
 
 ### Part 2: export on the shared ports
+
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
 
 `export_environment` now composes these steps:
 
@@ -423,6 +427,8 @@ Gate dispositions for the repair:
 
 ### Read-only sources in export (fix G)
 
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
 Bug from the user's Windows machine: export stopped after `Data/UIO/supported.txt`, whose source `mods/UIO - User Interface Organizer/UIO/supported.txt` is read-only. `tokio::fs::copy` carries the read-only state to the copy (the attribute on Windows, the mode on Unix). The old `set_modified` then opened the copy for writing to set its time, and that failed with access denied. The SafeDir export before this branch wrote the bytes itself, so no read-only state carried over.
 
 Fix: `set_modified` now opens the copy only with the right to change its times, then calls `File::set_modified` on a blocking thread.
@@ -449,6 +455,8 @@ Gate dispositions for fix G:
 | `application/src/export/export_environment.rs` | Cancellation state preservation (0.52, first seen after the review repair) | Accepted, the same deviation as for `derived_profile.rs`: the use case removes the export stage after cancellation, because the stage holds only derived copies. |
 
 ### Load order through plugin and BSA times (change H)
+
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
 
 Decision: `docs/exec-performance-discussion.md`, "Decision: enforce load order through plugin and BSA times". Both commands now run one shared step that gives the Data-root plugins and BSAs modification times in load order.
 
@@ -535,6 +543,8 @@ Full check: `bun run check` exit 0; 428 Rust tests passed and 1 skipped, 2 relea
 
 ### Review repair for changes H and I
 
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
 Review: `/tmp/load-order-review.md` (H at 3fa9ebf, I at 4042a97). Windows validation at 4042a97 passed (447 workspace tests).
 
 - **BOM in `loadorder.txt` (finding 3):** `load_order_times` ignores a UTF-8 byte order mark at the start of the text. Before, the first entry was keyed as `"\u{feff}falloutnv.esm"`, so `FalloutNV.esm` became unlisted and got a time after every listed plugin. Test: `a_byte_order_mark_does_not_hide_the_first_listed_plugin`. The projection still reads the raw text and can still warn about that entry; that gap existed before H and is unchanged.
@@ -599,6 +609,29 @@ Gate dispositions for change J (no override):
 | Other files | Earlier rules | Unchanged dispositions from earlier sections. |
 
 Full check: `bun run check` exit 0; 434 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
+### Review repair for change J
+
+Review: `/tmp/plugins-order-review.md` (J at e2067bc). Windows validation at e2067bc passed (453 workspace tests).
+
+- **M1, BOM before code-page decoding:** new `active_code_page::decode_plugin_list` removes a leading UTF-8 byte order mark (`EF BB BF`) from the bytes before active-code-page decoding. On a non-UTF-8 code page such as 1252, the mark would otherwise decode to `ï»¿` in front of the first plugin name; the projection would report it as stale, and the load-order step would treat that plugin as unlisted. Every reader of `plugins.txt` uses it: `prepare_launch` (which feeds the projection and the load-order step), environment `validate_profile`, `update_plugin_list`, and `ProfileActivation` (snapshot and conflict scan). Settings `validate_plugin_list` strips the same bytes before its own decoder. The domain and projection still remove a decoded U+FEFF, which a UTF-8 code page leaves in the text. Tests: `a_plugin_list_byte_order_mark_is_not_decoded_as_text` (decoder) and `a_plugins_txt_byte_order_mark_is_removed_before_decoding` (raw bytes through `prepare_launch`). On macOS the test decoder already sniffs the mark, so these tests prove the behavior only on Windows with a non-UTF-8 code page; there they would fail without the fix.
+- **L1, base master first:** `PluginRank` has a new first field, `after_base_master`, so `FalloutNV.esm` takes the first plugin position even when `plugins.txt` lists it later or not at all, as the projection already did. Test: `the_base_master_comes_first_wherever_plugins_txt_lists_it`. `execution.md` states the rule.
+- **L2:** `ProfileWarning::Duplicate` and `PluginWarning::DuplicatePluginEntry` no longer carry a file name, matching `Unavailable`. The CLI text still names `"plugins.txt"`, and the runner test checks the unchanged text.
+- **L3:** the `let ... else` in the projection that only turned `None` into an error is now `ok_or_else(...)?`.
+- **L4:** `IGNORED_PROFILE_FILES` is defined once, in `domain::profile_state`, and environment and settings use it.
+- **L5:** the earlier sections that describe `loadorder.txt` now start with a "Superseded by change J" note.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain -p infrastructure-settings -p infrastructure-game-platform --all-targets -- -D warnings` passes.
+
+Gate dispositions for this repair (no override):
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/settings/src/layout.rs` | Dependency direction and composition roots (0.21, new) | Accepted as a false positive. The new import is `domain::IGNORED_PROFILE_FILES`; settings already depends on `domain` (for example `canonical_profile_routing_valid`), and infrastructure-to-domain is the allowed direction. |
+| `infrastructure/environment/src/active_code_page.rs`, `profile.rs`, `profile_activation.rs`, `execution_preparation.rs`, `infrastructure/execution/src/profile.rs`, `domain/src/load_order.rs` | Use-case parameters; Phase spacing; declaration order | Accepted. These files hold adapter helpers, a projection, and a pure domain function, not use cases; the edits are a decoder swap, a combinator, and a new sort-key field. |
+| `application/src/ports/preparation.rs`, `preparation/prepare_environment.rs`, `presentation/cli/src/runner.rs` | Use-case parameters; Test public behavior | Accepted. Only the `Duplicate` warning lost its file field; the runner test checks the public CLI text. |
+
+Full check: `bun run check` exit 0; 437 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
 
 ## INI text lines without an assignment
 
