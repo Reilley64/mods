@@ -19,7 +19,7 @@ pub struct LoadOrderCandidate<T> {
 }
 
 /// Sort key for plugins. Field order is the sort order: listed plugins first,
-/// by `loadorder.txt` position, then unlisted ones by current time and name.
+/// by `plugins.txt` line, then unlisted ones by current time and name.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct PluginRank {
 	unlisted: bool,
@@ -50,22 +50,22 @@ pub fn takes_load_order_time(path: &DataRelativePath) -> bool {
 ///
 /// 1. Archives named in `archive_list`, in list order.
 /// 2. Other archives that no plugin loads, in current-time order.
-/// 3. Plugins (`.esm`, `.esp`) in `loadorder.txt` order, then plugins missing
-///    from it in current-time order. `loadorder.txt` lists active and inactive
-///    plugins, so every present plugin gets a time.
+/// 3. Plugins (`.esm`, `.esp`) in `plugins.txt` line order, then plugins missing
+///    from it in current-time order. `plugins.txt` lists the active plugins; the
+///    others are inactive, and they still get times after the listed ones.
 ///
 /// An archive whose stem starts with a plugin stem loads with that plugin and
 /// gets its time; the longest matching stem wins. Names match case-insensitively.
 /// Files outside the Data root and other file types get no time. A UTF-8 byte
-/// order mark at the start of `load_order` is ignored.
+/// order mark at the start of `plugin_list` is ignored.
 pub fn load_order_times<T>(
 	candidates: Vec<LoadOrderCandidate<T>>,
-	load_order: &str,
+	plugin_list: &str,
 	archive_list: &[&str],
 ) -> Vec<(T, SystemTime)> {
-	let listed: Vec<_> = load_order
+	let listed: Vec<_> = plugin_list
 		.strip_prefix('\u{feff}')
-		.unwrap_or(load_order)
+		.unwrap_or(plugin_list)
 		.lines()
 		.filter(|line| !line.is_empty() && !line.starts_with('#'))
 		.map(case_fold_key)
@@ -159,7 +159,7 @@ mod tests {
 	/// returns each timed file with its position in minutes after the first one.
 	fn positions(
 		files: &[(&str, u64)],
-		load_order: &str,
+		plugin_list: &str,
 		archive_list: &[&str],
 	) -> Result<Vec<(String, u64)>, InvalidDataRelativePath> {
 		let candidates = files
@@ -175,7 +175,7 @@ mod tests {
 
 		let first = UNIX_EPOCH + Duration::from_secs(946_684_800);
 
-		Ok(load_order_times(candidates, load_order, archive_list)
+		Ok(load_order_times(candidates, plugin_list, archive_list)
 			.into_iter()
 			.map(|(file, time): (String, SystemTime)| {
 				let minutes = time
@@ -225,7 +225,7 @@ mod tests {
 	}
 
 	#[test]
-	fn plugins_follow_load_order_then_unlisted_plugins_by_current_time() -> Result<(), InvalidDataRelativePath> {
+	fn plugins_follow_plugins_txt_then_unlisted_plugins_by_current_time() -> Result<(), InvalidDataRelativePath> {
 		let timed = positions(
 			&[
 				("A.esp", 1),

@@ -48,11 +48,11 @@ The game orders plugins and BSAs by modification time, and usvfs shows each file
 - Times start at 2000-01-01 00:00 UTC and add one minute per position.
 - BSAs named in the derived `sArchiveList` come first, in list order. The list starts with `Fallout - Invalidation.bsa`, followed by the list from `FalloutCustom.ini` or `Fallout.ini`.
 - Other BSAs that no plugin loads come next, in their current modification-time order.
-- Plugins follow in `loadorder.txt` order. A UTF-8 byte order mark at the start of the file is ignored. `loadorder.txt` lists active and inactive plugins, so every present plugin gets a time. Plugins missing from `loadorder.txt` come after the listed ones, in their current modification-time order, and cause an `unlisted_plugin` warning.
+- Plugins follow in `plugins.txt` line order. A UTF-8 byte order mark at the start of the file is ignored. Present plugins that `plugins.txt` does not list are inactive; they come after the listed ones, in their current modification-time order, and the game does not load them.
 - A BSA whose name starts with a plugin's name (case-insensitive) gets that plugin's time. If more than one plugin name matches, the longest one wins.
 
-`loadorder.txt` is the order authority. `exec` sets the times again from `loadorder.txt` on every run. A tool that sorts plugins only by changing their times, for example LOOT or xEdit run under `exec`, is reverted on the next run unless it also updates `loadorder.txt`. Mod Environments that share a Game Installation set the times of its plugins and BSAs on each run, so do not run two of them at the same time.
+`plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Profile State has no `loadorder.txt`; an existing one is ignored. `exec` sets the times again from `plugins.txt` on every run. A tool that sorts plugins only by changing their times, for example LOOT or xEdit run under `exec`, is reverted on the next run unless it also reorders `plugins.txt`. Mod Environments that share a Game Installation set the times of its plugins and BSAs on each run, so do not run two of them at the same time.
 
 If reading or setting a time fails, `exec` stops before it stages profile INIs or launches anything, and nothing is retained. The error reports `phase = load_order` and names the file as `load_order_file`; see [troubleshooting](troubleshooting.md).
 
-Report stale/duplicate plugin entries, unlisted plugins, and invalid retained Profile State warnings accurately. Do not promise safe execution from a preview or conflict report, or claim that root mapping and all write/delete cases follow the analytical model.
+Report stale and duplicate `plugins.txt` entries and invalid retained Profile State warnings accurately. Do not promise safe execution from a preview or conflict report, or claim that root mapping and all write/delete cases follow the analytical model.

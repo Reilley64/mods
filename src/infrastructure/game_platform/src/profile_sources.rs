@@ -63,7 +63,6 @@ impl GamePlatformAdapter {
 			("GECKCustom.ini", documents.as_ref()),
 			("GECKPrefs.ini", documents.as_ref()),
 			("plugins.txt", local.as_ref()),
-			("loadorder.txt", local.as_ref()),
 			("Plugins.fnvviewsettings", local.as_ref()),
 		];
 

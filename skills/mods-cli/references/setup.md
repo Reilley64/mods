@@ -34,7 +34,7 @@ Use the full executable path with PowerShell's `&` operator, or add its installa
 
 ## Select a Mod Environment
 
-A **Mod Environment** is one isolated setup, not a separately selectable profile. Its **Environment Root** contains `mods.toml` (the **Environment Manifest**) and managed state. **Profile State** is its one set of mod order, plugin state, INIs, and saves beneath `profile`.
+A **Mod Environment** is one isolated setup, not a separately selectable profile. Its **Environment Root** contains `mods.toml` (the **Environment Manifest**) and managed state. **Profile State** is its one set of mod order, plugin state, INIs, and saves beneath `profile`. `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Profile State has no `loadorder.txt`; `init` does not import one, and an existing one is ignored.
 
 - `--environment PATH` selects the Environment Root.
 - Without it, the root is `%LOCALAPPDATA%\mods\environments\default`; this is not current-directory or ancestor discovery.

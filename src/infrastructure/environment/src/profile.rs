@@ -18,7 +18,6 @@ use rootcause::report;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
-use std::str::from_utf8;
 use tokio::fs::create_dir;
 use tokio::fs::metadata;
 use tokio::fs::read;
@@ -26,16 +25,19 @@ use tokio::fs::read_dir;
 use tokio::fs::write;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) const PROFILE_FILES: [&str; 8] = [
+pub(crate) const PROFILE_FILES: [&str; 7] = [
 	"Fallout.ini",
 	"FalloutPrefs.ini",
 	"FalloutCustom.ini",
 	"GECKCustom.ini",
 	"GECKPrefs.ini",
 	"plugins.txt",
-	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
+
+/// Former Profile State files that an environment may still hold. They are
+/// accepted and never read; `plugins.txt` alone holds the load order.
+pub(crate) const IGNORED_PROFILE_FILES: [&str; 1] = ["loadorder.txt"];
 
 pub(crate) async fn write_initial_profile(
 	profile: &Path,
@@ -83,9 +85,7 @@ pub(crate) async fn write_initial_profile(
 			("FalloutCustom.ini", Some(contents)) => {
 				(Some(canonical_ini(name, contents)?), ProfileFileDisposition::Imported)
 			}
-			("plugins.txt" | "loadorder.txt", None) => {
-				(Some(Vec::new()), ProfileFileDisposition::CreatedEmpty)
-			}
+			("plugins.txt", None) => (Some(Vec::new()), ProfileFileDisposition::CreatedEmpty),
 			(_, Some(contents)) => (Some(contents.to_vec()), ProfileFileDisposition::Imported),
 			(_, None) => (None, ProfileFileDisposition::Absent),
 		};
@@ -131,7 +131,11 @@ async fn validate_profile_mode(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let allowed = PROFILE_FILES.iter().copied().chain(["modlist.txt", "saves"]);
+	let allowed = PROFILE_FILES
+		.iter()
+		.copied()
+		.chain(IGNORED_PROFILE_FILES)
+		.chain(["modlist.txt", "saves"]);
 	let mut expected = allowed.collect::<HashSet<_>>();
 	let mut entries = read_dir(profile)
 		.await
@@ -160,7 +164,7 @@ async fn validate_profile_mode(
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
-	for required in ["Fallout.ini", "plugins.txt", "loadorder.txt", "modlist.txt", "saves"] {
+	for required in ["Fallout.ini", "plugins.txt", "modlist.txt", "saves"] {
 		if expected.contains(required) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
@@ -199,15 +203,8 @@ async fn validate_profile_mode(
 		}
 	}
 
-	for (name, utf8) in [("plugins.txt", false), ("loadorder.txt", true)] {
-		let Some(bytes) = read_optional(&profile.join(name))
-			.await
-			.context(ErrorMarker::environment_invalid(None))?
-		else {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		};
-		validate_plugin_list(&bytes, utf8, true)?;
-	}
+	let plugins = read_regular_file(profile, "plugins.txt", cancellation).await?;
+	validate_plugin_text(&decode_active_code_page(&plugins)?, true)?;
 
 	let modlist = read_regular_file(profile, "modlist.txt", cancellation).await?;
 	if require_empty && !modlist.is_empty() {
@@ -246,10 +243,11 @@ async fn validate_saves(directory: &Path, cancellation: &CancellationToken) -> R
 	Ok(())
 }
 
-/// Updates `plugins.txt` and `loadorder.txt` in place after an enabled replacement.
+/// Removes plugins that are no longer visible from `plugins.txt` after an
+/// enabled replacement. Newly visible plugins stay inactive until a user lists them.
 ///
 /// `before` holds the plugins that were visible before the old mod files were removed.
-pub(crate) async fn update_plugin_lists(
+pub(crate) async fn update_plugin_list(
 	root: &Path,
 	binding: &GameBinding,
 	before: &HashMap<String, String>,
@@ -265,12 +263,6 @@ pub(crate) async fn update_plugin_lists(
 		.filter(|name| !after.contains_key(*name))
 		.cloned()
 		.collect::<HashSet<_>>();
-	let mut newly_visible = after
-		.iter()
-		.filter(|(name, _)| !before.contains_key(*name))
-		.map(|(name, spelling)| (name.clone(), spelling.clone()))
-		.collect::<Vec<_>>();
-	newly_visible.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 	let profile = root.join("profile");
 
 	let plugins_bytes = read_regular_file(&profile, "plugins.txt", cancellation).await?;
@@ -280,31 +272,6 @@ pub(crate) async fn update_plugin_lists(
 	if plugins_output != plugins_text {
 		let bytes = encode_active_code_page(&plugins_output)?;
 		write(profile.join("plugins.txt"), &bytes)
-			.await
-			.context(ErrorMarker::transaction_failure())?;
-	}
-
-	let loadorder_bytes = read_regular_file(&profile, "loadorder.txt", cancellation).await?;
-	let loadorder_text = from_utf8(&loadorder_bytes).context(ErrorMarker::environment_invalid(None))?;
-	let mut loadorder_output = remove_unavailable_lines(loadorder_text, &unavailable);
-	let existing = loadorder_output
-		.split_terminator("\r\n")
-		.filter(|line| !line.is_empty() && !line.starts_with('#'))
-		.map(case_fold_key)
-		.collect::<HashSet<_>>();
-	for (key, spelling) in newly_visible {
-		if existing.contains(&key) {
-			continue;
-		}
-
-		if !loadorder_output.is_empty() && !loadorder_output.ends_with("\r\n") {
-			loadorder_output.push_str("\r\n");
-		}
-		loadorder_output.push_str(&spelling);
-		loadorder_output.push_str("\r\n");
-	}
-	if loadorder_output != loadorder_text {
-		write(profile.join("loadorder.txt"), loadorder_output.as_bytes())
 			.await
 			.context(ErrorMarker::transaction_failure())?;
 	}
@@ -321,17 +288,6 @@ fn remove_unavailable_lines(text: &str, unavailable: &HashSet<String>) -> String
 		output.push_str(line_with_separator);
 	}
 	output
-}
-
-fn validate_plugin_list(bytes: &[u8], utf8: bool, allow_light_plugins: bool) -> Result<(), ErrorMarker> {
-	let text = if utf8 {
-		from_utf8(bytes)
-			.context(ErrorMarker::environment_invalid(None))?
-			.to_owned()
-	} else {
-		decode_active_code_page(bytes)?
-	};
-	validate_plugin_text(&text, allow_light_plugins)
 }
 
 pub(crate) fn validate_plugin_text(text: &str, allow_light_plugins: bool) -> Result<(), ErrorMarker> {
@@ -543,7 +499,8 @@ mod tests {
 		assert_eq!(records[0].disposition, ProfileFileDisposition::SeededFromGame);
 		assert_eq!(records[2].disposition, ProfileFileDisposition::Imported);
 		assert_eq!(records[5].disposition, ProfileFileDisposition::Imported);
-		assert_eq!(records[6].disposition, ProfileFileDisposition::CreatedEmpty);
+		assert_eq!(records[6].disposition, ProfileFileDisposition::Absent);
+		assert!(!temp.path().join("loadorder.txt").exists());
 		assert!(fs::read_dir(temp.path().join("saves"))?.next().is_none());
 		let fallout = fs::read_to_string(temp.path().join("Fallout.ini"))?;
 		assert!(fallout.contains("sArchiveList=Default.bsa"));
@@ -712,7 +669,6 @@ mod tests {
 			("plugins.txt", b"folder\\Bad.esp\r\n"),
 			("plugins.txt", b"CON.esm\r\n"),
 			("plugins.txt", b"Unsupported.esx\r\n"),
-			("loadorder.txt", b"Unsupported.esx\r\n"),
 		] {
 			let temp = TempDir::new()?;
 			let files = PROFILE_FILES

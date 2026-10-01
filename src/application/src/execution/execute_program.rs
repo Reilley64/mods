@@ -569,19 +569,11 @@ mod tests {
 		let mut scenario = default_scenario()?;
 		scenario.warnings = vec![
 			ProfileWarning::Unavailable {
-				file: "Plugins.TXT".into(),
 				plugin: "Missing.esp".into(),
-			},
-			ProfileWarning::Unavailable {
-				file: "loadorder.txt".into(),
-				plugin: "Ordered.esp".into(),
 			},
 			ProfileWarning::Duplicate {
 				file: "plugins.txt".into(),
 				plugin: "Duplicate.esp".into(),
-			},
-			ProfileWarning::Unlisted {
-				plugin: "Unlisted.esp".into(),
 			},
 		];
 		scenario.profile_state_valid = false;
@@ -621,15 +613,9 @@ mod tests {
 				ExecutionWarning::Plugin(PluginWarning::StalePluginEntry {
 					name: "Missing.esp".into()
 				}),
-				ExecutionWarning::Plugin(PluginWarning::StaleLoadOrderEntry {
-					name: "Ordered.esp".into()
-				}),
 				ExecutionWarning::Plugin(PluginWarning::DuplicatePluginEntry {
 					file: "plugins.txt".into(),
 					name: "Duplicate.esp".into()
-				}),
-				ExecutionWarning::Plugin(PluginWarning::UnlistedPlugin {
-					name: "Unlisted.esp".into()
 				}),
 				ExecutionWarning::ProfileStateInvalid,
 			]

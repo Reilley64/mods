@@ -1,4 +1,4 @@
-use crate::profile::update_plugin_lists;
+use crate::profile::update_plugin_list;
 use crate::snapshot::insert_disabled_mod;
 use crate::snapshot::load;
 use crate::snapshot::validate_prospective_namespace;
@@ -178,7 +178,7 @@ impl InstallationTransaction {
 		}
 
 		if let Some(before) = &self.plugins_before {
-			update_plugin_lists(&self.root_path, &self.binding, before, cancellation).await?;
+			update_plugin_list(&self.root_path, &self.binding, before, cancellation).await?;
 		}
 
 		// The last write is done, so caller cancellation is no longer observed.
@@ -763,7 +763,7 @@ mod tests {
 			b"old",
 		)
 		.await;
-		let before = ["plugins.txt", "loadorder.txt", "modlist.txt"].map(|name| {
+		let before = ["plugins.txt", "modlist.txt"].map(|name| {
 			fs::read(root.as_path().join("profile").join(name)).expect("profile file must read")
 		});
 
@@ -775,7 +775,7 @@ mod tests {
 		)
 		.await;
 
-		let after = ["plugins.txt", "loadorder.txt", "modlist.txt"].map(|name| {
+		let after = ["plugins.txt", "modlist.txt"].map(|name| {
 			fs::read(root.as_path().join("profile").join(name)).expect("profile file must read")
 		});
 		assert_eq!(after, before);
@@ -784,7 +784,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn enabled_replacement_preserves_modlist_and_updates_only_changed_plugin_files() {
+	async fn enabled_replacement_preserves_modlist_and_removes_only_vanished_plugins() {
 		let parent = temp_dir();
 		let root = initialized_environment(&parent).await;
 		let archive = parent.path().join("replacement.zip");
@@ -800,6 +800,7 @@ mod tests {
 			.expect("enabled modlist must write");
 		fs::write(root.as_path().join("profile/plugins.txt"), b"# active\r\nOld.ESP\r\n")
 			.expect("plugins must write");
+		// A former `loadorder.txt` is ignored and left as it is.
 		fs::write(root.as_path().join("profile/loadorder.txt"), b"# order\r\nOld.ESP\r\n")
 			.expect("load order must write");
 		let modlist = fs::read(root.as_path().join("profile/modlist.txt")).expect("modlist must read");
@@ -822,7 +823,7 @@ mod tests {
 		);
 		assert_eq!(
 			fs::read(root.as_path().join("profile/loadorder.txt")).expect("load order must read"),
-			b"# order\r\nNew.ESP\r\n"
+			b"# order\r\nOld.ESP\r\n"
 		);
 	}
 }

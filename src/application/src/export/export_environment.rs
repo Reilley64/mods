@@ -309,8 +309,8 @@ mod tests {
 			project_profile: Arc::new(move |_: &EnvironmentPlan| {
 				projected();
 				complete(Ok(ProfileProjection {
-					warnings: vec![ProfileWarning::Unlisted {
-						plugin: "Unlisted.esp".into(),
+					warnings: vec![ProfileWarning::Unavailable {
+						plugin: "Missing.esp".into(),
 					}],
 				}))
 			}),
@@ -409,8 +409,8 @@ mod tests {
 		assert!(!output.published);
 		assert_eq!(
 			output.warnings,
-			[PluginWarning::UnlistedPlugin {
-				name: "Unlisted.esp".into()
+			[PluginWarning::StalePluginEntry {
+				name: "Missing.esp".into()
 			}]
 		);
 		assert_eq!(output.total_bytes, 12);

@@ -14,21 +14,20 @@ use std::fmt;
 #[cfg(any(windows, test))]
 use std::path::Path;
 
-const PROFILE_FILES: [&str; 8] = [
+const PROFILE_FILES: [&str; 7] = [
 	"Fallout.ini",
 	"FalloutPrefs.ini",
 	"FalloutCustom.ini",
 	"GECKCustom.ini",
 	"GECKPrefs.ini",
 	"plugins.txt",
-	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
 #[cfg(any(windows, test))]
 const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
 
 /// Decoded canonical text. The caller must reject decoding failures and use the
-/// Windows active code page for plugins.txt and UTF-8 for loadorder.txt.
+/// Windows active code page for plugins.txt.
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileText<'a> {
 	pub name: &'a str,
@@ -168,55 +167,53 @@ pub fn build_profile_projection(input: ProfileProjectionInput<'_>) -> Result<Pro
 	let mut warnings = Vec::new();
 	let mut explicitly_enabled_plugins = HashSet::new();
 	let mut ordered_plugins = Vec::new();
-	for name in ["plugins.txt", "loadorder.txt"] {
-		let text = profile_texts.get(name).copied().unwrap_or_default();
-		if text.replace("\r\n", "").contains(['\r', '\n']) {
+	let name = "plugins.txt";
+	let text = profile_texts.get(name).copied().unwrap_or_default();
+	let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+
+	if text.replace("\r\n", "").contains(['\r', '\n']) {
+		return Err(report!(ProfileProjectionError {
+			file: name.into(),
+			line: 0,
+			value: String::new(),
+			expected: "CRLF line endings"
+		}));
+	}
+
+	let mut seen = HashSet::new();
+	let mut duplicate_warnings = HashSet::new();
+	for (index, line) in text.split("\r\n").enumerate() {
+		if line.is_empty() || line.starts_with('#') {
+			continue;
+		}
+		let Some(path) = plugin_path(line) else {
 			return Err(report!(ProfileProjectionError {
 				file: name.into(),
-				line: 0,
-				value: String::new(),
-				expected: "CRLF line endings"
+				line: index + 1,
+				value: line.into(),
+				expected: "bare .esm or .esp filename"
 			}));
-		}
-		let mut seen = HashSet::new();
-		let mut duplicate_warnings = HashSet::new();
-		for (index, line) in text.split("\r\n").enumerate() {
-			if line.is_empty() || line.starts_with('#') {
-				continue;
-			}
-			let Some(path) = plugin_path(line) else {
-				return Err(report!(ProfileProjectionError {
-					file: name.into(),
-					line: index + 1,
-					value: line.into(),
-					expected: "bare .esm or .esp filename"
-				}));
-			};
-			let key = path.comparison_key().to_owned();
-			if !seen.insert(key.clone()) {
-				if duplicate_warnings.insert(key) {
-					warnings.push(ProfileWarning::Duplicate {
-						file: name.into(),
-						plugin: line.into(),
-					});
-				}
-				continue;
-			}
-			let Some(file) = visible.get(key.as_str()) else {
-				warnings.push(ProfileWarning::Unavailable {
+		};
+		let key = path.comparison_key().to_owned();
+		if !seen.insert(key.clone()) {
+			if duplicate_warnings.insert(key) {
+				warnings.push(ProfileWarning::Duplicate {
 					file: name.into(),
 					plugin: line.into(),
 				});
-				continue;
-			};
-			if name == "plugins.txt" {
-				explicitly_enabled_plugins.insert(key);
-			} else {
-				ordered_plugins.push(*file);
 			}
+			continue;
 		}
+		let Some(file) = visible.get(key.as_str()) else {
+			warnings.push(ProfileWarning::Unavailable { plugin: line.into() });
+			continue;
+		};
+		explicitly_enabled_plugins.insert(key);
+		ordered_plugins.push(*file);
 	}
 
+	// `plugins.txt` order is the load order. Other present plugins are inactive
+	// unless another source activates them, and they come after the listed ones.
 	let listed: HashSet<_> = ordered_plugins.iter().map(|file| file.path.comparison_key()).collect();
 	let unlisted: Vec<_> = input
 		.visible_files
@@ -225,12 +222,8 @@ pub fn build_profile_projection(input: ProfileProjectionInput<'_>) -> Result<Pro
 			plugin_path(file.path.as_str()).is_some() && !listed.contains(file.path.comparison_key())
 		})
 		.collect();
-	for file in &unlisted {
-		warnings.push(ProfileWarning::Unlisted {
-			plugin: file.path.to_string(),
-		});
-	}
 	ordered_plugins.extend(unlisted);
+
 	if let Some(index) = ordered_plugins
 		.iter()
 		.position(|file| file.path.comparison_key() == "falloutnv.esm")
@@ -358,10 +351,6 @@ mod tests {
 				text: "Absent.esp\r\nB.esp\r\nb.ESP\r\n",
 			},
 			ProfileText {
-				name: "loadorder.txt",
-				text: "B.esp\r\nAbsent.esp\r\nb.esp\r\n",
-			},
-			ProfileText {
 				name: "GECKCustom.ini",
 				text: "[General]\nsTestFile1=A.esp\nsTestFile1=B.esp\n",
 			},
@@ -391,7 +380,7 @@ mod tests {
 			]
 		);
 		assert_eq!(output.plugins[2].activation_sources, [ActivationSource::NamFile]);
-		assert_eq!(output.warnings.len(), 6);
+		assert_eq!(output.warnings.len(), 2);
 		assert_eq!(files[1].text, "Absent.esp\r\nB.esp\r\nb.ESP\r\n");
 		Ok(())
 	}
@@ -421,7 +410,11 @@ mod tests {
 			.profile_directories
 			.iter()
 			.all(|mapping| mapping.source == mapping.destination));
-		assert_eq!(output.profile_files.len(), 8);
+		assert_eq!(output.profile_files.len(), 7);
+		assert!(!output
+			.profile_files
+			.iter()
+			.any(|mapping| mapping.source.ends_with("loadorder.txt")));
 		assert_eq!(output.saves.source, Path::new("/environment/profile/saves"));
 		assert_eq!(output.saves.destination, Path::new("/documents/FalloutNV/__mods_saves"));
 		assert_eq!(
@@ -581,5 +574,26 @@ mod tests {
 			)
 			.is_err());
 		}
+	}
+
+	#[test]
+	fn a_byte_order_mark_does_not_hide_the_first_listed_plugin() -> Result<(), ProfileProjectionError> {
+		let output = build(
+			&[
+				ProfileText {
+					name: "Fallout.ini",
+					text: VALID,
+				},
+				ProfileText {
+					name: "plugins.txt",
+					text: "\u{feff}A.esp\r\n",
+				},
+			],
+			&[visible("A.esp")],
+		)?;
+
+		assert!(output.warnings.is_empty());
+		assert_eq!(output.plugins[0].activation_sources, [ActivationSource::PluginsFile]);
+		Ok(())
 	}
 }

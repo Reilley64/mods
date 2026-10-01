@@ -21,9 +21,14 @@ pub struct EnvironmentPlan {
 /// An advisory analytical plugin-projection diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileWarning {
-	Unavailable { file: String, plugin: String },
-	Duplicate { file: String, plugin: String },
-	Unlisted { plugin: String },
+	/// A `plugins.txt` entry that no Data winner provides.
+	Unavailable {
+		plugin: String,
+	},
+	Duplicate {
+		file: String,
+		plugin: String,
+	},
 }
 
 /// The validated analytical plugin projection of the canonical profile.

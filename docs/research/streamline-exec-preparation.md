@@ -560,6 +560,46 @@ Gate dispositions for this repair:
 
 Full check: `bun run check` exit 0; 432 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests. Windows-target clippy for `application`, `infrastructure-environment`, and `domain` is clean.
 
+### plugins.txt is the only load order (change J)
+
+Decision: `docs/exec-performance-discussion.md`, "Decision: drop loadorder.txt; plugins.txt order is the load order". `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines.
+
+- Ordering: `domain::load_order_times(candidates, plugin_list, archive_list)` orders plugins by `plugins.txt` line order. Present plugins that it does not list are inactive and come after the listed ones, in current-time order. BOM stripping, case-insensitive matching, and the BSA rules are unchanged. The adapter passes the `plugins.txt` text from the plan.
+- `loadorder.txt` left the Profile State:
+  - `PROFILE_FILES` (environment, settings, execution) no longer names it, so init does not import it (`game_platform` profile sources), the initial profile does not create it, export does not list it, and the exec profile mappings no longer map it into LocalAppData (7 mappings instead of 8).
+  - Validation (environment `validate_profile`, settings `layout::validate_profile`) no longer requires or reads it. Both accept it as an ignored entry (`IGNORED_PROFILE_FILES`), so an existing file is not rejected, even with invalid content.
+  - Install maintenance: `update_plugin_lists` is now `update_plugin_list`. After an enabled replacement it removes vanished plugins from `plugins.txt` as before; it no longer appends newly visible plugins to `loadorder.txt`. Newly installed plugins stay inactive until a user lists them, which was already true for `plugins.txt`.
+  - `prepare_launch` no longer decodes `loadorder.txt`. The snapshot and conflict scan never read it; one snapshot test fixture stopped writing it.
+- Warnings: `stale_load_order_entry` and `unlisted_plugin` are removed (`PluginWarning::StaleLoadOrderEntry`, `PluginWarning::UnlistedPlugin`, `ProfileWarning::Unlisted`, CLI text, tests). `ProfileWarning::Unavailable` no longer carries a file name, because only `plugins.txt` produces it. `stale_plugin_entry` and `duplicate_plugin_entry` stay.
+- Projection (`infrastructure/execution/src/profile.rs`): it reads only `plugins.txt`. Listed plugins form the projected order and get the `PluginsFile` activation source; other present plugins follow with no warning. The projection now also strips a BOM from `plugins.txt`, so a BOM no longer causes a false `stale_plugin_entry`.
+
+Tests:
+
+- Domain ordering tests use `plugins.txt` text (renamed `plugins_follow_plugins_txt_then_unlisted_plugins_by_current_time`); the BOM test is kept.
+- Init: the initial profile has 7 records and no `loadorder.txt`; invalid-entry publication tests cover `plugins.txt` only.
+- Install: the disabled replacement keeps `plugins.txt` and `modlist.txt`; the enabled replacement removes the vanished plugin from `plugins.txt` and leaves an existing `loadorder.txt` untouched.
+- Exec: the profile mappings have 7 entries and none for `loadorder.txt`; `prepare_launch` accepts an invalid `loadorder.txt` and does not read it; the projection tests use `plugins.txt` only, and a new test checks the BOM.
+- Settings: new test `a_former_load_order_file_is_ignored`.
+- Export: the listing contains `profile/plugins.txt` and not an existing `profile/loadorder.txt`; the load-order export tests activate `Mod.esp` through `plugins.txt`.
+- Runner and use-case tests no longer use the removed warnings.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain -p infrastructure-settings -p infrastructure-game-platform --all-targets -- -D warnings` passes. `infrastructure-execution`, `infrastructure-dependencies`, and the CLI still cannot be compiled for Windows here. The execution crate's projection and mapping code is platform-neutral or `cfg(any(windows, test))`, so the macOS tests cover it.
+
+Docs: `CONTEXT.md` (Profile State), `README.md`, `SKILL.md` (new step 6), and the references `execution.md`, `export.md`, `installation.md`, `setup.md`, and `troubleshooting.md` state the rule above and that `loadorder.txt` is not used.
+
+Gate dispositions for change J (no override):
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/transactions.rs` | Cancellation propagation and checkpoints (0.41); Phase spacing; Use-case parameters | Accepted. J only renamed the `update_plugin_list` call and changed test fixtures; the token handling is unchanged. |
+| `infrastructure/environment/src/profile.rs` | Use-case parameters (0.41); Phase spacing | Accepted. `update_plugin_list(root, binding, before, cancellation)` keeps the token last; it is an adapter helper, not a use case. The removed `loadorder.txt` block shortened it to read, filter, and write phases separated by blank lines. |
+| `infrastructure/execution/src/profile.rs` | Phase spacing (0.27); Use-case parameters | Accepted. The single `plugins.txt` loop replaces the two-file loop; validation, duplicate and stale checks, and the unlisted append are separated by blank lines. The file has no use case. |
+| `infrastructure/settings/src/lib.rs`, `layout.rs` | Phase spacing; Language-neutral review priorities; Use-case parameters | Accepted. J removed `loadorder.txt` from the layout lists and fixtures and added one test; the rest is unchanged. |
+| `infrastructure/environment/src/execution_preparation.rs` | Language-neutral review priorities (0.59 on an intermediate run) | Accepted. The three-way `match` on the file name became an `if`/`else`, because only `plugins.txt` needs another decoder now. |
+| Other files | Earlier rules | Unchanged dispositions from earlier sections. |
+
+Full check: `bun run check` exit 0; 434 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
 ## INI text lines without an assignment
 
 Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.

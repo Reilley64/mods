@@ -32,16 +32,17 @@ use windows::core::Error as WindowsError;
 #[cfg(windows)]
 use windows::core::PCSTR;
 
-const PROFILE_FILES: [&str; 8] = [
+const PROFILE_FILES: [&str; 7] = [
 	"Fallout.ini",
 	"FalloutPrefs.ini",
 	"FalloutCustom.ini",
 	"GECKCustom.ini",
 	"GECKPrefs.ini",
 	"plugins.txt",
-	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
+/// Former Profile State files that are accepted and never read.
+const IGNORED_PROFILE_FILES: [&str; 1] = ["loadorder.txt"];
 /// Validates the canonical Mod Environment layout for settings commands.
 ///
 /// Only entry names, entry types, and file contents are checked. Links are
@@ -72,11 +73,12 @@ async fn validate_root_entries(root: &Path) -> Result<(), ErrorMarker> {
 async fn validate_profile(profile: &Path) -> Result<HashSet<String>, ErrorMarker> {
 	let allowed = PROFILE_FILES
 		.into_iter()
+		.chain(IGNORED_PROFILE_FILES)
 		.chain(["modlist.txt", "saves"])
 		.collect::<HashSet<_>>();
 	let names = entry_names(profile).await?;
 	if names.iter().any(|name| !allowed.contains(name.as_str()))
-		|| ["Fallout.ini", "plugins.txt", "loadorder.txt", "modlist.txt", "saves"]
+		|| ["Fallout.ini", "plugins.txt", "modlist.txt", "saves"]
 			.into_iter()
 			.any(|required| !names.contains(required))
 	{
@@ -101,8 +103,7 @@ async fn validate_profile(profile: &Path) -> Result<HashSet<String>, ErrorMarker
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
-	validate_plugin_list(&read_regular(profile, "plugins.txt").await?, false)?;
-	validate_plugin_list(&read_regular(profile, "loadorder.txt").await?, true)?;
+	validate_plugin_list(&read_regular(profile, "plugins.txt").await?)?;
 	parse_modlist(&read_regular(profile, "modlist.txt").await?)
 }
 
@@ -235,14 +236,8 @@ fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
 	}
 }
 
-fn validate_plugin_list(bytes: &[u8], utf8: bool) -> Result<(), ErrorMarker> {
-	let text = if utf8 {
-		str::from_utf8(bytes)
-			.context(ErrorMarker::environment_invalid(None))?
-			.to_owned()
-	} else {
-		decode_active_code_page(bytes)?
-	};
+fn validate_plugin_list(bytes: &[u8]) -> Result<(), ErrorMarker> {
+	let text = decode_active_code_page(bytes)?;
 	if text.replace("\r\n", "").contains(['\r', '\n']) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}

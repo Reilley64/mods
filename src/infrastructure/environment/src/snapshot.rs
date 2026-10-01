@@ -1564,7 +1564,6 @@ mod tests {
 		assert_eq!(visible.get("éσ.esp").map(String::as_str), Some("éς.ESP"));
 		let profile = root.as_path().join("profile");
 		fs::write(profile.join("plugins.txt"), b"listed.esp\r\ndEpEnDeNcY.EsL\r\n")?;
-		fs::write(profile.join("loadorder.txt"), b"Listed.ESP\r\nDependency.esl\r\n")?;
 		let mut ini = fs::read_to_string(profile.join("Fallout.ini"))?;
 		ini.push_str(concat!(
 			"\r\n[gEnErAl]\r\n",

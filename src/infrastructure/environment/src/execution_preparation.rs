@@ -22,7 +22,6 @@ use rootcause::report;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::str::from_utf8;
 use tempfile::TempDir;
 use tokio::fs::metadata;
 use tokio::fs::read_dir;
@@ -138,12 +137,10 @@ impl EnvironmentAdapter {
 				continue;
 			};
 
-			let text = match name {
-				"plugins.txt" => decode_active_code_page(&bytes)?,
-				"loadorder.txt" => from_utf8(&bytes)
-					.context(ErrorMarker::environment_invalid(None))?
-					.to_owned(),
-				_ => decode(&bytes).context(ErrorMarker::environment_invalid(None))?.0,
+			let text = if name == "plugins.txt" {
+				decode_active_code_page(&bytes)?
+			} else {
+				decode(&bytes).context(ErrorMarker::environment_invalid(None))?.0
 			};
 
 			if ["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"].contains(&name)
@@ -151,7 +148,7 @@ impl EnvironmentAdapter {
 			{
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
-			if matches!(name, "plugins.txt" | "loadorder.txt") {
+			if name == "plugins.txt" {
 				validate_plugin_text(&text, false)?;
 			}
 
@@ -751,9 +748,10 @@ mod tests {
 	#[tokio::test]
 	async fn missing_plugin_lists_and_opaque_save_contents_are_allowed() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding) = fixture().await?;
-		for name in ["plugins.txt", "loadorder.txt"] {
-			fs::remove_file(root.as_path().join("profile").join(name)).context(ErrorMarker::io_failure())?;
-		}
+		fs::remove_file(root.as_path().join("profile/plugins.txt")).context(ErrorMarker::io_failure())?;
+		// A former `loadorder.txt` is ignored, even when it would be invalid.
+		fs::write(root.as_path().join("profile/loadorder.txt"), b"not a plugin\n")
+			.context(ErrorMarker::io_failure())?;
 		fs::create_dir_all(root.as_path().join("profile/saves/arbitrary.nvse/folder"))
 			.context(ErrorMarker::io_failure())?;
 		fs::write(
@@ -770,6 +768,7 @@ mod tests {
 		assert_eq!(archive.len(), 36);
 		assert_eq!(&archive[..12], &[66, 83, 65, 0, 104, 0, 0, 0, 36, 0, 0, 0]);
 		assert!(!prepared.profile_files.iter().any(|file| file.name == "plugins.txt"));
+		assert!(!prepared.profile_files.iter().any(|file| file.name == "loadorder.txt"));
 		assert!(!root.as_path().join("profile/plugins.txt").exists());
 		Ok(())
 	}

@@ -451,6 +451,8 @@ mod tests {
 		let (_temp, root, binding, _output) = fixture().await?;
 		let canonical =
 			fs::read(root.as_path().join("profile/Fallout.ini")).context(ErrorMarker::io_failure())?;
+		fs::write(root.as_path().join("profile/loadorder.txt"), b"Ignored.esp\r\n")
+			.context(ErrorMarker::io_failure())?;
 		let (plan, staged) = stage(&root, &binding).await?;
 		let list = EnvironmentAdapter.list_export_files_port();
 
@@ -479,6 +481,8 @@ mod tests {
 			}
 			assert_eq!(paths.contains(&"Data/FalloutNV.esm"), game_data);
 			assert_eq!(paths.contains(&"profile/saves/example.fos"), saves);
+			assert!(paths.contains(&"profile/plugins.txt"));
+			assert!(!paths.contains(&"profile/loadorder.txt"));
 			let ini = listing
 				.files
 				.iter()
@@ -728,13 +732,13 @@ mod tests {
 		Ok(())
 	}
 
-	/// Adds a plugin with a matching archive and lists it after the game's master.
+	/// Adds a plugin with a matching archive and activates it after the game's master.
 	fn load_order_fixture(root: &EnvironmentRoot) -> Result<(), ErrorMarker> {
 		fs::write(root.as_path().join("overwrite/Mod.esp"), b"plugin").context(ErrorMarker::io_failure())?;
 		fs::write(root.as_path().join("overwrite/Mod - Main.bsa"), b"archive")
 			.context(ErrorMarker::io_failure())?;
 		fs::write(
-			root.as_path().join("profile/loadorder.txt"),
+			root.as_path().join("profile/plugins.txt"),
 			b"FalloutNV.esm\r\nMod.esp\r\n",
 		)
 		.context(ErrorMarker::io_failure())

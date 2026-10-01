@@ -437,18 +437,10 @@ pub(crate) fn plugin_warning(warning: &PluginWarning) -> String {
 			"warning [stale_plugin_entry]: analysis projection: plugins.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n",
 			quote(name)
 		),
-		PluginWarning::StaleLoadOrderEntry { name } => format!(
-			"warning [stale_load_order_entry]: analysis projection: loadorder.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n",
-			quote(name)
-		),
 		PluginWarning::DuplicatePluginEntry { file, name } => format!(
 			"warning [duplicate_plugin_entry]: duplicate entry {} in {}; analysis projection uses the first occurrence; canonical file is unchanged.\n",
 			quote(name),
 			quote(file)
-		),
-		PluginWarning::UnlistedPlugin { name } => format!(
-			"warning [unlisted_plugin]: {} is absent from loadorder.txt; it gets a load-order time after the listed plugins, in current modification-time order.\n",
-			quote(name)
 		),
 	}
 }

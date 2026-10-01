@@ -26,7 +26,9 @@ mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-u
 
 `--replace` requires an existing Data Mod. It retains the existing canonical Mod Name, Mod Priority, list position (counted in mod entries from the top of `modlist.txt`; comment lines are not counted), and enabled state. Without `--replace`, a matching name fails with `mod_already_exists`; replacement of a missing name fails with `mod_not_found`. Never add `--replace` automatically to bypass a collision.
 
-Installation writes directly into `mods/<Mod Name>` and the Profile State files. There is no staging copy and no rollback. Replacement deletes the old mod folder before it writes the new files. A failure or cancellation during installation can leave a partial mod folder, a mod folder that `modlist.txt` does not list yet, or partly updated plugin lists. Inspect that state with the user before any retry.
+Installation writes directly into `mods/<Mod Name>` and the Profile State files. There is no staging copy and no rollback. Replacement deletes the old mod folder before it writes the new files. A failure or cancellation during installation can leave a partial mod folder, a mod folder that `modlist.txt` does not list yet, or a partly updated `plugins.txt`. Inspect that state with the user before any retry.
+
+Installing a mod does not activate its plugins. `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Replacing an enabled mod removes plugins that are no longer present from `plugins.txt` and leaves the other lines in place.
 
 ## FOMOD Choices: resubmit complete state
 

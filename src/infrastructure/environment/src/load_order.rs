@@ -38,7 +38,7 @@ struct RootFile {
 /// The plan inputs for load-order times, copied so the future does not borrow the plan.
 struct LoadOrderInputs {
 	files: Vec<RootFile>,
-	load_order: String,
+	plugin_list: String,
 	archive_list: String,
 }
 
@@ -76,7 +76,7 @@ impl LoadOrderInputs {
 
 		Ok(Self {
 			files,
-			load_order: text("loadorder.txt").unwrap_or_default().to_owned(),
+			plugin_list: text("plugins.txt").unwrap_or_default().to_owned(),
 			archive_list: selected_archive_list(text("Fallout.ini"), text("FalloutCustom.ini")).to_owned(),
 		})
 	}
@@ -102,7 +102,7 @@ impl LoadOrderInputs {
 		}
 
 		let archive_list = derived_archive_list(&self.archive_list);
-		let timed = load_order_times(candidates, &self.load_order, &archive_list);
+		let timed = load_order_times(candidates, &self.plugin_list, &archive_list);
 
 		for ((file, modified), time) in timed {
 			if cancellation.is_cancelled() {
@@ -237,7 +237,7 @@ mod tests {
 					text: "[Archive]\r\nsArchiveList=Fallout - Misc.bsa\r\n".to_owned(),
 				},
 				ExecutionProfileText {
-					name: "loadorder.txt",
+					name: "plugins.txt",
 					text: "FalloutNV.esm\r\nMod.esp\r\n".to_owned(),
 				},
 			],

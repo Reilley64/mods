@@ -25,7 +25,7 @@ The Steam-managed Fallout: New Vegas installation that supplies the shared base 
 _Avoid_: Mod Environment, profile
 
 **Profile State**:
-The single set of mod order, plugin state, INIs, and saves owned by a Mod Environment and grouped beneath its `profile` directory.
+The single set of mod order, plugin state, INIs, and saves owned by a Mod Environment and grouped beneath its `profile` directory. `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Profile State has no `loadorder.txt`; an existing one is ignored.
 _Avoid_: A separately selectable profile, nested environment
 
 **Data Mod**:

@@ -513,7 +513,7 @@ mod tests {
 				"sArchiveList=Fallout - Invalidation.bsa\n",
 			),
 		)?;
-		for file in ["plugins.txt", "loadorder.txt", "modlist.txt"] {
+		for file in ["plugins.txt", "modlist.txt"] {
 			fs::write(temp.path().join("profile").join(file), b"")?;
 		}
 		fs::write(temp.path().join("cache/Fallout - Invalidation.bsa"), empty_bsa_bytes())?;
@@ -534,7 +534,6 @@ mod tests {
 	async fn execution_binding_does_not_require_plugin_lists_or_inspect_saves() -> Result<()> {
 		let (temp, root) = fixture()?;
 		fs::remove_file(temp.path().join("profile/plugins.txt"))?;
-		fs::remove_file(temp.path().join("profile/loadorder.txt"))?;
 		let adapter = SettingsAdapter::with_environment(root, Vec::new());
 		let binding = adapter
 			.load_command(SettingsLoadMode::Execution, &CancellationToken::new())
@@ -791,7 +790,15 @@ mod tests {
 	async fn canonical_esl_plugin_state_is_accepted() -> Result<()> {
 		let (temp, root) = fixture()?;
 		fs::write(temp.path().join("profile/plugins.txt"), "Example.EsL\r\n")?;
-		fs::write(temp.path().join("profile/loadorder.txt"), "Example.eSL\r\n")?;
+
+		SettingsAdapter::with_environment(root, Vec::new()).load().await?;
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn a_former_load_order_file_is_ignored() -> Result<()> {
+		let (temp, root) = fixture()?;
+		fs::write(temp.path().join("profile/loadorder.txt"), "not a plugin\n")?;
 
 		SettingsAdapter::with_environment(root, Vec::new()).load().await?;
 		Ok(())

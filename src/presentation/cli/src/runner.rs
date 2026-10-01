@@ -911,8 +911,8 @@ mod tests {
 			project_profile: Arc::new(|_: &EnvironmentPlan| {
 				Box::pin(async {
 					Ok(ProfileProjection {
-						warnings: vec![ProfileWarning::Unlisted {
-							plugin: "Unlisted.esp".into(),
+						warnings: vec![ProfileWarning::Unavailable {
+							plugin: "Missing.esp".into(),
 						}],
 					})
 				})
@@ -1096,7 +1096,7 @@ mod tests {
 			})
 			.await?;
 			assert_eq!(outcome.status, 0);
-			assert!(outcome.stderr.starts_with("warning [unlisted_plugin]"));
+			assert!(outcome.stderr.starts_with("warning [stale_plugin_entry]"));
 			if dry_run {
 				assert!(outcome.stdout.contains("files.count = 1"));
 				assert!(outcome.stdout.contains("total_bytes = 17"));
@@ -1156,15 +1156,9 @@ mod tests {
 						ExecutionWarning::Plugin(PluginWarning::StalePluginEntry {
 							name: "Missing.esp".into(),
 						}),
-						ExecutionWarning::Plugin(PluginWarning::StaleLoadOrderEntry {
-							name: "Ordered.esp".into(),
-						}),
 						ExecutionWarning::Plugin(PluginWarning::DuplicatePluginEntry {
 							file: "plugins.txt".into(),
 							name: "Duplicate.esp".into(),
-						}),
-						ExecutionWarning::Plugin(PluginWarning::UnlistedPlugin {
-							name: "Unlisted.esp".into(),
 						}),
 						ExecutionWarning::ProfileStateInvalid,
 					],
@@ -1184,7 +1178,7 @@ mod tests {
 		assert!(outcome.stdout.is_empty());
 		assert_eq!(
 			outcome.stderr,
-			"warning [stale_plugin_entry]: analysis projection: plugins.txt entry \"Missing.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [stale_load_order_entry]: analysis projection: loadorder.txt entry \"Ordered.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [duplicate_plugin_entry]: duplicate entry \"Duplicate.esp\" in \"plugins.txt\"; analysis projection uses the first occurrence; canonical file is unchanged.\nwarning [unlisted_plugin]: \"Unlisted.esp\" is absent from loadorder.txt; it gets a load-order time after the listed plugins, in current modification-time order.\nwarning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n"
+			"warning [stale_plugin_entry]: analysis projection: plugins.txt entry \"Missing.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [duplicate_plugin_entry]: duplicate entry \"Duplicate.esp\" in \"plugins.txt\"; analysis projection uses the first occurrence; canonical file is unchanged.\nwarning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n"
 		);
 		Ok(())
 	}

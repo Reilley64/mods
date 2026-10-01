@@ -10,9 +10,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginWarning {
 	StalePluginEntry { name: String },
-	StaleLoadOrderEntry { name: String },
 	DuplicatePluginEntry { file: String, name: String },
-	UnlistedPlugin { name: String },
 }
 
 pub(crate) struct PreparedEnvironment {
@@ -39,16 +37,10 @@ pub(crate) async fn prepare_environment(
 		.warnings
 		.into_iter()
 		.map(|warning| match warning {
-			ProfileWarning::Unavailable { file, plugin } if file.eq_ignore_ascii_case("plugins.txt") => {
-				PluginWarning::StalePluginEntry { name: plugin }
-			}
-			ProfileWarning::Unavailable { plugin, .. } => {
-				PluginWarning::StaleLoadOrderEntry { name: plugin }
-			}
+			ProfileWarning::Unavailable { plugin } => PluginWarning::StalePluginEntry { name: plugin },
 			ProfileWarning::Duplicate { file, plugin } => {
 				PluginWarning::DuplicatePluginEntry { file, name: plugin }
 			}
-			ProfileWarning::Unlisted { plugin } => PluginWarning::UnlistedPlugin { name: plugin },
 		})
 		.collect();
 
