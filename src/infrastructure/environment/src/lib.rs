@@ -448,7 +448,8 @@ async fn assess_open(
 }
 
 /// The generated `Fallout - Invalidation.bsa`. The game does not honor an archive without
-/// files as the invalidation archive, so archived textures keep winning over loose files.
+/// files as the invalidation archive; with such an archive, archived textures win over loose
+/// files.
 /// These bytes match the dummy archive that Mod Organizer 2 writes for version 0x68: one
 /// root folder holding `dummy.dds`, with the texture file flag set.
 const INVALIDATION_ARCHIVE_BYTES: [u8; 83] = [
@@ -460,7 +461,8 @@ const INVALIDATION_ARCHIVE_BYTES: [u8; 83] = [
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3E, 0x00, 0x00, 0x00,
 	// Folder block: the empty folder name, then the `dummy.dds` record with size zero.
 	0x00, 0xF9, 0xED, 0x05, 0x64, 0xFD, 0xC6, 0x50, 0x8E, 0x00, 0x00, 0x00, 0x00, 0x52, 0x00, 0x00, 0x00,
-	// File names, then four zero bytes.
+	// File names, then MO2's four trailing zero bytes; the zero-size `dummy.dds` record points
+	// into them at offset 0x52.
 	0x64, 0x75, 0x6D, 0x6D, 0x79, 0x2E, 0x64, 0x64, 0x73, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
@@ -592,13 +594,14 @@ mod tests {
 		// must hold one folder with one texture file, as Mod Organizer 2's archive does.
 		let archive =
 			fs::read(root.as_path().join("cache/Fallout - Invalidation.bsa")).expect("archive must read");
-		let field = |offset: usize| archive.get(offset..offset + 4).map(|bytes| bytes.to_vec());
+		let field = |offset: usize| archive.get(offset..offset + 4);
+
 		assert_eq!(archive.len(), 83);
-		assert_eq!(archive.get(..8), Some(&b"BSA\0\x68\0\0\0"[..]));
-		assert_eq!(field(16), Some(vec![1, 0, 0, 0]));
-		assert_eq!(field(20), Some(vec![1, 0, 0, 0]));
-		assert_eq!(field(32), Some(vec![2, 0, 0, 0]));
-		assert_eq!(archive.get(69..79), Some(&b"dummy.dds\0"[..]));
+		assert_eq!(archive.get(..8), Some(&b"BSA\0\x68\0\0\0"[..]), "magic and version");
+		assert_eq!(field(16), Some(&1_u32.to_le_bytes()[..]), "folder count");
+		assert_eq!(field(20), Some(&1_u32.to_le_bytes()[..]), "file count");
+		assert_eq!(field(32), Some(&2_u32.to_le_bytes()[..]), "file flags: textures");
+		assert_eq!(archive.get(69..79), Some(&b"dummy.dds\0"[..]), "file name");
 	}
 
 	#[tokio::test]
