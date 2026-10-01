@@ -446,6 +446,16 @@ The user approved a new optional export flag. Its default name is `--include-gam
 
 Review finding: an export made without `--include-game-data` times the exported mod plugins from 2000-01-01, while the destination keeps its own Steam dates on the base-game and DLC masters (2000-01-01 to 2000-01-10). Mod plugins can then sort before those masters. The user chose option C: keep the base date, add no warning, and recommend the flag in the docs.
 
+### Decision: drop loadorder.txt; plugins.txt order is the load order
+
+The user decided to drop `loadorder.txt`. The expected users order plugins through an AI assistant, not LOOT. `profile/plugins.txt` becomes the only plugin list: it lists the active plugins, and its line order is the load order.
+
+- The load-order time step orders plugins by their `plugins.txt` line order. Present plugins not in `plugins.txt` are inactive. They come after the listed ones, in their current modification-time order, and the game does not load them.
+- `loadorder.txt` leaves the Profile State. Init stops importing it, export stops writing it, exec stops mapping it, and install stops updating it. An existing `loadorder.txt` in an environment is ignored. There is no migration, because the project is before 1.0.
+- `stale_load_order_entry` goes away. `unlisted_plugin` goes away too, because a plugin missing from `plugins.txt` is simply inactive. `stale_plugin_entry` and `duplicate_plugin_entry` stay, for `plugins.txt`.
+- The user's current environment loads in the same order: its 75 `plugins.txt` lines match `loadorder.txt` exactly.
+- Docs and skills tell users and agents to reorder `plugins.txt` lines to change the load order.
+
 ### Decisions on the tokio::fs follow-ups
 
 - Walk timing accepted: the exec inventory walk over 20,000 files went from a median of 21.0 ms to 27.6 ms with tokio::fs.
