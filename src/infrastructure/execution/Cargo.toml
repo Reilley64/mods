@@ -24,7 +24,7 @@ sha2 = { workspace = true }
 
 [target."cfg(windows)".dependencies]
 usvfs-sys = { git = "https://github.com/Reilley64/usvfs-rs", rev = "c23705ce1a4baba19c72156900bb913c9e090307" }
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

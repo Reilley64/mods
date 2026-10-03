@@ -1,5 +1,11 @@
 //! Small configuration and ownership adapter for unmodified upstream usvfs.
 mod child_output;
+#[cfg(windows)]
+mod hidden_windows;
+#[cfg(windows)]
+pub use hidden_windows::detach_console;
+#[cfg(windows)]
+pub use hidden_windows::show_error;
 #[cfg(any(windows, test))]
 mod configuration;
 mod error;

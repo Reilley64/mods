@@ -64,6 +64,10 @@ _Avoid_: Root output, temporary directory
 Overwrite or one installed, enabled Data Mod selected to receive new Data files and new copy or file-move destinations for one managed execution. Selection does not change Mod Priority or relocate existing destination files from their current provider.
 _Avoid_: Profile State, staging directory
 
+**Launch Shortcut**:
+A desktop entry that preserves an executable, its arguments, and launch choices for one Mod Environment. It uses that environment's current mods and settings rather than a saved snapshot.
+_Avoid_: Mod snapshot, saved Mod Environment
+
 **Diagnostic Session**:
 The bounded diagnostic scope for one environment-bound CLI command, including its nested work and cleanup. After the MVP, an MCP request or MCP server lifecycle may also have its own Diagnostic Session.
 _Avoid_: FOMOD choice session, stored workflow, Mod Environment lifetime
