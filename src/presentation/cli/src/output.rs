@@ -274,6 +274,7 @@ fn projected_state(text: &mut String, prefix: &str, state: &ProjectedModState) {
 		match state.mode {
 			InstallMode::NewInstall => "new_install",
 			InstallMode::Replacement => "replacement",
+			InstallMode::UnlistedReplacement => "unlisted_replacement",
 		},
 	);
 	line_string(text, &format!("{prefix}.mod_name"), state.mod_name.as_str());
@@ -453,6 +454,7 @@ mod tests {
 	use super::additional_selections;
 	use super::candidate_origin;
 	use super::initialization;
+	use super::projected_state;
 	use super::quote;
 	use super::set_game_directory;
 	use super::setting;
@@ -461,7 +463,9 @@ mod tests {
 	use application::installation::AcceptedChoice;
 	use application::installation::AdditionalSelectionsRequired;
 	use application::installation::ConditionEvaluation;
+	use application::installation::InstallMode;
 	use application::installation::OptionSelectionState;
+	use application::installation::ProjectedModState;
 	use application::installation::UnresolvedGroup;
 	use application::installation::VisibleOption;
 	use application::settings::EffectiveBinding;
@@ -477,10 +481,30 @@ mod tests {
 	use domain::GameInstallationPath;
 	use domain::InstallCandidateOrigin;
 	use domain::ModName;
+	use domain::ModPriority;
 	use domain::ResolvedOptionType;
 	use domain::Sha256Digest;
 	use std::env::current_dir;
 	use std::error::Error;
+
+	#[test]
+	fn unlisted_replacement_preview_names_its_mode() -> rootcause::Result<()> {
+		let state = ProjectedModState {
+			mode: InstallMode::UnlistedReplacement,
+			mod_name: ModName::new("Leftover".to_owned())?,
+			priority: ModPriority::new(1),
+			list_position: 0,
+			enabled: false,
+			overlaps: Vec::new(),
+		};
+		let mut text = String::new();
+
+		projected_state(&mut text, "plan.projected_state", &state);
+
+		assert!(text.contains("plan.projected_state.mode = \"unlisted_replacement\"\n"));
+		assert!(text.contains("plan.projected_state.list_position = 0\n"));
+		Ok(())
+	}
 
 	#[test]
 	fn incomplete_choice_output_contains_only_decision_data() -> rootcause::Result<()> {

@@ -10,6 +10,7 @@ use application::installation::CandidateDecision;
 use application::installation::EffectiveResult;
 use application::installation::FileDependencyFact;
 use application::installation::FileDependencyKind;
+use application::installation::InstallMode;
 use application::installation::InstallOverlap;
 use application::installation::InstallPlan;
 use application::installation::InstallationAssessment;
@@ -514,7 +515,7 @@ pub(crate) async fn validate_prospective_namespace(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		if plan.replacement && installed_mod.name == plan.mod_name {
+		if plan.projected_state.mode == InstallMode::Replacement && installed_mod.name == plan.mod_name {
 			continue;
 		}
 		apply_provider(
@@ -895,7 +896,7 @@ pub(crate) async fn assess_installation(
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		if plan.replacement && installed.name == plan.mod_name {
+		if plan.projected_state.mode == InstallMode::Replacement && installed.name == plan.mod_name {
 			add_proposed_provider(plan, &mut traversal, cancellation)?;
 			proposal_added = true;
 			continue;

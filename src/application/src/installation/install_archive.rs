@@ -159,33 +159,34 @@ pub async fn install_archive(
 			.context(InstallArchiveError)?
 	};
 
-	// An unlisted folder is not an installed mod, so `--replace` cannot apply to it either.
-	if let Some(unlisted) = state.unlisted_mod_names.iter().find(|name| **name == requested_name) {
-		return Err(
-			report!(ErrorMarker::mod_already_exists().with_mod_name(unlisted.clone()))
-				.context(InstallArchiveError),
-		);
-	}
-
 	let existing = state
 		.installed_mods
 		.iter()
 		.find(|installed| installed.name == requested_name);
-	let selected_name = match (replace, existing) {
-		(false, Some(installed)) => {
+	let unlisted = state.unlisted_mod_names.iter().find(|name| **name == requested_name);
+	let (selected_name, mode) = match (replace, existing, unlisted) {
+		// A listed mod and an unlisted case variant of it leave `--replace` without one clear target.
+		(false, None, Some(unlisted)) | (_, Some(_), Some(unlisted)) => {
+			return Err(
+				report!(ErrorMarker::mod_already_exists().with_mod_name(unlisted.clone()))
+					.context(InstallArchiveError),
+			);
+		}
+		(false, Some(installed), None) => {
 			return Err(
 				report!(ErrorMarker::mod_already_exists().with_mod_name(installed.name.clone()))
 					.context(InstallArchiveError),
 			);
 		}
-		(true, None) => {
+		(true, None, None) => {
 			return Err(
 				report!(ErrorMarker::mod_not_found().with_mod_name(requested_name.clone()))
 					.context(InstallArchiveError),
 			);
 		}
-		(true, Some(installed)) => installed.name.clone(),
-		(false, None) => requested_name,
+		(true, Some(installed), None) => (installed.name.clone(), InstallMode::Replacement),
+		(true, None, Some(unlisted)) => (unlisted.clone(), InstallMode::UnlistedReplacement),
+		(false, None, None) => (requested_name, InstallMode::NewInstall),
 	};
 
 	if let Some(progress) = &dependencies.report_progress {
@@ -341,7 +342,7 @@ pub async fn install_archive(
 		warnings.push(warning);
 	}
 
-	let (mode, priority, list_position, enabled) = if let Some(installed) = existing {
+	let (priority, list_position, enabled) = if let Some(installed) = existing {
 		let position = state
 			.installed_mods
 			.iter()
@@ -351,12 +352,7 @@ pub async fn install_archive(
 		// MO2 lists the highest Mod Priority first, so the list position counts
 		// from the top of `modlist.txt`.
 		let list_position = state.installed_mods.len() - 1 - position;
-		(
-			InstallMode::Replacement,
-			installed.priority,
-			list_position as u64,
-			installed.enabled,
-		)
+		(installed.priority, list_position as u64, installed.enabled)
 	} else {
 		let priority = state
 			.installed_mods
@@ -366,7 +362,7 @@ pub async fn install_archive(
 			.map_or(Some(0), |priority| priority.checked_add(1))
 			.ok_or_else(|| report!(ErrorMarker::ambiguous_install_plan()))
 			.context(InstallArchiveError)?;
-		(InstallMode::NewInstall, ModPriority::new(priority), 0, false)
+		(ModPriority::new(priority), 0, false)
 	};
 	let source_basename = archive
 		.as_path()
@@ -577,6 +573,7 @@ mod tests {
 	use crate::installation::FomodOption;
 	use crate::installation::FomodOptionTypePattern;
 	use crate::installation::IndexedInstaller;
+	use crate::installation::InstallMode;
 	use crate::installation::InstallWarning;
 	use crate::installation::InstallationAssessment;
 	use crate::installation::InstallationState;
@@ -1979,36 +1976,51 @@ mod tests {
 		Ok(())
 	}
 
+	fn dependencies_with_unlisted_entry(
+		order: Arc<Mutex<Vec<&'static str>>>,
+		installed_mods: Vec<InstalledMod>,
+	) -> Result<InstallArchiveDependencies> {
+		let mut dependencies = dependencies(order, false, Arc::new(AtomicUsize::new(0)));
+		let unlisted = ModName::new("Plain Mod".to_owned())?;
+		dependencies.load_installation_state = Arc::new(move |_, _| {
+			let installed_mods = installed_mods.clone();
+			let unlisted = unlisted.clone();
+			Box::pin(async move {
+				Ok(InstallationState {
+					game_binding: binding(),
+					installed_mods,
+					unlisted_mod_names: vec![unlisted],
+					current_winners: HashMap::new(),
+					file_dependencies: HashMap::new(),
+				})
+			}) as PortFuture<_>
+		});
+		Ok(dependencies)
+	}
+
 	#[tokio::test]
-	async fn install_over_an_unlisted_folder_is_refused_before_any_write() -> Result<()> {
-		for replace in [false, true] {
+	async fn install_over_an_unlisted_entry_without_replace_is_refused_before_any_write() -> Result<()> {
+		let listed_variant = InstalledMod {
+			name: ModName::new("PLAIN MOD".to_owned())?,
+			priority: ModPriority::new(0),
+			enabled: false,
+		};
+		// A listed mod with an unlisted case variant leaves `--replace` without one clear target.
+		for (replace, installed_mods) in [(false, Vec::new()), (true, vec![listed_variant])] {
 			let order = Arc::new(Mutex::new(Vec::new()));
-			let mut dependencies = dependencies(order.clone(), false, Arc::new(AtomicUsize::new(0)));
-			let unlisted = ModName::new("Plain Mod".to_owned())?;
-			dependencies.load_installation_state = Arc::new(move |_, _| {
-				let unlisted = unlisted.clone();
-				Box::pin(async move {
-					Ok(InstallationState {
-						game_binding: binding(),
-						installed_mods: Vec::new(),
-						unlisted_mod_names: vec![unlisted],
-						current_winners: HashMap::new(),
-						file_dependencies: HashMap::new(),
-					})
-				}) as PortFuture<_>
-			});
+			let dependencies = dependencies_with_unlisted_entry(order.clone(), installed_mods)?;
 
 			let report = install_archive(
 				dependencies,
 				ArchivePath::new(temp_dir().join("archive.zip"))?,
-				Some(ModName::new("PLAIN mod".to_owned())?),
+				Some(ModName::new("plain mod".to_owned())?),
 				replace,
 				Vec::new(),
 				false,
 				CancellationToken::new(),
 			)
 			.await
-			.expect_err("an unlisted folder must block the install");
+			.expect_err("the unlisted entry must block the install");
 
 			let marker = report
 				.iter_reports()
@@ -2021,6 +2033,40 @@ mod tests {
 				.iter()
 				.any(|step| matches!(*step, "begin" | "begin_file" | "extract")));
 		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn replace_over_an_unlisted_entry_plans_a_new_listing_under_its_spelling() -> Result<()> {
+		let base = InstalledMod {
+			name: ModName::new("Base".to_owned())?,
+			priority: ModPriority::new(0),
+			enabled: true,
+		};
+		let dependencies = dependencies_with_unlisted_entry(Arc::new(Mutex::new(Vec::new())), vec![base])?;
+
+		let output = install_archive(
+			dependencies,
+			ArchivePath::new(temp_dir().join("archive.zip"))?,
+			Some(ModName::new("plain mod".to_owned())?),
+			true,
+			Vec::new(),
+			true,
+			CancellationToken::new(),
+		)
+		.await?;
+
+		let InstallArchiveOutput::Preview(preview) = output else {
+			return Err(report!("expected preview"));
+		};
+		let state = &preview.plan.projected_state;
+		assert!(preview.plan.replacement);
+		assert_eq!(preview.plan.mod_name.as_str(), "Plain Mod");
+		assert_eq!(state.mode, InstallMode::UnlistedReplacement);
+		assert_eq!(state.mod_name.as_str(), "Plain Mod");
+		assert_eq!(state.priority, ModPriority::new(1));
+		assert_eq!(state.list_position, 0);
+		assert!(!state.enabled);
 		Ok(())
 	}
 

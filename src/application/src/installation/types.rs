@@ -109,8 +109,8 @@ pub struct InstallationState {
 	pub installed_mods: Vec<InstalledMod>,
 	/// Names of the `mods` entries that `modlist.txt` does not list.
 	///
-	/// These entries are not installed mods and contribute nothing, but a new install cannot take
-	/// their names, because its directory would collide with the entry.
+	/// These entries are not installed mods and contribute nothing. An install can take one of
+	/// these names only with `--replace`, because its directory would collide with the entry.
 	pub unlisted_mod_names: Vec<ModName>,
 	pub current_winners: HashMap<DataRelativePath, EffectiveResult>,
 	pub file_dependencies: HashMap<String, FileDependencyFact>,
@@ -306,7 +306,11 @@ pub struct PlannedCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMode {
 	NewInstall,
+	/// Replaces a mod listed in `modlist.txt`, keeping its entry, priority, and enabled state.
 	Replacement,
+	/// Replaces an unlisted `mods` entry of the same name. The entry is removed, and the new mod
+	/// is listed like a new install.
+	UnlistedReplacement,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallOverlap {

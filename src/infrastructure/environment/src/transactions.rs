@@ -15,6 +15,7 @@ use domain::ArchiveIdentity;
 use domain::DataRelativePath;
 use domain::GameBinding;
 use domain::InstalledMod;
+use domain::ModName;
 use domain::case_fold_key;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -29,6 +30,8 @@ use tokio::fs::create_dir;
 use tokio::fs::read;
 use tokio::fs::read_dir;
 use tokio::fs::remove_dir_all;
+use tokio::fs::remove_file;
+use tokio::fs::symlink_metadata;
 use tokio::fs::write;
 use tokio_util::sync::CancellationToken;
 use toml::to_string_pretty;
@@ -60,9 +63,10 @@ impl InstallationTransaction {
 		}
 
 		let current = load(root_path, binding, InstallationStateAccess::Mutation, cancellation).await?;
-		validate_intent(&current.installed_mods, &approved.plan)?;
+		validate_intent(&current.installed_mods, &current.unlisted_mod_names, &approved.plan)?;
 
-		let plugins_before = if approved.plan.replacement && approved.plan.projected_state.enabled {
+		let mode = approved.plan.projected_state.mode;
+		let plugins_before = if mode == InstallMode::Replacement && approved.plan.projected_state.enabled {
 			Some(visible_plugins(root_path, binding, cancellation).await?)
 		} else {
 			None
@@ -72,10 +76,12 @@ impl InstallationTransaction {
 		}
 
 		let mod_directory = root_path.join("mods").join(approved.plan.mod_name.as_str());
-		if approved.plan.replacement {
-			remove_dir_all(&mod_directory)
+		match mode {
+			InstallMode::NewInstall => {}
+			InstallMode::Replacement => remove_dir_all(&mod_directory)
 				.await
-				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+				.context(ErrorMarker::transaction_failure().with_phase("publication"))?,
+			InstallMode::UnlistedReplacement => remove_unlisted_entry(&mod_directory).await?,
 		}
 		create_dir(&mod_directory)
 			.await
@@ -165,7 +171,7 @@ impl InstallationTransaction {
 		}
 
 		let modlist = self.root_path.join("profile/modlist.txt");
-		if !self.approved.plan.replacement {
+		if self.approved.plan.projected_state.mode != InstallMode::Replacement {
 			let current_modlist = read(&modlist)
 				.await
 				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
@@ -210,22 +216,23 @@ async fn create_mod_file(
 		.context(ErrorMarker::transaction_failure().with_phase("publication"))
 }
 
-fn validate_intent(installed: &[InstalledMod], plan: &InstallPlan) -> Result<(), ErrorMarker> {
+fn validate_intent(installed: &[InstalledMod], unlisted: &[ModName], plan: &InstallPlan) -> Result<(), ErrorMarker> {
+	let state = &plan.projected_state;
 	let existing = installed.iter().find(|item| item.name == plan.mod_name);
-	match (plan.replacement, existing) {
-		(false, None) => {
-			let expected = u32::try_from(installed.len())
-				.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
-			if plan.projected_state.mode != InstallMode::NewInstall
-				|| plan.projected_state.mod_name != plan.mod_name
-				|| plan.projected_state.enabled
-				|| plan.projected_state.priority.get() != expected
-				|| plan.projected_state.list_position != 0
-			{
-				return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
-			}
+	let unlisted = unlisted.iter().find(|name| **name == plan.mod_name);
+	let new_priority =
+		u32::try_from(installed.len()).context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+	let listed_as_new = state.mod_name == plan.mod_name
+		&& !state.enabled
+		&& state.priority.get() == new_priority
+		&& state.list_position == 0;
+
+	let intent_matches = match (state.mode, existing, unlisted) {
+		(InstallMode::NewInstall, None, None) => !plan.replacement && listed_as_new,
+		(InstallMode::UnlistedReplacement, None, Some(unlisted)) => {
+			plan.replacement && plan.mod_name.as_str() == unlisted.as_str() && listed_as_new
 		}
-		(true, Some(existing)) => {
+		(InstallMode::Replacement, Some(existing), None) => {
 			// MO2 order lists the highest priority first, so the entry position
 			// counts down from the last priority.
 			let list_position = u64::try_from(installed.len())
@@ -233,19 +240,36 @@ fn validate_intent(installed: &[InstalledMod], plan: &InstallPlan) -> Result<(),
 				.and_then(|count| count.checked_sub(1))
 				.and_then(|last| last.checked_sub(u64::from(existing.priority.get())))
 				.ok_or_else(|| report!(ErrorMarker::transaction_failure().with_phase("publication")))?;
-			if plan.projected_state.mode != InstallMode::Replacement
-				|| plan.mod_name.as_str() != existing.name.as_str()
-				|| plan.projected_state.mod_name != existing.name
-				|| plan.projected_state.list_position != list_position
-				|| plan.projected_state.enabled != existing.enabled
-				|| plan.projected_state.priority != existing.priority
-			{
-				return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
-			}
+			plan.replacement
+				&& plan.mod_name.as_str() == existing.name.as_str()
+				&& state.mod_name == existing.name
+				&& state.list_position == list_position
+				&& state.enabled == existing.enabled
+				&& state.priority == existing.priority
 		}
-		_ => return Err(report!(ErrorMarker::transaction_failure().with_phase("publication"))),
+		_ => false,
+	};
+	if !intent_matches {
+		return Err(report!(ErrorMarker::transaction_failure().with_phase("publication")));
 	}
 	Ok(())
+}
+
+/// Removes the unlisted `mods` entry that an unlisted replacement takes over.
+///
+/// The entry may be a stray file. A link is removed without touching its target.
+async fn remove_unlisted_entry(entry: &Path) -> Result<(), ErrorMarker> {
+	let file_type = symlink_metadata(entry)
+		.await
+		.context(ErrorMarker::transaction_failure().with_phase("publication"))?
+		.file_type();
+	let removal = if file_type.is_file() {
+		remove_file(entry).await
+	} else {
+		// `remove_dir_all` removes a directory link itself rather than following it.
+		remove_dir_all(entry).await
+	};
+	removal.context(ErrorMarker::transaction_failure().with_phase("publication"))
 }
 
 /// Returns the child directory, reusing an entry whose name differs only by case only when the spelling matches.
@@ -705,6 +729,99 @@ mod tests {
 			fs::read(root.as_path().join("profile/modlist.txt")).expect("modlist must read"),
 			b"# header\r\n-New\r\n+Base\r\n"
 		);
+	}
+
+	fn unlisted_replacement(archive: &Path, name: &str, priority: u32, destination: &str) -> ApprovedInstallation {
+		let mut approved = approved_installation(archive, name, true, false, priority, destination);
+		approved.plan.projected_state.mode = InstallMode::UnlistedReplacement;
+		approved
+	}
+
+	#[tokio::test]
+	async fn unlisted_replacement_replaces_the_directory_and_lists_the_mod_like_a_new_install() {
+		let parent = temp_dir();
+		let root = initialized_environment(&parent).await;
+		let mods = root.as_path().join("mods");
+		fs::create_dir(mods.join("Base")).expect("listed mod must exist");
+		fs::create_dir(mods.join("Leftover")).expect("unlisted folder must exist");
+		fs::write(mods.join("Leftover/Old.ESP"), b"old").expect("unlisted file must write");
+		fs::write(root.as_path().join("profile/modlist.txt"), b"# header\r\n+Base\r\n")
+			.expect("modlist must write");
+		fs::write(root.as_path().join("profile/plugins.txt"), b"# active\r\nOld.ESP\r\n")
+			.expect("plugins must write");
+		let archive = parent.path().join("leftover.zip");
+		fs::write(&archive, b"archive").expect("archive fixture must exist");
+
+		install(
+			&root,
+			unlisted_replacement(&archive, "Leftover", 1, "New.ESP"),
+			"New.ESP",
+			b"new",
+		)
+		.await;
+
+		assert!(!mods.join("Leftover/Old.ESP").exists());
+		assert_eq!(
+			fs::read(mods.join("Leftover/New.ESP")).expect("new file must read"),
+			b"new"
+		);
+		assert_eq!(
+			fs::read(root.as_path().join("profile/modlist.txt")).expect("modlist must read"),
+			b"# header\r\n-Leftover\r\n+Base\r\n"
+		);
+		assert_eq!(
+			fs::read(root.as_path().join("profile/plugins.txt")).expect("plugins must read"),
+			b"# active\r\nOld.ESP\r\n"
+		);
+	}
+
+	#[tokio::test]
+	async fn unlisted_replacement_replaces_a_stray_file() {
+		let parent = temp_dir();
+		let root = initialized_environment(&parent).await;
+		let stray = root.as_path().join("mods/Leftover");
+		fs::write(&stray, b"stray").expect("stray file must write");
+		let archive = parent.path().join("leftover.zip");
+		fs::write(&archive, b"archive").expect("archive fixture must exist");
+
+		install(
+			&root,
+			unlisted_replacement(&archive, "Leftover", 0, "file.txt"),
+			"file.txt",
+			b"contents",
+		)
+		.await;
+
+		assert_eq!(
+			fs::read(stray.join("file.txt")).expect("mod file must read"),
+			b"contents"
+		);
+		assert_eq!(
+			fs::read(root.as_path().join("profile/modlist.txt")).expect("modlist must read"),
+			b"-Leftover\r\n"
+		);
+	}
+
+	#[tokio::test]
+	async fn unlisted_replacement_without_an_unlisted_entry_writes_nothing() {
+		let parent = temp_dir();
+		let root = initialized_environment(&parent).await;
+		let archive = parent.path().join("missing.zip");
+		fs::write(&archive, b"archive").expect("archive fixture must exist");
+
+		let error = InstallationTransaction::begin(
+			root.as_path(),
+			&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+				.game_binding,
+			unlisted_replacement(&archive, "Missing", 0, "file.txt"),
+			&CancellationToken::new(),
+		)
+		.await
+		.err()
+		.expect("an unlisted replacement needs an unlisted entry");
+
+		assert_eq!(error.current_context().code(), ErrorCode::TransactionFailure);
+		assert!(!root.as_path().join("mods/Missing").exists());
 	}
 
 	#[tokio::test]
