@@ -1,5 +1,6 @@
 use crate::conflicts::ListEffectiveConflictsOutput;
 use domain::ArchiveIdentity;
+use domain::ArchivePath;
 use domain::DataRelativePath;
 use domain::EffectiveResult;
 use domain::FileDependencyState;
@@ -352,6 +353,9 @@ pub struct InstallPlan {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovedInstallation {
+	/// Extraction reads this archive after the transaction begins, so a replacement must not
+	/// remove it.
+	pub archive: ArchivePath,
 	pub source_basename: String,
 	pub fomod_schema_version: Option<String>,
 	pub plan: InstallPlan,

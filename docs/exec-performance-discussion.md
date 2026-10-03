@@ -468,7 +468,8 @@ The user decided that `modlist.txt` alone says which Data Mods exist. A director
 - Two `modlist.txt` entries that differ only in case are still refused. Case variants among unlisted folders are not checked, because those folders contribute nothing.
 - Without `--replace`, `mods install` refuses a target name that matches an unlisted entry, compared case-insensitively, with `mod_already_exists` naming that entry.
 - The user later approved `--replace` for an unlisted entry. It removes the entry (a folder or a stray file), publishes the new mod under the entry's spelling, and lists it like a new install: disabled, at the top of `modlist.txt` after leading comments. `plugins.txt` is not changed. The removal happens at the same point as a listed replacement's removal, after all checks that come before any write. The plan shows `projected_state.mode = "unlisted_replacement"`.
-- If a listed mod and an unlisted case variant of it both match, the install is refused with `mod_already_exists`, also with `--replace`, because there is no single target.
+- If several entries that differ only in case match (a listed mod and an unlisted variant, or two unlisted variants), the install is refused with `mod_already_exists`, also with `--replace`, because there is no single target.
+- A listed or unlisted replacement is refused with `unsafe_archive`, naming the mod, when the archive lies inside the entry that the replacement removes. The check runs before any write.
 - A failed install can leave a new, unlisted mod folder. It no longer makes the environment invalid. Running the same install again with `--replace` takes it over.
 
 ### Decisions on the tokio::fs follow-ups

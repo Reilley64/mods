@@ -21,15 +21,17 @@ Successful mutations are quiet except warnings. [Installation outcomes](installa
 
 ## Common failures and safe next steps
 
-Errors normally begin `error [code]: message`. Optional details include phase, field, choice group/option/sequence, or expected/actual build IDs. Preserve those details; a raw internal cause chain is not part of public CLI output.
+Errors normally begin `error [code]: message`. Optional details include phase, field, `mod_name`, choice group/option/sequence, or expected/actual build IDs. Preserve those details; a raw internal cause chain is not part of public CLI output.
 
 | Error or symptom | Next step |
 | --- | --- |
 | `environment_already_initialized`, `environment_root_not_empty`, `environment_root_unsafe` | Confirm Environment Root and inspect existing contents; do not wipe it |
 | `environment_invalid`, settings/override errors | Inspect manifest and `config list`; only `MODS_GAME_DIR` is a supported `MODS_*` setting variable; malformed/unknown overrides can fail validation |
+| `environment_invalid` with `mod_name` | That `modlist.txt` entry has no folder in `mods` of exactly the same spelling; a folder that differs only in case does not count. Fix the folder name or the entry only with the user's approval |
 | Game Installation not found/invalid | Check Steam installation and effective/stored Game Binding; ask before updating it |
-| `invalid_mod_name`, `mod_already_exists`, `mod_not_found` | Check name and replacement intent; do not silently rename or replace |
+| `invalid_mod_name`, `mod_already_exists`, `mod_not_found` | Check name and replacement intent; do not silently rename or replace. `mod_already_exists` can name an [unlisted entry](installation.md#unlisted-entries-in-mods) in `mods` |
 | Unsafe/unsupported archive or installer, unmet dependency | Inspect package provenance/layout and error details; do not bypass validation |
+| `unsafe_archive` with `mod_name` | The archive lies inside the folder that `--replace` would remove. Move the archive outside that folder, then retry |
 | `invalid_selection` | Use current returned FOMOD IDs, ordered complete choices, and cardinality |
 | Invalid Data path or invalid conflict resolution | Use a relative path beneath Data and read scoped problems |
 | Invalid Output Target | Select Overwrite by omission or an existing enabled Data Mod |

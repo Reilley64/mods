@@ -23,12 +23,17 @@ use rootcause::report;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::FileType;
+#[cfg(windows)]
+use std::os::windows::fs::FileTypeExt;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs::File;
+use tokio::fs::canonicalize;
 use tokio::fs::create_dir;
 use tokio::fs::read;
 use tokio::fs::read_dir;
+use tokio::fs::remove_dir;
 use tokio::fs::remove_dir_all;
 use tokio::fs::remove_file;
 use tokio::fs::symlink_metadata;
@@ -76,6 +81,15 @@ impl InstallationTransaction {
 		}
 
 		let mod_directory = root_path.join("mods").join(approved.plan.mod_name.as_str());
+		if mode != InstallMode::NewInstall {
+			ensure_archive_outside_entry(
+				&mod_directory,
+				approved.archive.as_path(),
+				&approved.plan.mod_name,
+			)
+			.await?;
+		}
+
 		match mode {
 			InstallMode::NewInstall => {}
 			InstallMode::Replacement => remove_dir_all(&mod_directory)
@@ -216,10 +230,14 @@ async fn create_mod_file(
 		.context(ErrorMarker::transaction_failure().with_phase("publication"))
 }
 
-fn validate_intent(installed: &[InstalledMod], unlisted: &[ModName], plan: &InstallPlan) -> Result<(), ErrorMarker> {
+fn validate_intent(
+	installed: &[InstalledMod],
+	unlisted_names: &[ModName],
+	plan: &InstallPlan,
+) -> Result<(), ErrorMarker> {
 	let state = &plan.projected_state;
 	let existing = installed.iter().find(|item| item.name == plan.mod_name);
-	let unlisted = unlisted.iter().find(|name| **name == plan.mod_name);
+	let unlisted: Vec<_> = unlisted_names.iter().filter(|name| **name == plan.mod_name).collect();
 	let new_priority =
 		u32::try_from(installed.len()).context(ErrorMarker::transaction_failure().with_phase("publication"))?;
 	let listed_as_new = state.mod_name == plan.mod_name
@@ -227,12 +245,12 @@ fn validate_intent(installed: &[InstalledMod], unlisted: &[ModName], plan: &Inst
 		&& state.priority.get() == new_priority
 		&& state.list_position == 0;
 
-	let intent_matches = match (state.mode, existing, unlisted) {
-		(InstallMode::NewInstall, None, None) => !plan.replacement && listed_as_new,
-		(InstallMode::UnlistedReplacement, None, Some(unlisted)) => {
+	let intent_matches = match (state.mode, existing, unlisted.as_slice()) {
+		(InstallMode::NewInstall, None, []) => !plan.replacement && listed_as_new,
+		(InstallMode::UnlistedReplacement, None, [unlisted]) => {
 			plan.replacement && plan.mod_name.as_str() == unlisted.as_str() && listed_as_new
 		}
-		(InstallMode::Replacement, Some(existing), None) => {
+		(InstallMode::Replacement, Some(existing), []) => {
 			// MO2 order lists the highest priority first, so the entry position
 			// counts down from the last priority.
 			let list_position = u64::try_from(installed.len())
@@ -257,19 +275,71 @@ fn validate_intent(installed: &[InstalledMod], unlisted: &[ModName], plan: &Inst
 
 /// Removes the unlisted `mods` entry that an unlisted replacement takes over.
 ///
-/// The entry may be a stray file. A link is removed without touching its target.
+/// The entry may be a directory, a stray file, or a link. A link is removed itself; its target
+/// stays untouched.
 async fn remove_unlisted_entry(entry: &Path) -> Result<(), ErrorMarker> {
 	let file_type = symlink_metadata(entry)
 		.await
 		.context(ErrorMarker::transaction_failure().with_phase("publication"))?
 		.file_type();
-	let removal = if file_type.is_file() {
-		remove_file(entry).await
-	} else {
-		// `remove_dir_all` removes a directory link itself rather than following it.
+
+	let removal = if file_type.is_dir() {
 		remove_dir_all(entry).await
+	} else if is_directory_link(file_type) {
+		remove_dir(entry).await
+	} else {
+		remove_file(entry).await
 	};
 	removal.context(ErrorMarker::transaction_failure().with_phase("publication"))
+}
+
+/// Reports a Windows directory symbolic link or junction, which only `remove_dir` removes.
+#[cfg(windows)]
+fn is_directory_link(file_type: FileType) -> bool {
+	file_type.is_symlink_dir()
+}
+
+/// Reports a Windows-only directory link; on Unix `remove_file` removes every link.
+#[cfg(not(windows))]
+fn is_directory_link(_file_type: FileType) -> bool {
+	false
+}
+
+/// Refuses a replacement whose archive lies inside the `mods` entry that it removes.
+///
+/// Extraction reads the archive after the removal. The removal does not follow a link at the
+/// entry, so the entry's own location is compared with both the archive's location and the file
+/// that the archive path resolves to.
+///
+/// # Errors
+///
+/// Returns `unsafe_archive` with the mod name when the archive lies inside the entry, and
+/// `transaction_failure` when a path cannot be resolved.
+async fn ensure_archive_outside_entry(entry: &Path, archive: &Path, mod_name: &ModName) -> Result<(), ErrorMarker> {
+	let unresolved = || report!(ErrorMarker::transaction_failure().with_phase("publication"));
+	let entry_parent = entry.parent().ok_or_else(unresolved)?;
+	let entry_name = entry.file_name().ok_or_else(unresolved)?;
+	let archive_parent = archive.parent().ok_or_else(unresolved)?;
+	let archive_name = archive.file_name().ok_or_else(unresolved)?;
+
+	let entry_location = canonicalize(entry_parent)
+		.await
+		.context(ErrorMarker::transaction_failure().with_phase("publication"))?
+		.join(entry_name);
+	let archive_location = canonicalize(archive_parent)
+		.await
+		.context(ErrorMarker::transaction_failure().with_phase("publication"))?
+		.join(archive_name);
+	let archive_target = canonicalize(archive)
+		.await
+		.context(ErrorMarker::transaction_failure().with_phase("publication"))?;
+
+	if archive_location.starts_with(&entry_location) || archive_target.starts_with(&entry_location) {
+		return Err(report!(ErrorMarker::unsafe_archive()
+			.with_phase("publication")
+			.with_mod_name(mod_name.clone())));
+	}
+	Ok(())
 }
 
 /// Returns the child directory, reusing an entry whose name differs only by case only when the spelling matches.
@@ -454,6 +524,7 @@ mod tests {
 	use application::ports::InitializationProfileSources;
 	use application::ports::ProfileSource;
 	use domain::ArchiveIdentity;
+	use domain::ArchivePath;
 	use domain::DataRelativePath;
 	use domain::EnvironmentRoot;
 	use domain::GameBinding;
@@ -468,6 +539,8 @@ mod tests {
 	use std::env::current_dir;
 	use std::ffi::OsStr;
 	use std::fs;
+	#[cfg(unix)]
+	use std::os::unix::fs::symlink;
 	use std::path::Path;
 	use tempfile::TempDir;
 	use tokio::io::AsyncWriteExt;
@@ -508,6 +581,7 @@ mod tests {
 	) -> ApprovedInstallation {
 		let mod_name = ModName::new(name.to_owned()).expect("fixture mod name must be valid");
 		ApprovedInstallation {
+			archive: ArchivePath::new(archive.to_path_buf()).expect("fixture archive path must be valid"),
 			source_basename: archive
 				.file_name()
 				.and_then(OsStr::to_str)
@@ -822,6 +896,85 @@ mod tests {
 
 		assert_eq!(error.current_context().code(), ErrorCode::TransactionFailure);
 		assert!(!root.as_path().join("mods/Missing").exists());
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn unlisted_replacement_removes_a_link_without_touching_its_target() {
+		for target_is_directory in [true, false] {
+			let parent = temp_dir();
+			let root = initialized_environment(&parent).await;
+			let target = parent.path().join("target");
+			if target_is_directory {
+				fs::create_dir(&target).expect("link target directory must exist");
+				fs::write(target.join("kept.txt"), b"kept").expect("link target file must write");
+			} else {
+				fs::write(&target, b"kept").expect("link target file must write");
+			}
+			let link = root.as_path().join("mods/Leftover");
+			symlink(&target, &link).expect("unlisted link must be created");
+			let archive = parent.path().join("leftover.zip");
+			fs::write(&archive, b"archive").expect("archive fixture must exist");
+
+			install(
+				&root,
+				unlisted_replacement(&archive, "Leftover", 0, "file.txt"),
+				"file.txt",
+				b"contents",
+			)
+			.await;
+
+			let link_type = fs::symlink_metadata(&link).expect("new mod must exist").file_type();
+			assert!(link_type.is_dir());
+			assert_eq!(
+				fs::read(link.join("file.txt")).expect("mod file must read"),
+				b"contents"
+			);
+			let kept = if target_is_directory {
+				target.join("kept.txt")
+			} else {
+				target
+			};
+			assert_eq!(fs::read(kept).expect("link target must remain"), b"kept");
+		}
+	}
+
+	#[tokio::test]
+	async fn replacement_refuses_an_archive_inside_the_entry_it_removes() {
+		for unlisted in [false, true] {
+			let parent = temp_dir();
+			let root = initialized_environment(&parent).await;
+			let entry = root.as_path().join("mods/Replace");
+			fs::create_dir(&entry).expect("entry must exist");
+			let modlist = if unlisted { &b""[..] } else { &b"-Replace\r\n"[..] };
+			fs::write(root.as_path().join("profile/modlist.txt"), modlist).expect("modlist must write");
+			let archive = entry.join("replace.zip");
+			fs::write(&archive, b"archive").expect("archive fixture must exist");
+			let approved = if unlisted {
+				unlisted_replacement(&archive, "Replace", 0, "file.txt")
+			} else {
+				approved_installation(&archive, "Replace", true, false, 0, "file.txt")
+			};
+
+			let error = InstallationTransaction::begin(
+				root.as_path(),
+				&initialization_plan(&root.as_path().parent().expect("fixture parent").join("game"))
+					.game_binding,
+				approved,
+				&CancellationToken::new(),
+			)
+			.await
+			.err()
+			.expect("the archive must not be removed");
+
+			assert_eq!(error.current_context().code(), ErrorCode::UnsafeArchive);
+			assert_eq!(error.current_context().mod_name().map(ModName::as_str), Some("Replace"));
+			assert_eq!(fs::read(&archive).expect("archive must remain"), b"archive");
+			assert_eq!(
+				fs::read(root.as_path().join("profile/modlist.txt")).expect("modlist must read"),
+				modlist
+			);
+		}
 	}
 
 	#[tokio::test]
