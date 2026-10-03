@@ -9,6 +9,9 @@ use crate::diagnostics::DiagnosticSession;
 use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
 use crate::error;
+use crate::json_conflicts;
+use crate::json_install;
+use crate::json_output;
 use crate::operation;
 use crate::output;
 use crate::path_resolution::resolve_path;
@@ -27,6 +30,7 @@ use application::execution::execute_program;
 use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
 use application::installation::install_archive;
+use application::ports::ProgressEvent;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
 use application::settings::SetGameDirectoryDependencies;
@@ -48,11 +52,16 @@ use domain::WorkingDirectory;
 use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
+use serde_json::Value;
+use serde_json::json;
 use std::env::current_dir;
 use std::env::var_os;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -74,20 +83,85 @@ pub(crate) struct RunOutcome {
 	pub(crate) status: u32,
 	pub(crate) stdout: String,
 	pub(crate) stderr: String,
+	pub(crate) presentation: Option<JsonPresentation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum JsonPresentation {
+	Success(Value),
+	Problem(Value),
+}
+
+impl RunOutcome {
+	fn publish_json(mut self) -> Self {
+		if let Some(presentation) = self.presentation.take() {
+			match presentation {
+				JsonPresentation::Success(value) => {
+					self.stdout = json_output::document(&value);
+					self.stderr.clear();
+				}
+				JsonPresentation::Problem(value) => {
+					self.stdout.clear();
+					self.stderr = json_output::document(&value);
+				}
+			}
+		}
+
+		self
+	}
+}
+
+fn success(mut outcome: RunOutcome, json_mode: bool, mut value: Value, warnings: Vec<Value>) -> RunOutcome {
+	if json_mode {
+		value["warnings"] = Value::Array(warnings);
+		outcome.presentation = Some(JsonPresentation::Success(value));
+	}
+	outcome
+}
+
+#[derive(Debug)]
+enum RootSelectionError {
+	LocalAppDataUnavailable,
+	InvalidRoot(domain::InvalidEnvironmentRoot),
+}
+
+impl RootSelectionError {
+	fn message(&self) -> &'static str {
+		match self {
+			Self::LocalAppDataUnavailable => "LOCALAPPDATA is unavailable",
+			Self::InvalidRoot(_) => "environment root must be an absolute path",
+		}
+	}
+}
+
+impl std::fmt::Display for RootSelectionError {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter.write_str(self.message())
+	}
+}
+
+impl std::error::Error for RootSelectionError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			Self::LocalAppDataUnavailable => None,
+			Self::InvalidRoot(cause) => Some(cause),
+		}
+	}
 }
 
 fn select_environment_root(
 	cli: &Cli,
 	startup_directory: &Path,
 	local_app_data: Option<&Path>,
-) -> Result<EnvironmentRoot, String> {
+) -> Result<EnvironmentRoot, RootSelectionError> {
 	let path = match &cli.environment {
 		Some(path) => resolve_path(path, startup_directory),
 		None => local_app_data
-			.ok_or_else(|| "LOCALAPPDATA is unavailable".to_owned())?
+			.ok_or(RootSelectionError::LocalAppDataUnavailable)?
 			.join("mods/environments/default"),
 	};
-	EnvironmentRoot::new(path).map_err(|report| report.current_context().to_string())
+
+	EnvironmentRoot::new(path).map_err(|report| RootSelectionError::InvalidRoot(report.current_context().clone()))
 }
 
 pub(crate) async fn execute(
@@ -98,12 +172,24 @@ pub(crate) async fn execute(
 ) -> RunOutcome {
 	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
 		Ok(root) => root,
-		Err(message) => {
+		Err(selection_error) => {
+			let message = selection_error.message();
+			let presentation = cli.json.then(|| {
+				JsonPresentation::Problem(json_output::problem(
+					"environment_root_selection_failed",
+					"Environment Root selection failed",
+					message,
+					2,
+					json!({}),
+				))
+			});
 			return RunOutcome {
+				presentation,
 				status: 2,
 				stdout: String::new(),
 				stderr: format!("error: {message}\n"),
-			};
+			}
+			.publish_json();
 		}
 	};
 
@@ -146,24 +232,38 @@ pub(crate) async fn execute(
 			if let Some(id) = session_id {
 				stderr.push_str(&format!("diagnostic session: {id}\n"));
 			}
+
 			if let Some(session) = session.take() {
 				session.finish("failure");
 			}
+
+			let mut presentation =
+				cli.json.then(|| JsonPresentation::Problem(json_output::marker_problem(&marker, 1)));
+			if let Some(JsonPresentation::Problem(problem)) = &mut presentation {
+				if !diagnostic_warning.is_empty() {
+					problem["warnings"] = json!([json_output::diagnostic_warning()]);
+				}
+				if let Some(id) = session_id {
+					problem["instance"] = json!(id.to_string());
+				}
+			}
 			return RunOutcome {
+				presentation,
 				status: 1,
 				stdout: String::new(),
 				stderr,
-			};
+			}
+			.publish_json();
 		}
 	};
 
-	let work = dispatch(cli.command, dependencies, root, startup_directory);
+	let json_mode = cli.json;
+	let work = dispatch(cli.command, dependencies, root, startup_directory, json_mode);
 	let mut result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
 	};
 
-	result.stderr.push_str(&diagnostic_warning);
 	let terminal = if result.status == 0 {
 		"success"
 	} else if result.status == 0xC000_013A {
@@ -176,15 +276,43 @@ pub(crate) async fn execute(
 		session.finish(terminal);
 	}
 
-	if result.status != 0
-		&& let Some(id) = session_id
-	{
-		result.stderr.push_str(&format!("diagnostic session: {id}\n"));
+	if let Some(presentation) = &mut result.presentation {
+		match presentation {
+			JsonPresentation::Success(value) => {
+				if !diagnostic_warning.is_empty()
+					&& let Some(warnings) = value["warnings"].as_array_mut()
+				{
+					warnings.push(json_output::diagnostic_warning());
+				}
+			}
+			JsonPresentation::Problem(problem) => {
+				if !diagnostic_warning.is_empty() {
+					problem["warnings"] = json!([json_output::diagnostic_warning()]);
+				}
+				if let Some(id) = session_id {
+					problem["instance"] = json!(id.to_string());
+				}
+			}
+		}
+	} else {
+		result.stderr.push_str(&diagnostic_warning);
+		if result.status != 0
+			&& let Some(id) = session_id
+		{
+			result.stderr.push_str(&format!("diagnostic session: {id}\n"));
+		}
 	}
-	result
+
+	result.publish_json()
 }
 
-async fn dispatch(command: Command, dependencies: Dependencies, root: EnvironmentRoot, startup: PathBuf) -> RunOutcome {
+async fn dispatch(
+	command: Command,
+	dependencies: Dependencies,
+	root: EnvironmentRoot,
+	startup: PathBuf,
+	json_mode: bool,
+) -> RunOutcome {
 	match command {
 		Command::Init { game_install } => {
 			let Ok(game_install) = game_install
@@ -192,7 +320,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				.map(GameInstallationPath::new)
 				.transpose()
 			else {
-				return marker_outcome(ErrorMarker::game_install_invalid());
+				return marker_outcome(ErrorMarker::game_install_invalid(), json_mode);
 			};
 			match initialize_environment(
 				dependencies.initialize_environment,
@@ -204,37 +332,60 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			{
 				Ok(output) => {
 					let (stdout, stderr) = output::initialization(&output);
-					RunOutcome {
-						status: 0,
-						stdout,
-						stderr,
-					}
+					let warnings = output.warnings.iter().map(|warning| match warning {
+                        application::environment::InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => json_output::warning(
+                            "bethesda_registry_fallback_used", "Bethesda registry fallback was used", json!({}),
+                        ),
+                    }).collect();
+					success(
+						RunOutcome {
+							presentation: None,
+							status: 0,
+							stdout,
+							stderr,
+						},
+						json_mode,
+						json!({}),
+						warnings,
+					)
 				}
-				Err(report) => report_outcome(&report),
+				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
 		Command::Config { command } => match command {
 			ConfigCommand::List => match list_settings(dependencies.list_settings).await {
-				Ok(output) => RunOutcome {
-					status: 0,
-					stdout: output::settings(&output.settings),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(output) => success(
+					RunOutcome {
+						presentation: None,
+						status: 0,
+						stdout: output::settings(&output.settings),
+						stderr: String::new(),
+					},
+					json_mode,
+					json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
+					vec![],
+				),
+				Err(report) => report_outcome(&report, json_mode),
 			},
 			ConfigCommand::Get { key } => match get_setting(dependencies.get_setting, key.into()).await {
-				Ok(output) => RunOutcome {
-					status: 0,
-					stdout: output::setting(&output.setting),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(output) => success(
+					RunOutcome {
+						presentation: None,
+						status: 0,
+						stdout: output::setting(&output.setting),
+						stderr: String::new(),
+					},
+					json_mode,
+					json!({"setting": json_output::setting(&output.setting)}),
+					vec![],
+				),
+				Err(report) => report_outcome(&report, json_mode),
 			},
 			ConfigCommand::Set {
 				command: SetCommand::GameDir { value },
 			} => {
 				let Ok(path) = GameInstallationPath::new(resolve_path(&value, &startup)) else {
-					return marker_outcome(ErrorMarker::setting_value_invalid());
+					return marker_outcome(ErrorMarker::setting_value_invalid(), json_mode);
 				};
 				match set_game_directory(
 					dependencies.set_game_directory,
@@ -245,13 +396,20 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				{
 					Ok(output) => {
 						let (stdout, stderr) = output::set_game_directory(&output);
-						RunOutcome {
-							status: 0,
-							stdout,
-							stderr,
-						}
+						let warnings = json_output::game_directory_warnings(&output.warnings);
+						success(
+							RunOutcome {
+								presentation: None,
+								status: 0,
+								stdout,
+								stderr,
+							},
+							json_mode,
+							json!({}),
+							warnings,
+						)
 					}
-					Err(report) => report_outcome(&report),
+					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
 		},
@@ -260,11 +418,11 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 
 			let archive_path = resolve_path(&arguments.archive, &startup);
 			let Ok(archive) = ArchivePath::new(archive_path) else {
-				return marker_outcome(ErrorMarker::unsafe_archive());
+				return marker_outcome(ErrorMarker::unsafe_archive(), json_mode);
 			};
 			let mod_name = if let Some(value) = arguments.name {
 				let Ok(value) = ModName::new(value) else {
-					return marker_outcome(ErrorMarker::invalid_mod_name());
+					return marker_outcome(ErrorMarker::invalid_mod_name(), json_mode);
 				};
 				Some(value)
 			} else {
@@ -272,7 +430,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			};
 			let choices = match parse_choices(arguments.choice) {
 				Ok(choices) => choices,
-				Err(report) => return report_outcome(&report),
+				Err(report) => return report_outcome(&report, json_mode),
 			};
 			match install_archive(
 				dependencies.install_archive,
@@ -287,26 +445,47 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			{
 				Ok(InstallArchiveOutput::AdditionalSelectionsRequired(output_value)) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
-					RunOutcome {
-						status: 0,
-						stdout,
-						stderr,
-					}
+					success(
+						RunOutcome {
+							presentation: None,
+							status: 0,
+							stdout: stdout.clone(),
+							stderr: stderr.clone(),
+						},
+						json_mode,
+						json_install::additional(&output_value),
+						json_install::warnings(&output_value.warnings),
+					)
 				}
 				Ok(InstallArchiveOutput::Preview(output_value)) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
-					RunOutcome {
-						status: 0,
-						stdout,
-						stderr,
-					}
+					success(
+						RunOutcome {
+							presentation: None,
+							status: 0,
+							stdout: stdout.clone(),
+							stderr: stderr.clone(),
+						},
+						json_mode,
+						json_install::preview(&output_value),
+						json_install::warnings(&output_value.plan.warnings),
+					)
 				}
-				Ok(InstallArchiveOutput::Installed(output_value)) => RunOutcome {
-					status: 0,
-					stdout: String::new(),
-					stderr: output::install_warnings(&output_value.warnings),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(InstallArchiveOutput::Installed(output_value)) => {
+					let stderr = output::install_warnings(&output_value.warnings);
+					success(
+						RunOutcome {
+							presentation: None,
+							status: 0,
+							stdout: String::new(),
+							stderr,
+						},
+						json_mode,
+						json_install::installed(),
+						json_install::warnings(&output_value.warnings),
+					)
+				}
+				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
 		Command::Conflicts { command } => match command {
@@ -317,12 +496,21 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 			)
 			.await
 			{
-				Ok(output) => RunOutcome {
-					status: 0,
-					stdout: conflict_output::list(&output),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(output) => {
+					let stdout = conflict_output::list(&output);
+					success(
+						RunOutcome {
+							presentation: None,
+							status: 0,
+							stdout: stdout.clone(),
+							stderr: String::new(),
+						},
+						json_mode,
+						json_conflicts::list(&output),
+						vec![],
+					)
+				}
+				Err(report) => report_outcome(&report, json_mode),
 			},
 			ConflictsCommand::Inspect {
 				mod_name,
@@ -333,6 +521,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 					Err(report) => {
 						return report_outcome(
 							&report.context(ErrorMarker::invalid_mod_name()),
+							json_mode,
 						);
 					}
 				};
@@ -345,12 +534,21 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				)
 				.await
 				{
-					Ok(output) => RunOutcome {
-						status: 0,
-						stdout: conflict_output::inspection(&output),
-						stderr: String::new(),
-					},
-					Err(report) => report_outcome(&report),
+					Ok(output) => {
+						let stdout = conflict_output::inspection(&output);
+						success(
+							RunOutcome {
+								presentation: None,
+								status: 0,
+								stdout: stdout.clone(),
+								stderr: String::new(),
+							},
+							json_mode,
+							json_conflicts::inspection(&output),
+							vec![],
+						)
+					}
+					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
 			ConflictsCommand::Explain { path, compare_content } => {
@@ -359,6 +557,7 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 					Err(report) => {
 						return report_outcome(
 							&report.context(ErrorMarker::invalid_data_path()),
+							json_mode,
 						);
 					}
 				};
@@ -371,12 +570,21 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				)
 				.await
 				{
-					Ok(output) => RunOutcome {
-						status: 0,
-						stdout: conflict_output::explanation(&output),
-						stderr: String::new(),
-					},
-					Err(report) => report_outcome(&report),
+					Ok(output) => {
+						let stdout = conflict_output::explanation(&output);
+						success(
+							RunOutcome {
+								presentation: None,
+								status: 0,
+								stdout: stdout.clone(),
+								stderr: String::new(),
+							},
+							json_mode,
+							json_conflicts::explanation(&output),
+							vec![],
+						)
+					}
+					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
 		},
@@ -385,6 +593,8 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				let Ok(name) = ModName::new(name) else {
 					return execution_report_outcome(
 						&report!(ErrorMarker::invalid_output_target()),
+						json_mode,
+						false,
 					);
 				};
 				OutputTarget::DataMod(name)
@@ -400,22 +610,55 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 				})
 				.transpose()
 			else {
-				return execution_report_outcome(&report!(ErrorMarker::invalid_working_directory()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::invalid_working_directory()),
+					json_mode,
+					false,
+				);
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
-				return execution_report_outcome(&report!(ErrorMarker::program_not_found()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::program_not_found()),
+					json_mode,
+					false,
+				);
 			};
 			let Ok(program) = Program::new(program) else {
-				return execution_report_outcome(&report!(ErrorMarker::program_not_found()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::program_not_found()),
+					json_mode,
+					false,
+				);
 			};
 			let Ok(arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() else {
-				return execution_report_outcome(&report!(ErrorMarker::program_launch_failed()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::program_launch_failed()),
+					json_mode,
+					false,
+				);
 			};
+
+			let launched = Arc::new(AtomicBool::new(false));
+			let launch_state = launched.clone();
+			let mut execution = dependencies.execute_program;
+			let previous_reporter = execution.report_progress.take();
+			execution.report_progress = Some(Arc::new(move |event| {
+				let launch_state = launch_state.clone();
+				let previous_reporter = previous_reporter.clone();
+				Box::pin(async move {
+					if event == ProgressEvent::ExecutionPrepared {
+						launch_state.store(true, Ordering::Release);
+					}
+					if let Some(reporter) = previous_reporter {
+						reporter.call((event,)).await;
+					}
+				})
+			}));
 
 			let signals = operation::ExecutionSignals::new(dependencies.execution_force_cancellation);
 			match execute_program(
-				dependencies.execute_program,
+				execution,
 				output_target,
 				working_directory,
 				program,
@@ -438,24 +681,24 @@ async fn dispatch(command: Command, dependencies: Dependencies, root: Environmen
 						stderr.push_str(&message);
 					}
 					RunOutcome {
+						presentation: None,
 						status: output.status.value(),
 						stdout: String::new(),
 						stderr,
 					}
 				}
-				Err(report) => execution_report_outcome(&report),
+				Err(report) => {
+					execution_report_outcome(&report, json_mode, launched.load(Ordering::Acquire))
+				}
 			}
 		}
 	}
 }
 
-fn execution_report_outcome<E>(report: &Report<E>) -> RunOutcome {
-	RunOutcome {
-		status: error::application_marker(report)
-			.map_or(125, |marker| error::execution_exit_status(marker.code())),
-		stdout: String::new(),
-		stderr: error::application_error(report),
-	}
+fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bool) -> RunOutcome {
+	let marker = error::application_marker(report);
+	let status = marker.map_or(125, |marker| error::execution_exit_status(marker.code()));
+	problem_outcome(status, error::application_error(report), json_mode && !launched, marker)
 }
 
 fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarker> {
@@ -478,21 +721,37 @@ fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarke
 		.collect()
 }
 
-fn marker_outcome(marker: ErrorMarker) -> RunOutcome {
+fn marker_outcome(marker: ErrorMarker, json_mode: bool) -> RunOutcome {
 	let status = error::exit_status(marker.code());
-	RunOutcome {
-		status,
-		stdout: String::new(),
-		stderr: error::marker(&marker),
-	}
+	problem_outcome(status, error::marker(&marker), json_mode, Some(&marker))
 }
 
-fn report_outcome<E>(report: &Report<E>) -> RunOutcome {
-	let status = error::application_marker(report).map_or(1, |marker| error::exit_status(marker.code()));
+fn report_outcome<E>(report: &Report<E>, json_mode: bool) -> RunOutcome {
+	let marker = error::application_marker(report);
+	let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
+	problem_outcome(status, error::application_error(report), json_mode, marker)
+}
+
+fn problem_outcome(status: u32, stderr: String, json_mode: bool, marker: Option<&ErrorMarker>) -> RunOutcome {
+	let presentation = json_mode.then(|| {
+		JsonPresentation::Problem(marker.map_or_else(
+			|| {
+				json_output::problem(
+					"operation_failed",
+					"Operation failed",
+					"operation failed",
+					status,
+					json!({}),
+				)
+			},
+			|marker| json_output::marker_problem(marker, status),
+		))
+	});
 	RunOutcome {
+		presentation,
 		status,
 		stdout: String::new(),
-		stderr: error::application_error(report),
+		stderr,
 	}
 }
 
@@ -546,6 +805,7 @@ mod tests {
 	use application::ports::InitializationProfileSources;
 	use application::ports::InitializationTargetAssessment;
 	use application::ports::PortFuture;
+	use application::ports::ProgressEvent;
 	use application::ports::ResolvedGameInstallation;
 	use application::ports::StoredAndEffectiveBinding;
 	use application::settings::GetSettingDependencies;
@@ -1256,6 +1516,146 @@ mod tests {
 		assert_ne!(result.status, 0);
 		assert!(result.stderr.contains(&format!("diagnostic session: {id}\n")));
 		assert!(records.contains("session.failed"));
+		Ok(())
+	}
+	#[tokio::test]
+	async fn json_settings_root_failures_and_mutations_have_distinct_documents() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let root_failure = run(
+			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			None,
+			|_| Err(ErrorMarker::io_failure()),
+		)
+		.await?;
+		let error: serde_json::Value = serde_json::from_str(&root_failure.stderr)?;
+		assert_eq!(root_failure.status, 2);
+		assert_eq!(error["code"], "environment_root_selection_failed");
+		assert_eq!(error["exit_code"], 2);
+		assert!(root_failure.stdout.is_empty());
+
+		let settings = run(
+			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| successful_dependencies(temp.path()),
+		)
+		.await?;
+		let document: serde_json::Value = serde_json::from_str(&settings.stdout)?;
+		assert_eq!(document, serde_json::json!({"settings": [], "warnings": []}));
+		assert!(settings.stderr.is_empty());
+
+		let mutation = run(
+			arguments!["mods", "--json", "--log-level", "off", "init", "--game-install", "game"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| successful_dependencies(temp.path()),
+		)
+		.await?;
+		assert_eq!(
+			serde_json::from_str::<serde_json::Value>(&mutation.stdout)?,
+			serde_json::json!({"warnings": []})
+		);
+		assert!(mutation.stderr.is_empty());
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_exec_distinguishes_prelaunch_and_postlaunch_failures() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for launched in [false, true] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, reporter, _| {
+				Box::pin(async move {
+					if launched && let Some(reporter) = reporter {
+						reporter.call((ProgressEvent::ExecutionPrepared,)).await;
+					}
+					Err(report!(ErrorMarker::execution_supervision_failed()))
+				}) as PortFuture<_>
+			});
+			let outcome = run(
+				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_| Ok(dependencies),
+			)
+			.await?;
+			assert_eq!(outcome.status, 125);
+			if launched {
+				assert!(outcome.stderr.starts_with("error [execution_supervision_failed]:"));
+			} else {
+				let problem: serde_json::Value = serde_json::from_str(&outcome.stderr)?;
+				assert_eq!(problem["code"], "execution_supervision_failed");
+			}
+			assert!(outcome.stdout.is_empty());
+		}
+		Ok(())
+	}
+	#[tokio::test]
+	async fn json_diagnostic_warning_and_failure_reference_are_structured() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let root = temp.path().join("blocked");
+		write(&root, b"file")?;
+		let warned = run(
+			arguments!["mods", "--json", "--environment", root.as_os_str(), "config", "list"],
+			temp.path().to_owned(),
+			None,
+			|_| successful_dependencies(&root),
+		)
+		.await?;
+		let document: serde_json::Value = serde_json::from_str(&warned.stdout)?;
+		assert_eq!(
+			document["warnings"][0],
+			serde_json::json!({"code": "diagnostic_logging_unavailable", "message": "diagnostic session logging is unavailable", "details": {}})
+		);
+		assert!(warned.stderr.is_empty());
+
+		let valid_root = temp.path().join("environment");
+		let failed = run(
+			arguments![
+				"mods",
+				"--json",
+				"--environment",
+				valid_root.as_os_str(),
+				"install",
+				"missing.zip"
+			],
+			temp.path().to_owned(),
+			None,
+			|_| successful_dependencies(&valid_root),
+		)
+		.await?;
+		let problem: serde_json::Value = serde_json::from_str(&failed.stderr)?;
+		assert_eq!(problem["code"], "io_failure");
+		assert!(problem["instance"].as_str().is_some());
+		assert!(!problem["detail"]
+			.as_str()
+			.unwrap_or_default()
+			.contains("diagnostic session"));
+		Ok(())
+	}
+	#[tokio::test]
+	async fn invalid_environment_root_has_safe_json_and_unchanged_text() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let json = run(
+			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			Some(Path::new("relative-root").to_owned()),
+			|_| Err(ErrorMarker::io_failure()),
+		)
+		.await?;
+		assert_eq!(json.status, 2);
+		let problem: serde_json::Value = serde_json::from_str(&json.stderr)?;
+		assert_eq!(problem["detail"], "environment root must be an absolute path");
+
+		let text = run(
+			arguments!["mods", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			Some(Path::new("relative-root").to_owned()),
+			|_| Err(ErrorMarker::io_failure()),
+		)
+		.await?;
+		assert_eq!(text.stderr, "error: environment root must be an absolute path\n");
 		Ok(())
 	}
 }

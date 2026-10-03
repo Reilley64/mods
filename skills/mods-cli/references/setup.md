@@ -8,8 +8,8 @@ Install through WinGet after user approval:
 
 ```powershell
 winget install Reilley64.Mods
-mods --version
-mods --help
+mods --json --version
+mods --json --help
 ```
 
 Confirm that WinGet selects `Reilley64.Mods`; stop if it reports an ambiguous or different package. If `mods` is not immediately available, open a new terminal and check `Get-Command mods` before retrying installation.
@@ -30,7 +30,7 @@ usvfs/usvfs_proxy_x64.exe
 
 Do not move only `mods.exe` or substitute native files from another release. The original all-in-one `mods-v0.1.0-x86_64-pc-windows-msvc.zip` remains supported and has its own `SHA256SUMS`; it includes corresponding source. The smaller runtime ZIP has a separate source download linked in `BUILD-AND-SOURCE.md`.
 
-Use the full executable path with PowerShell's `&` operator, or add its installation directory to PATH with user approval. Check `mods --version` and `mods --help` after setup. Do not assume Chocolatey or Scoop availability.
+Use the full executable path with PowerShell's `&` operator, or add its installation directory to PATH with user approval. Check `mods --json --version` and `mods --json --help` after setup. Do not assume Chocolatey or Scoop availability.
 
 ## Select a Mod Environment
 
@@ -46,9 +46,9 @@ A **Mod Environment** is one isolated setup, not a separately selectable profile
 After approval, select a new Environment Root and a real Steam Game Installation:
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
-mods --environment 'D:\Mod Environments\Mojave' config list
-mods --environment 'D:\Mod Environments\Mojave' config get game-dir
+mods --json --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
+mods --json --environment 'D:\Mod Environments\Mojave' config list
+mods --json --environment 'D:\Mod Environments\Mojave' config get game-dir
 ```
 
 A **Game Binding** records the Game Installation's Steam identity, path, and observed build. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.

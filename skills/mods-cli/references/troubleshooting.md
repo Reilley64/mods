@@ -17,11 +17,11 @@ Capture `$LASTEXITCODE` immediately after `mods` in PowerShell. Preserve stdout 
 
 Failures before execution dispatch can still use general statuses. Output write/flush failure, including a broken pipe, produces status 1. A child can itself return 125–127; distinguish the source using stderr, not the number alone. A nonzero child status does not by itself mean the manager failed to launch it.
 
-Successful mutations are quiet except warnings. [Installation outcomes](installation.md) must be distinguished before claiming completion. Conflict queries may return invalid resolution with status zero; inspect their report.
+Without `--json`, successful mutations are quiet except warnings. With `--json`, they return an object with `warnings`. [Installation outcomes](installation.md) must be distinguished before claiming completion. Conflict queries may return invalid resolution with status zero; inspect their report.
 
 ## Common failures and safe next steps
 
-Errors normally begin `error [code]: message`. Optional details include phase, field, choice group/option/sequence, or expected/actual build IDs. Preserve those details; a raw internal cause chain is not part of public CLI output.
+With `--json`, errors are Problem Details on stderr. Use `type` as the machine identifier and read `detail` and optional `details`. Without `--json`, errors begin `error [code]: message`; optional lines contain phase, field, choice IDs/sequence, or build IDs. Raw internal cause chains are not public CLI output. See [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
 
 | Error or symptom | Next step |
 | --- | --- |
@@ -44,11 +44,11 @@ Cancellation can leave partial filesystem state. Preserve it for inspection rath
 Each environment-bound CLI command normally creates a **Diagnostic Session** at `<Environment Root>\logs\<UUID>.jsonl`. The session includes nested work and cleanup, not a saved FOMOD workflow. Failure output can include `diagnostic session: UUID` for correlation.
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' --log-level debug config list
-mods --environment 'D:\Mod Environments\Mojave' --log-level off conflicts list
+mods --json --environment 'D:\Mod Environments\Mojave' --log-level debug config list
+mods --json --environment 'D:\Mod Environments\Mojave' --log-level off conflicts list
 ```
 
-Use the first example to gather diagnostics through a query; repeating a mutation or program still requires its authorization. `--log-level off` disables session logging. A logging setup failure warns `warning: diagnostic session logging is unavailable`; the command continues, so it is not by itself the operation's failure. JSONL diagnostic files are distinct from CLI output; they do not imply a `--json` flag.
+Use the first example to gather diagnostics through a query; repeating a mutation or program still requires its authorization. `--log-level off` disables session logging. A logging setup failure warns `warning: diagnostic session logging is unavailable`; the command continues, so it is not by itself the operation's failure. JSONL diagnostic files are distinct from the optional CLI `--json` output.
 
 Report version, exact command with sensitive values redacted, selected Environment Root, status, stderr, and session ID. Inspect logs locally and redact personal paths or other sensitive content before sharing. Do not upload entire archives, saves, or logs automatically.
 

@@ -45,7 +45,7 @@ All source paths below are under the fixed [v0.1.0 tree](https://github.com/Reil
 | --- | --- |
 | Every command, positional argument, flag, level and setting key; example syntax | `src/presentation/cli/src/commands.rs`, including parser tests |
 | Environment Root default and relative path semantics; install outcomes and child status forwarding | `src/presentation/cli/src/runner.rs`, `path_resolution.rs` |
-| Settings and FOMOD/preview text, warnings, quiet mutations | `src/presentation/cli/src/output.rs`, `install_warning.rs` |
+| Settings and FOMOD/preview text, warnings, quiet mutations | `src/presentation/cli/src/output.rs`, `install_warning.rs`, `json_install.rs`, `json_output.rs` |
 | Init precedence, target constraints, overrides | `src/application/src/environment/initialize_environment.rs`; `src/infrastructure/game_platform/src/resolution.rs`; `src/infrastructure/environment/src/lib.rs`; `src/infrastructure/settings/src/config_source.rs` |
 | Archive formats, name derivation, replacement and disabled new installs | `src/infrastructure/archive/src/index.rs`; `src/domain/src/installation.rs`; `src/application/src/installation/install_archive.rs` |
 | Complete ordered choices, cardinality and synthetic none | `CONTEXT.md`; `src/application/src/installation/install_archive/fomod.rs` |

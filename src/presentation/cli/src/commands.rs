@@ -14,6 +14,8 @@ use std::path::PathBuf;
 pub(crate) struct Cli {
 	#[arg(long, global = true, value_name = "PATH")]
 	pub(crate) environment: Option<PathBuf>,
+	#[arg(long, global = true)]
+	pub(crate) json: bool,
 	#[arg(long, global = true, value_enum, default_value_t = LogLevel::Info)]
 	pub(crate) log_level: LogLevel,
 	#[command(subcommand)]
@@ -181,7 +183,8 @@ mod tests {
 					command: ConfigCommand::Get {
 						key: SettingKeyArgument::GameDir
 					}
-				}
+				},
+				..
 			})
 		));
 	}
@@ -286,8 +289,15 @@ mod tests {
 	}
 
 	#[test]
-	fn rejects_json_and_unknown_setting_keys() {
-		assert!(parse_from(["mods", "--json", "config", "list"]).is_err());
+	fn accepts_global_json_without_consuming_child_arguments() -> Result<(), Box<dyn Error>> {
+		assert!(parse_from(["mods", "--json", "config", "list"]).is_ok());
+		let parsed = parse_from(["mods", "exec", "--", "tool.exe", "--json"])?;
+		assert!(matches!(parsed.command, Command::Exec(args) if args.command[1] == "--json"));
+		Ok(())
+	}
+
+	#[test]
+	fn rejects_unknown_setting_keys() {
 		assert!(parse_from(["mods", "config", "get", "unknown"]).is_err());
 	}
 
