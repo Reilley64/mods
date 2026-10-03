@@ -895,14 +895,14 @@ mod tests {
 		let data_mods = completed
 			.providers
 			.iter()
-			.filter_map(|provider| match &provider.identity {
-				ProviderIdentity::DataMod { mod_name, .. } => Some((mod_name.as_str(), provider)),
-				_ => None,
-			})
+			.filter(|provider| matches!(provider.identity, ProviderIdentity::DataMod { .. }))
 			.collect::<Vec<_>>();
 		assert_eq!(data_mods.len(), 1);
-		let (name, provider) = data_mods[0];
-		assert_eq!(name, "visuals");
+		let provider = data_mods[0];
+		let ProviderIdentity::DataMod { mod_name, .. } = &provider.identity else {
+			return Err("the filtered provider must be a Data Mod".into());
+		};
+		assert_eq!(mod_name.as_str(), "visuals");
 		assert!(provider.files.is_empty());
 		assert_eq!(
 			provider.problems.iter().map(|problem| problem.kind).collect::<Vec<_>>(),

@@ -110,12 +110,28 @@ async fn validate_profile(profile: &Path) -> Result<Vec<ModName>, ErrorMarker> {
 /// Checks that each listed mod has a directory of exactly the listed spelling.
 ///
 /// Other entries in `mods` are not installed mods: they contribute nothing, so they are not checked.
+/// Names that are not valid UTF-8 are skipped, because `modlist.txt` cannot list them.
 ///
 /// # Errors
 ///
-/// Returns `environment_invalid` with the mod name when a listed mod has no such directory.
+/// - `environment_invalid` with the mod name when a listed mod has no such directory, or when the
+///   metadata of its entry cannot be read.
+/// - `environment_invalid` without a mod name when `mods` or a listed mod directory cannot be read,
+///   when a listed mod directory holds a name that is not valid UTF-8, or when a listed mod has an
+///   invalid `meta.toml`.
 async fn validate_mods(mods: &Path, listed_mods: &[ModName]) -> Result<(), ErrorMarker> {
-	let names = entry_names(mods).await?;
+	let mut names = HashSet::new();
+	let mut entries = read_dir(mods).await.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
+		if let Ok(name) = entry.file_name().into_string() {
+			names.insert(name);
+		}
+	}
+
 	for listed in listed_mods {
 		let missing = ErrorMarker::environment_invalid(None).with_mod_name(listed.clone());
 		if !names.contains(listed.as_str()) {

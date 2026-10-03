@@ -158,6 +158,7 @@ pub async fn install_archive(
 			.context(ErrorMarker::invalid_mod_name())
 			.context(InstallArchiveError)?
 	};
+
 	// An unlisted folder is not an installed mod, so `--replace` cannot apply to it either.
 	if let Some(unlisted) = state.unlisted_mod_names.iter().find(|name| **name == requested_name) {
 		return Err(

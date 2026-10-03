@@ -469,6 +469,8 @@ mod tests {
 	use std::ffi::OsString;
 	use std::fs;
 	use std::io::Error as IoError;
+	#[cfg(windows)]
+	use std::os::windows::ffi::OsStringExt;
 	use std::path::Path;
 	use std::sync::atomic::Ordering;
 	use tempfile::TempDir;
@@ -887,6 +889,17 @@ mod tests {
 		fs::create_dir(temp.path().join("mods/Unlisted"))?;
 		fs::write(temp.path().join("mods/Unlisted/meta.toml"), "not = [")?;
 		fs::write(temp.path().join("mods/stray.txt"), b"stray")?;
+
+		SettingsAdapter::with_environment(root, Vec::new()).load().await?;
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn mods_entries_with_names_that_are_not_utf8_are_ignored() -> Result<()> {
+		let (temp, root) = fixture()?;
+		// NTFS accepts an unpaired surrogate, which has no UTF-8 form.
+		fs::create_dir(temp.path().join("mods").join(OsString::from_wide(&[0xd800])))?;
 
 		SettingsAdapter::with_environment(root, Vec::new()).load().await?;
 		Ok(())

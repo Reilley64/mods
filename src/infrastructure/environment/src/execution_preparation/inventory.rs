@@ -1,4 +1,4 @@
-use crate::snapshot::match_mod_folders;
+use crate::snapshot::check_listed_mod_folders;
 use crate::snapshot::parse_metadata;
 use crate::snapshot::parse_modlist;
 use application::ErrorMarker;
@@ -47,9 +47,24 @@ impl ExecutionInventory {
 		let installed = parse_modlist(&bytes)?;
 
 		let mods = root.join("mods");
-		match_mod_folders(&mods, &installed, cancellation).await?;
+		check_listed_mod_folders(&mods, &installed, cancellation).await?;
 
-		let mut result = Self::default();
+		let enabled: Vec<_> = installed
+			.iter()
+			.filter(|entry| entry.enabled)
+			.map(|entry| {
+				let identity = ProviderIdentity::DataMod {
+					mod_name: entry.name.clone(),
+					priority: entry.priority,
+				};
+				(mods.join(entry.name.as_str()), identity)
+			})
+			.collect();
+		let mut result = Self {
+			installed,
+			..Self::default()
+		};
+
 		match metadata(data).await {
 			Ok(metadata) if metadata.is_dir() => {
 				result.provider(data, ProviderIdentity::SteamData, cancellation).await?
@@ -59,19 +74,12 @@ impl ExecutionInventory {
 			Err(error) => return Err(report!(error).context(ErrorMarker::environment_invalid(None))),
 		}
 
-		for entry in installed.iter().filter(|entry| entry.enabled) {
-			let identity = ProviderIdentity::DataMod {
-				mod_name: entry.name.clone(),
-				priority: entry.priority,
-			};
-			result.provider(&mods.join(entry.name.as_str()), identity, cancellation)
-				.await?;
+		for (directory, identity) in enabled {
+			result.provider(&directory, identity, cancellation).await?;
 		}
 
 		result.provider(&root.join("overwrite"), ProviderIdentity::Overwrite, cancellation)
 			.await?;
-
-		result.installed = installed;
 		Ok(result)
 	}
 

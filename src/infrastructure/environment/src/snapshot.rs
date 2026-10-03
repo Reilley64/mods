@@ -142,7 +142,12 @@ async fn load_inner(
 		.context(ErrorMarker::environment_invalid(None))?;
 	let installed_mods = parse_modlist(&modlist)?;
 
-	let unlisted_mod_names = match_mod_folders(&mods, &installed_mods, cancellation).await?;
+	let unlisted_entries = check_listed_mod_folders(&mods, &installed_mods, cancellation).await?;
+	// An invalid mod name cannot be an install target, so it cannot collide with one.
+	let unlisted_mod_names = unlisted_entries
+		.into_iter()
+		.filter_map(|spelling| ModName::new(spelling).ok())
+		.collect();
 
 	let mut inventories = Vec::with_capacity(installed_mods.len());
 	for installed in &installed_mods {
@@ -173,22 +178,23 @@ async fn load_inner(
 	})
 }
 
-/// Matches the `modlist.txt` entries to the entries of the `mods` directory.
+/// Checks that each listed mod has a directory of exactly the listed spelling.
 ///
-/// Each listed mod needs a directory of exactly the listed spelling. Other entries in `mods` are
-/// not installed mods: they contribute nothing, so their types and contents are not checked.
-///
-/// Returns the names of the unlisted entries that are valid mod names. A new install cannot take
-/// these names, because its directory would collide with the entry.
+/// Other entries in `mods` are not installed mods: they contribute nothing, so their types and
+/// contents are not checked. Returns their spellings. Names that are not valid UTF-8 are skipped,
+/// because `modlist.txt` cannot list them.
 ///
 /// # Errors
 ///
-/// Returns `environment_invalid` with the mod name when a listed mod has no such directory.
-pub(crate) async fn match_mod_folders(
+/// - `operation_cancelled` when `cancellation` is cancelled.
+/// - `environment_invalid` without a mod name when `mods` cannot be read.
+/// - `environment_invalid` with the mod name when a listed mod has no such directory, or when the
+///   metadata of its entry cannot be read.
+pub(crate) async fn check_listed_mod_folders(
 	mods: &Path,
 	installed: &[InstalledMod],
 	cancellation: &CancellationToken,
-) -> Result<Vec<ModName>, ErrorMarker> {
+) -> Result<Vec<String>, ErrorMarker> {
 	let listed: HashMap<_, _> = installed
 		.iter()
 		.map(|installed| (installed.name.as_str(), &installed.name))
@@ -205,15 +211,11 @@ pub(crate) async fn match_mod_folders(
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		// `modlist.txt` is UTF-8, so a name that is not cannot be listed.
 		let Ok(spelling) = entry.file_name().into_string() else {
 			continue;
 		};
 		let Some(name) = listed.get(spelling.as_str()) else {
-			// An invalid mod name cannot be an install target, so it cannot collide with one.
-			if let Ok(name) = ModName::new(spelling) {
-				unlisted.push(name);
-			}
+			unlisted.push(spelling);
 			continue;
 		};
 
