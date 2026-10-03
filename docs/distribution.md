@@ -228,18 +228,71 @@ logs, tool versions, hashes, and managed Steam Data unchanged evidence. Record
 accepted manifest validation, ZIP layout, and clean install/run/remove evidence
 before submitting the human-controlled initial package.
 
-Only after that bootstrap is merged and those checks pass, remove the Winget
-job's literal false gate. This is a one-time readiness block, not per-release
-manual approval. Configure the `winget` environment **without required reviewers**
-and store a separate classic PAT with `public_repo` as
-`WINGET_CREATE_GITHUB_TOKEN`; do not reuse the Release Please App credential.
-The update job waits for stable public verification, verifies again, checks the
-exact merged version directory and open PR changed paths, and reports an existing
-link instead of duplicating a submission. API or incomplete-search errors stop
-submission. Subsequent updates preserve the reviewed bootstrap manifest layout
-through `wingetcreate update Reilley64.Mods --urls <verified-url> --version
-<version> --submit --no-open`. Workflow concurrency serializes retries per tag.
-Winget review delays or failures never roll back the GitHub Release.
+### WinGet install CI and draft updater
+
+PRs and pushes to `main` call `.github/workflows/winget-install.yml`, alongside
+repository tool and Rust checks. On a disposable GitHub-hosted Windows 2025
+runner, it builds the checked-out commit with `package-windows.ps1`, including
+complete corresponding source. It verifies the candidate hashes, creates local
+manifests, and serves the candidate ZIP over loopback only while WinGet installs
+it. The manifest uses the aggregate product version; the installed `mods` alias
+must report the CLI crate version declared by that checkout and pass `--help`;
+native uninstall and temporary-setting restoration must succeed. Candidate,
+source, manifests and command receipts are retained together for 90 days.
+
+This checks the PR merge commit or main commit, not an older public release. It
+does not need a merged catalog bootstrap or submission credentials. It creates
+no GitHub Release, upstream PR, or external download server. The preview-release
+job remains disabled. Repository branch-protection requirements are separate
+settings; adding this workflow does not change them.
+
+The release updater has **no opt-in variable**. Once this PR is merged, it runs
+after the stable job succeeds on a published stable release or a manual
+`Publish stable` dispatch. Merging the PR alone does not trigger publication or
+submission. Keep this PR draft until bootstrap and credentials are ready; do not
+rely on a missing variable to disable it after merge.
+
+The release job checks the exact merged version directory and open PR changed
+paths; an existing version is reported rather than submitted again. API errors
+and incomplete searches stop the job. The v0.1.0 bootstrap must already be merged;
+the updater never generates or submits that human-controlled version.
+
+For a new version, it performs these steps:
+
+1. Anonymously verify the published runtime ZIP, complete corresponding source,
+   and checksum set. Generate YAML with pinned WingetCreate into a fresh
+   directory, **without** `--submit`.
+2. Check identifier/version, exact runtime URL/hash, single x64 ZIP installer,
+   nested portable `mods.exe` with alias `mods`, Windows 11 minimum, and both VC
+   dependencies. Check installer-level overrides as well as root fields.
+3. Run native `winget validate` against the exact directory.
+4. Use the same `test-winget-install.ps1` lifecycle gate to test the **published
+   bytes** before submission. PR CI cannot substitute for this release-byte check.
+5. Retain manifests and diagnostics, reverify assets/fields and validate again,
+   then submit **the same directory** with `wingetcreate submit`, not a second
+   `update --submit` generation.
+
+Both gates require the default ZIP handler: no tar fallback, security bypass, OS
+bypass, or personal-machine installation. Windows 2022 is below the manifest's
+minimum build; the native install jobs use Windows 2025. Install, help/version,
+uninstall or cleanup failures fail the gate. Submission credentials are supplied
+only to the final release step via `WINGET_CREATE_GITHUB_TOKEN`, never argv or PR
+CI. Workflow concurrency serializes release retries per tag. Failure does not
+roll back an already-published GitHub Release. These checks are not full VFS,
+fresh-user prerequisite, or upstream-validation proof.
+
+Before taking the updater PR out of draft:
+
+- Confirm microsoft/winget-pkgs#442597 is merged and v0.1.0 is in the catalog.
+  Successful upstream checks alone are not a merge.
+- Inspect a successful native CI install/help/version/uninstall receipt. Local
+  policy tests or a PowerShell parser check do not prove that lifecycle.
+- Review the generated release manifests and release-byte gate evidence when
+  available; a commit-candidate test does not prove the future published ZIP.
+- Separately approve configuration of the `winget` environment and a classic PAT
+  with `public_repo` as `WINGET_CREATE_GITHUB_TOKEN`. Fine-grained PATs are not
+  supported by pinned WingetCreate. Do not reuse Release Please credentials.
+  This PR does not configure credentials, merge itself, or submit upstream.
 
 The workflow pins WingetCreate v1.12.13.0 with the SHA-256 reported by Microsoft's
 release API on 2026-09-25. No project dependencies are added. Live Microsoft
