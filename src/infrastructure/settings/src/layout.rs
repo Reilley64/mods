@@ -1,5 +1,6 @@
 use application::ErrorMarker;
 use domain::IGNORED_PROFILE_FILES;
+use domain::ModName;
 use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
 use encoding_rs::WINDOWS_1252;
@@ -69,7 +70,7 @@ async fn validate_root_entries(root: &Path) -> Result<(), ErrorMarker> {
 	Ok(())
 }
 
-async fn validate_profile(profile: &Path) -> Result<HashSet<String>, ErrorMarker> {
+async fn validate_profile(profile: &Path) -> Result<Vec<ModName>, ErrorMarker> {
 	let allowed = PROFILE_FILES
 		.into_iter()
 		.chain(IGNORED_PROFILE_FILES)
@@ -106,25 +107,29 @@ async fn validate_profile(profile: &Path) -> Result<HashSet<String>, ErrorMarker
 	parse_modlist(&read_regular(profile, "modlist.txt").await?)
 }
 
-async fn validate_mods(mods: &Path, listed_mods: &HashSet<String>) -> Result<(), ErrorMarker> {
-	let mut installed = HashSet::new();
-	for name in entry_names(mods).await? {
-		if !valid_windows_component(&name) {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
+/// Checks that each listed mod has a directory of exactly the listed spelling.
+///
+/// Other entries in `mods` are not installed mods: they contribute nothing, so they are not checked.
+///
+/// # Errors
+///
+/// Returns `environment_invalid` with the mod name when a listed mod has no such directory.
+async fn validate_mods(mods: &Path, listed_mods: &[ModName]) -> Result<(), ErrorMarker> {
+	let names = entry_names(mods).await?;
+	for listed in listed_mods {
+		let missing = ErrorMarker::environment_invalid(None).with_mod_name(listed.clone());
+		if !names.contains(listed.as_str()) {
+			return Err(report!(missing));
 		}
 
-		let directory = mods.join(&name);
-		require_directory(&directory).await?;
+		let directory = mods.join(listed.as_str());
+		if !metadata(&directory).await.context(missing.clone())?.is_dir() {
+			return Err(report!(missing));
+		}
 
 		if entry_names(&directory).await?.contains("meta.toml") {
 			validate_meta(&read_regular(&directory, "meta.toml").await?)?;
 		}
-		if !installed.insert(case_fold_key(&name)) {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-	}
-	if &installed != listed_mods {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	Ok(())
 }
@@ -138,10 +143,11 @@ fn validate_meta(bytes: &[u8]) -> Result<(), ErrorMarker> {
 	Ok(())
 }
 
-fn parse_modlist(bytes: &[u8]) -> Result<HashSet<String>, ErrorMarker> {
+fn parse_modlist(bytes: &[u8]) -> Result<Vec<ModName>, ErrorMarker> {
 	let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
 	let text = str::from_utf8(bytes).context(ErrorMarker::environment_invalid(None))?;
-	let mut listed = HashSet::new();
+	let mut keys = HashSet::new();
+	let mut listed = Vec::new();
 	for line in text.lines() {
 		if line.is_empty() || line.starts_with('#') {
 			continue;
@@ -149,10 +155,10 @@ fn parse_modlist(bytes: &[u8]) -> Result<HashSet<String>, ErrorMarker> {
 		let Some((state, name)) = line.split_at_checked(1) else {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		};
-		if !matches!(state, "+" | "-") || !valid_windows_component(name) || !listed.insert(case_fold_key(name))
-		{
+		if !matches!(state, "+" | "-") || !valid_windows_component(name) || !keys.insert(case_fold_key(name)) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
+		listed.push(ModName::new(name.to_owned()).context(ErrorMarker::environment_invalid(None))?);
 	}
 	Ok(listed)
 }

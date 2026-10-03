@@ -107,6 +107,11 @@ pub struct FileDependencyFact {
 pub struct InstallationState {
 	pub game_binding: GameBinding,
 	pub installed_mods: Vec<InstalledMod>,
+	/// Names of the `mods` entries that `modlist.txt` does not list.
+	///
+	/// These entries are not installed mods and contribute nothing, but a new install cannot take
+	/// their names, because its directory would collide with the entry.
+	pub unlisted_mod_names: Vec<ModName>,
 	pub current_winners: HashMap<DataRelativePath, EffectiveResult>,
 	pub file_dependencies: HashMap<String, FileDependencyFact>,
 }

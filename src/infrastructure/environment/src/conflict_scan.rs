@@ -25,7 +25,6 @@ use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -73,8 +72,8 @@ pub(crate) async fn scan(
 	let modlist = read(profile.join("modlist.txt"))
 		.await
 		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-	let (installed_mods, mut problems) = parse_modlist(&modlist);
-	let mut mod_directories = enumerate_mod_directories(&mods, cancellation, &mut problems).await?;
+	let (installed_mods, problems) = parse_modlist(&modlist);
+	let mod_entries = mod_entry_names(&mods, cancellation).await?;
 
 	let mut providers = Vec::new();
 	let data = binding.game_directory().as_path().join("Data");
@@ -99,12 +98,18 @@ pub(crate) async fn scan(
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
-		let key = installed.name.comparison_key().to_owned();
 		let identity = ProviderIdentity::DataMod {
 			mod_name: installed.name.clone(),
 			priority: installed.priority,
 		};
-		let Some((directory_name, canonical_name)) = mod_directories.remove(&key) else {
+		// A listed mod needs a directory of exactly the listed spelling; a case variant is missing.
+		let directory = mods.join(installed.name.as_str());
+		let directory_exists = mod_entries.contains(installed.name.as_str())
+			&& metadata(&directory)
+				.await
+				.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
+				.is_dir();
+		if !directory_exists {
 			let mut provider = empty_provider(identity.clone(), installed.enabled);
 			provider.problems.push(ConflictProblem {
 				kind: ConflictProblemKind::ProviderMissing,
@@ -112,21 +117,9 @@ pub(crate) async fn scan(
 			});
 			providers.push(provider);
 			continue;
-		};
+		}
 
-		let identity = ProviderIdentity::DataMod {
-			mod_name: canonical_name,
-			priority: installed.priority,
-		};
-		providers.push(
-			scan_provider(&mods.join(directory_name), identity, installed.enabled, cancellation).await?,
-		);
-	}
-	if !mod_directories.is_empty() {
-		problems.push(ConflictProblem {
-			kind: ConflictProblemKind::ModlistInvalid,
-			scope: ProblemScope::Modlist,
-		});
+		providers.push(scan_provider(&directory, identity, installed.enabled, cancellation).await?);
 	}
 
 	providers.push(scan_provider(&overwrite, ProviderIdentity::Overwrite, true, cancellation).await?);
@@ -293,15 +286,14 @@ fn modlist_problem() -> ConflictProblem {
 	}
 }
 
-async fn enumerate_mod_directories(
-	mods: &Path,
-	cancellation: &CancellationToken,
-	problems: &mut Vec<ConflictProblem>,
-) -> Result<HashMap<String, (OsString, ModName)>, ErrorMarker> {
+/// Lists the exact spellings of the `mods` entries.
+///
+/// A name that is not valid UTF-8 cannot appear in `modlist.txt`, so it is skipped.
+async fn mod_entry_names(mods: &Path, cancellation: &CancellationToken) -> Result<HashSet<String>, ErrorMarker> {
 	let mut entries = read_dir(mods)
 		.await
 		.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?;
-	let mut result = HashMap::new();
+	let mut names = HashSet::new();
 	while let Some(entry) = entries
 		.next_entry()
 		.await
@@ -311,37 +303,11 @@ async fn enumerate_mod_directories(
 			return Err(report!(ErrorMarker::operation_cancelled().with_phase("conflict_scan")));
 		}
 
-		let os_name = entry.file_name();
-		let Some(spelling) = os_name.to_str() else {
-			problems.push(ConflictProblem {
-				kind: ConflictProblemKind::NonLosslessName,
-				scope: ProblemScope::Global,
-			});
-			continue;
-		};
-		let Ok(name) = ModName::new(spelling.to_owned()) else {
-			problems.push(modlist_problem());
-			continue;
-		};
-
-		if !metadata(entry.path())
-			.await
-			.context(ErrorMarker::io_failure().with_phase("conflict_scan"))?
-			.is_dir()
-		{
-			problems.push(ConflictProblem {
-				kind: ConflictProblemKind::ProviderMissing,
-				scope: ProblemScope::Global,
-			});
-			continue;
-		}
-
-		let key = name.comparison_key().to_owned();
-		if result.insert(key, (os_name, name)).is_some() {
-			problems.push(modlist_problem());
+		if let Ok(name) = entry.file_name().into_string() {
+			names.insert(name);
 		}
 	}
-	Ok(result)
+	Ok(names)
 }
 
 async fn scan_provider(
@@ -908,28 +874,40 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn modlist_matching_is_case_insensitive_and_directory_spelling_is_canonical() -> Result<(), Box<dyn Error>>
-	{
+	async fn unlisted_entries_are_ignored_and_a_case_variant_directory_is_missing() -> Result<(), Box<dyn Error>> {
 		let (_temp, root, binding) = fixture().await?;
-		write_provider(
-			root.as_path(),
-			"Visuals",
-			&[("content.txt", b"content")],
-			"schema_version = 1\n",
-		)?;
+		for name in ["Visuals", "Unlisted"] {
+			write_provider(
+				root.as_path(),
+				name,
+				&[("content.txt", b"content")],
+				"schema_version = 1\n",
+			)?;
+		}
+		fs::write(root.as_path().join("mods/stray.txt"), b"stray")?;
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+visuals\n")?;
 
 		let completed = scan(root.as_path(), &binding, &CancellationToken::new())
 			.await
 			.expect("scan must complete");
-		let provider = completed
-			.providers
-			.iter()
-			.find(|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if mod_name.as_str() == "Visuals"))
-			.ok_or("canonical provider")?;
 
 		assert!(completed.problems.is_empty());
-		assert!(provider.problems.is_empty());
+		let data_mods = completed
+			.providers
+			.iter()
+			.filter_map(|provider| match &provider.identity {
+				ProviderIdentity::DataMod { mod_name, .. } => Some((mod_name.as_str(), provider)),
+				_ => None,
+			})
+			.collect::<Vec<_>>();
+		assert_eq!(data_mods.len(), 1);
+		let (name, provider) = data_mods[0];
+		assert_eq!(name, "visuals");
+		assert!(provider.files.is_empty());
+		assert_eq!(
+			provider.problems.iter().map(|problem| problem.kind).collect::<Vec<_>>(),
+			[ConflictProblemKind::ProviderMissing]
+		);
 		Ok(())
 	}
 

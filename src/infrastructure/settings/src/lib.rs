@@ -464,6 +464,7 @@ mod tests {
 	use domain::EnvironmentRoot;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
+	use domain::ModName;
 	use rootcause::Result;
 	use std::ffi::OsString;
 	use std::fs;
@@ -860,27 +861,34 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn installed_mod_and_modlist_names_use_simple_unicode_case_folded_keys() -> Result<()> {
-		let (temp, root) = fixture()?;
-		fs::create_dir(temp.path().join("mods/ÉΣ Mod"))?;
-		fs::write(temp.path().join("mods/ÉΣ Mod/meta.toml"), "schema_version = 1\n")?;
-		fs::write(temp.path().join("profile/modlist.txt"), "+éς mod\r\n")?;
+	async fn a_listed_mod_needs_a_directory_of_exactly_the_listed_spelling() -> Result<()> {
+		for (modlist, listed) in [("+éς mod\r\n", "éς mod"), ("+Missing\r\n", "Missing")] {
+			let (temp, root) = fixture()?;
+			fs::create_dir(temp.path().join("mods/ÉΣ Mod"))?;
+			fs::write(temp.path().join("profile/modlist.txt"), modlist)?;
 
-		SettingsAdapter::with_environment(root, Vec::new()).load().await?;
+			let error = SettingsAdapter::with_environment(root, Vec::new())
+				.load()
+				.await
+				.err()
+				.ok_or_else(|| {
+					IoError::other("listed mod without its directory unexpectedly loaded")
+				})?;
+
+			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
+			assert_eq!(error.current_context().mod_name().map(ModName::as_str), Some(listed));
+		}
 		Ok(())
 	}
 
 	#[tokio::test]
-	async fn installed_mod_and_modlist_must_describe_the_same_names() -> Result<()> {
+	async fn unlisted_mod_folders_and_stray_files_are_ignored() -> Result<()> {
 		let (temp, root) = fixture()?;
 		fs::create_dir(temp.path().join("mods/Unlisted"))?;
-		fs::write(temp.path().join("mods/Unlisted/meta.toml"), "schema_version = 1\n")?;
-		let error = SettingsAdapter::with_environment(root, Vec::new())
-			.load()
-			.await
-			.err()
-			.ok_or_else(|| IoError::other("unlisted mod unexpectedly loaded"))?;
-		assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
+		fs::write(temp.path().join("mods/Unlisted/meta.toml"), "not = [")?;
+		fs::write(temp.path().join("mods/stray.txt"), b"stray")?;
+
+		SettingsAdapter::with_environment(root, Vec::new()).load().await?;
 		Ok(())
 	}
 

@@ -1,9 +1,9 @@
+use crate::snapshot::match_mod_folders;
 use crate::snapshot::parse_metadata;
 use crate::snapshot::parse_modlist;
 use application::ErrorMarker;
 use domain::DataRelativePath;
 use domain::InstalledMod;
-use domain::ModName;
 use domain::ParticipationReason;
 use domain::ProviderIdentity;
 use domain::ProviderRank;
@@ -46,30 +46,10 @@ impl ExecutionInventory {
 			.context(ErrorMarker::environment_invalid(None))?;
 		let installed = parse_modlist(&bytes)?;
 
-		let enabled: HashSet<_> = installed
-			.iter()
-			.filter(|entry| entry.enabled)
-			.map(|entry| entry.name.as_str().to_owned())
-			.collect();
-		let identities: HashMap<_, _> = installed
-			.iter()
-			.map(|entry| {
-				(
-					entry.name.as_str().to_owned(),
-					ProviderIdentity::DataMod {
-						mod_name: entry.name.clone(),
-						priority: entry.priority,
-					},
-				)
-			})
-			.collect();
-		let listed: HashSet<_> = installed.iter().map(|entry| entry.name.as_str().to_owned()).collect();
+		let mods = root.join("mods");
+		match_mod_folders(&mods, &installed, cancellation).await?;
 
-		let mut result = Self {
-			installed,
-			..Self::default()
-		};
-
+		let mut result = Self::default();
 		match metadata(data).await {
 			Ok(metadata) if metadata.is_dir() => {
 				result.provider(data, ProviderIdentity::SteamData, cancellation).await?
@@ -79,54 +59,19 @@ impl ExecutionInventory {
 			Err(error) => return Err(report!(error).context(ErrorMarker::environment_invalid(None))),
 		}
 
-		let mut discovered = HashSet::new();
-		let mut folded = HashSet::new();
-		let mut entries = read_dir(root.join("mods"))
-			.await
-			.context(ErrorMarker::environment_invalid(None))?;
-		while let Some(entry) = entries
-			.next_entry()
-			.await
-			.context(ErrorMarker::environment_invalid(None))?
-		{
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-
-			let spelling = entry
-				.file_name()
-				.into_string()
-				.map_err(|_| report!(ErrorMarker::environment_invalid(None)))?;
-			let name = ModName::new(spelling.clone()).context(ErrorMarker::environment_invalid(None))?;
-
-			if !folded.insert(name.comparison_key().to_owned()) {
-				return Err(report!(ErrorMarker::environment_invalid(None)));
-			}
-			if !metadata(entry.path())
-				.await
-				.context(ErrorMarker::environment_invalid(None))?
-				.is_dir()
-			{
-				return Err(report!(ErrorMarker::environment_invalid(None)));
-			}
-
-			discovered.insert(spelling.clone());
-			if !enabled.contains(&spelling) {
-				continue;
-			}
-
-			let identity = identities
-				.get(&spelling)
-				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-			result.provider(&entry.path(), identity.clone(), cancellation).await?;
-		}
-
-		if discovered != listed {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
+		for entry in installed.iter().filter(|entry| entry.enabled) {
+			let identity = ProviderIdentity::DataMod {
+				mod_name: entry.name.clone(),
+				priority: entry.priority,
+			};
+			result.provider(&mods.join(entry.name.as_str()), identity, cancellation)
+				.await?;
 		}
 
 		result.provider(&root.join("overwrite"), ProviderIdentity::Overwrite, cancellation)
 			.await?;
+
+		result.installed = installed;
 		Ok(result)
 	}
 

@@ -158,6 +158,14 @@ pub async fn install_archive(
 			.context(ErrorMarker::invalid_mod_name())
 			.context(InstallArchiveError)?
 	};
+	// An unlisted folder is not an installed mod, so `--replace` cannot apply to it either.
+	if let Some(unlisted) = state.unlisted_mod_names.iter().find(|name| **name == requested_name) {
+		return Err(
+			report!(ErrorMarker::mod_already_exists().with_mod_name(unlisted.clone()))
+				.context(InstallArchiveError),
+		);
+	}
+
 	let existing = state
 		.installed_mods
 		.iter()
@@ -675,6 +683,7 @@ mod tests {
 						Ok(InstallationState {
 							game_binding: binding(),
 							installed_mods: Vec::new(),
+							unlisted_mod_names: Vec::new(),
 							current_winners: HashMap::new(),
 							file_dependencies: HashMap::new(),
 						})
@@ -821,6 +830,7 @@ mod tests {
 				Ok(InstallationState {
 					game_binding: binding(),
 					installed_mods: Vec::new(),
+					unlisted_mod_names: Vec::new(),
 					current_winners: HashMap::new(),
 					file_dependencies,
 				})
@@ -1969,6 +1979,51 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn install_over_an_unlisted_folder_is_refused_before_any_write() -> Result<()> {
+		for replace in [false, true] {
+			let order = Arc::new(Mutex::new(Vec::new()));
+			let mut dependencies = dependencies(order.clone(), false, Arc::new(AtomicUsize::new(0)));
+			let unlisted = ModName::new("Plain Mod".to_owned())?;
+			dependencies.load_installation_state = Arc::new(move |_, _| {
+				let unlisted = unlisted.clone();
+				Box::pin(async move {
+					Ok(InstallationState {
+						game_binding: binding(),
+						installed_mods: Vec::new(),
+						unlisted_mod_names: vec![unlisted],
+						current_winners: HashMap::new(),
+						file_dependencies: HashMap::new(),
+					})
+				}) as PortFuture<_>
+			});
+
+			let report = install_archive(
+				dependencies,
+				ArchivePath::new(temp_dir().join("archive.zip"))?,
+				Some(ModName::new("PLAIN mod".to_owned())?),
+				replace,
+				Vec::new(),
+				false,
+				CancellationToken::new(),
+			)
+			.await
+			.expect_err("an unlisted folder must block the install");
+
+			let marker = report
+				.iter_reports()
+				.find_map(|report| report.downcast_current_context::<ErrorMarker>())
+				.expect("semantic marker");
+			assert_eq!(marker.code(), ErrorCode::ModAlreadyExists);
+			assert_eq!(marker.mod_name().map(ModName::as_str), Some("Plain Mod"));
+			let order = order.lock().map_err(|_| report!("order lock"))?;
+			assert!(!order
+				.iter()
+				.any(|step| matches!(*step, "begin" | "begin_file" | "extract")));
+		}
+		Ok(())
+	}
+
+	#[tokio::test]
 	async fn list_position_counts_from_the_top_of_the_mo2_modlist() -> Result<()> {
 		let installed_mods = vec![
 			InstalledMod {
@@ -1992,6 +2047,7 @@ mod tests {
 					Ok(InstallationState {
 						game_binding: binding(),
 						installed_mods,
+						unlisted_mod_names: Vec::new(),
 						current_winners: HashMap::new(),
 						file_dependencies: HashMap::new(),
 					})

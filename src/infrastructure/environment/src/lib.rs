@@ -155,6 +155,7 @@ impl EnvironmentAdapter {
 		Ok(InstallationState {
 			game_binding: snapshot.game_binding,
 			installed_mods: snapshot.installed_mods,
+			unlisted_mod_names: snapshot.unlisted_mod_names,
 			current_winners: snapshot.current_winners,
 			file_dependencies: snapshot.file_dependencies,
 		})

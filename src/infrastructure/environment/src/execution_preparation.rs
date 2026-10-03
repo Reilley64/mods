@@ -273,10 +273,12 @@ impl EnvironmentAdapter {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use application::ErrorCode;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
 	use application::ports::ProfileSource;
 	use domain::GameInstallationPath;
+	use domain::ModName;
 	use std::cell::Cell;
 	use std::env::current_dir;
 	use std::fs;
@@ -681,23 +683,32 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn folder_sets_reject_mismatches_duplicates_and_spelling_changes() -> Result<(), ErrorMarker> {
+	async fn listed_mods_need_a_directory_of_exactly_the_listed_spelling() -> Result<(), ErrorMarker> {
 		let (_temp, root, binding) = fixture().await?;
 		fs::create_dir(root.as_path().join("mods/Present")).context(ErrorMarker::io_failure())?;
-		for modlist in [
-			"+Missing\n",
-			"+Present\n+Present\n",
-			"+Present\n-present\n",
-			"+present\n",
-			"",
+		for (modlist, missing) in [
+			("+Missing\n", Some("Missing")),
+			("+present\n", Some("present")),
+			("+Present\n+Present\n", None),
+			("+Present\n-present\n", None),
 		] {
 			fs::write(root.as_path().join("profile/modlist.txt"), modlist)
 				.context(ErrorMarker::io_failure())?;
-			assert!(
-				EnvironmentAdapter
-					.prepare_launch(&root, &binding, &CancellationToken::new())
-					.await
-					.is_err(),
+
+			let error = EnvironmentAdapter
+				.prepare_launch(&root, &binding, &CancellationToken::new())
+				.await
+				.err()
+				.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
+
+			assert_eq!(
+				error.current_context().code(),
+				ErrorCode::EnvironmentInvalid,
+				"{modlist:?}"
+			);
+			assert_eq!(
+				error.current_context().mod_name().map(ModName::as_str),
+				missing,
 				"{modlist:?}"
 			);
 		}
@@ -706,6 +717,43 @@ mod tests {
 		EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
 			.await?;
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn unlisted_mod_folders_and_stray_files_contribute_nothing() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture().await?;
+		let mods = root.as_path().join("mods");
+		for name in ["Listed", "Unlisted"] {
+			fs::create_dir(mods.join(name)).context(ErrorMarker::io_failure())?;
+			fs::write(mods.join(name).join(format!("{name}.txt")), name)
+				.context(ErrorMarker::io_failure())?;
+		}
+		fs::write(mods.join("Unlisted/meta.toml"), b"invalid").context(ErrorMarker::io_failure())?;
+		fs::write(mods.join("stray.txt"), b"stray").context(ErrorMarker::io_failure())?;
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+Listed\r\n")
+			.context(ErrorMarker::io_failure())?;
+
+		let prepared = EnvironmentAdapter
+			.prepare_launch(&root, &binding, &CancellationToken::new())
+			.await?;
+
+		let mut visible: Vec<_> = prepared.visible_files.iter().map(|file| file.path.as_str()).collect();
+		visible.sort();
+		assert_eq!(visible, ["FalloutNV.esm", "Listed.txt"]);
+		assert!(prepared
+			.providers
+			.iter()
+			.all(|provider| !provider.root.ends_with("Unlisted")));
+		assert_eq!(
+			fs::read(mods.join("Unlisted/meta.toml")).context(ErrorMarker::io_failure())?,
+			b"invalid"
+		);
+		assert_eq!(
+			fs::read_to_string(root.as_path().join("profile/modlist.txt"))
+				.context(ErrorMarker::io_failure())?,
+			"+Listed\r\n"
+		);
 		Ok(())
 	}
 

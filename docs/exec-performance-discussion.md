@@ -460,6 +460,15 @@ The user decided to drop `loadorder.txt`. The expected users order plugins throu
 
 The user reported broken faces with Character Kit Remake: lips too low, a flat ear, and smeared eyes on male NPCs. A magenta test texture showed that the loose CKR `textures\characters\male\HeadHuman.dds` lost to the vanilla copy in `Fallout - Textures.bsa` for every male head, although the profile INIs listed `Fallout - Invalidation.bsa` first, set `SInvalidationFile=` and set `bInvalidateOlderFiles=1`. The generated archive was a 36-byte header with no folders or files. When the cache file was replaced with the 83-byte archive that Mod Organizer 2 writes (one root folder holding `dummy.dds`, texture file flag set), the loose texture won in game. The user approved generating MO2's bytes exactly. `mods init` now writes `INVALIDATION_ARCHIVE_BYTES`, and the init layout check expects them. Exec and export already read this cache file. Existing environments are not repaired, because there are no migrations before 1.0.0. The snapshot load also runs `validate_bsa_file`, so in an environment that still holds the 36-byte archive, `install` and the other commands that load installation state refuse with `environment_invalid` until the user re-initializes or copies the archive from a new environment.
 
+### Decision: unlisted mod folders are disabled
+
+The user decided that `modlist.txt` alone says which Data Mods exist. A directory in `mods` without a `modlist.txt` entry is treated as a disabled mod that is not installed: it contributes nothing to `exec`, export, install planning, `mods list`, conflict reports or `mods settings` checks, and mods never adds it to `modlist.txt`. Stray files directly in `mods` are ignored in the same way. This supersedes the full folder-set match in "build winners and the mod-folder set in the same traversal" and "filter enabled mods before recursive traversal".
+
+- The only remaining folder check: each `modlist.txt` entry needs a directory of exactly that spelling. A folder that differs only in case does not count. The error stays `environment_invalid` and names the entry; the CLI prints `mod_name = "<entry>"`.
+- Two `modlist.txt` entries that differ only in case are still refused. Case variants among unlisted folders are not checked, because those folders contribute nothing.
+- `mods install` refuses a target name that matches an unlisted entry, compared case-insensitively, with `mod_already_exists` naming that entry. This applies with and without `--replace`, because the entry is not an installed mod. To install, add the folder to `modlist.txt` or remove it first.
+- A failed install can leave a new, unlisted mod folder. It no longer makes the environment invalid, but it blocks a new install with the same name until the user removes it.
+
 ### Decisions on the tokio::fs follow-ups
 
 - Walk timing accepted: the exec inventory walk over 20,000 files went from a median of 21.0 ms to 27.6 ms with tokio::fs.

@@ -132,6 +132,9 @@ pub(crate) fn marker(marker: &ErrorMarker) -> String {
 	if let Some(field) = marker.field() {
 		text.push_str(&format!("\nfield = {}", quote(field)));
 	}
+	if let Some(mod_name) = marker.mod_name() {
+		text.push_str(&format!("\nmod_name = {}", quote(mod_name.as_str())));
+	}
 	if let Some(group_id) = marker.group_id() {
 		text.push_str(&format!("\ngroup_id = {}", quote(group_id)));
 	}
@@ -158,7 +161,9 @@ mod tests {
 	use application::ports::LoadOrderFile;
 	use application::ports::RetainedProfile;
 	use application::settings::ListSettingsError;
+	use domain::ModName;
 	use rootcause::report;
+	use std::error::Error;
 	use std::path::Path;
 	use std::path::PathBuf;
 
@@ -312,6 +317,19 @@ mod tests {
 				"sequence = 3\n"
 			)
 		);
+	}
+
+	#[test]
+	fn a_marker_with_a_mod_name_renders_the_name() -> Result<(), Box<dyn Error>> {
+		let missing = ModName::new("Missing Mod".to_owned()).map_err(|_| "valid test mod name")?;
+		let report = report!(ErrorMarker::environment_invalid(None).with_mod_name(missing))
+			.context(ListSettingsError);
+
+		assert_eq!(
+			application_error(&report),
+			"error [environment_invalid]: environment is invalid\nmod_name = \"Missing Mod\"\n"
+		);
+		Ok(())
 	}
 
 	#[test]

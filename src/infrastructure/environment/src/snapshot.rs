@@ -59,6 +59,7 @@ const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
 pub(crate) struct EnvironmentSnapshotData {
 	pub(crate) game_binding: GameBinding,
 	pub(crate) installed_mods: Vec<InstalledMod>,
+	pub(crate) unlisted_mod_names: Vec<ModName>,
 	pub(crate) current_winners: HashMap<DataRelativePath, EffectiveResult>,
 	pub(crate) file_dependencies: HashMap<String, FileDependencyFact>,
 }
@@ -136,68 +137,17 @@ async fn load_inner(
 
 	let overwrite_inventory = collect_provider_inventory(&overwrite, ProviderKind::Overwrite, cancellation).await?;
 
-	let mut directories = HashMap::new();
-	let mut discovered_names = HashSet::new();
-	let mut entries = read_dir(&mods).await.context(ErrorMarker::environment_invalid(None))?;
-	while let Some(entry) = entries
-		.next_entry()
-		.await
-		.context(ErrorMarker::environment_invalid(None))?
-	{
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
-		let file_name = entry.file_name();
-		let spelling = file_name
-			.to_str()
-			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-		let name = ModName::new(spelling.to_owned()).context(ErrorMarker::environment_invalid(None))?;
-		let key = name.comparison_key().to_owned();
-
-		if directories.contains_key(&key)
-			|| !metadata(entry.path())
-				.await
-				.context(ErrorMarker::environment_invalid(None))?
-				.is_dir()
-		{
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-
-		let inventory = collect_provider_inventory(&entry.path(), ProviderKind::DataMod, cancellation).await?;
-
-		discovered_names.insert(name.as_str().to_owned());
-		directories.insert(key, (name, inventory));
-	}
-
 	let modlist = read(profile_dir.join("modlist.txt"))
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;
+	let installed_mods = parse_modlist(&modlist)?;
 
-	let parsed = parse_modlist(&modlist)?;
-	let listed_names: HashSet<_> = parsed.iter().map(|entry| entry.name.as_str().to_owned()).collect();
-	if listed_names != discovered_names {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
+	let unlisted_mod_names = match_mod_folders(&mods, &installed_mods, cancellation).await?;
 
-	let mut installed_mods = Vec::with_capacity(parsed.len());
-	let mut inventories = Vec::with_capacity(parsed.len());
-	for entry in parsed {
-		let Some((canonical, inventory)) = directories.remove(entry.name.comparison_key()) else {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		};
-		if canonical.as_str() != entry.name.as_str() {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		inventories.push(inventory);
-		installed_mods.push(InstalledMod {
-			name: canonical,
-			priority: entry.priority,
-			enabled: entry.enabled,
-		});
-	}
-	if !directories.is_empty() {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
+	let mut inventories = Vec::with_capacity(installed_mods.len());
+	for installed in &installed_mods {
+		let directory = mods.join(installed.name.as_str());
+		inventories.push(collect_provider_inventory(&directory, ProviderKind::DataMod, cancellation).await?);
 	}
 
 	let game_binding = binding.clone();
@@ -217,9 +167,74 @@ async fn load_inner(
 	Ok(EnvironmentSnapshotData {
 		game_binding,
 		installed_mods,
+		unlisted_mod_names,
 		current_winners,
 		file_dependencies,
 	})
+}
+
+/// Matches the `modlist.txt` entries to the entries of the `mods` directory.
+///
+/// Each listed mod needs a directory of exactly the listed spelling. Other entries in `mods` are
+/// not installed mods: they contribute nothing, so their types and contents are not checked.
+///
+/// Returns the names of the unlisted entries that are valid mod names. A new install cannot take
+/// these names, because its directory would collide with the entry.
+///
+/// # Errors
+///
+/// Returns `environment_invalid` with the mod name when a listed mod has no such directory.
+pub(crate) async fn match_mod_folders(
+	mods: &Path,
+	installed: &[InstalledMod],
+	cancellation: &CancellationToken,
+) -> Result<Vec<ModName>, ErrorMarker> {
+	let listed: HashMap<_, _> = installed
+		.iter()
+		.map(|installed| (installed.name.as_str(), &installed.name))
+		.collect();
+	let mut found = HashSet::new();
+	let mut unlisted = Vec::new();
+	let mut entries = read_dir(mods).await.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		// `modlist.txt` is UTF-8, so a name that is not cannot be listed.
+		let Ok(spelling) = entry.file_name().into_string() else {
+			continue;
+		};
+		let Some(name) = listed.get(spelling.as_str()) else {
+			// An invalid mod name cannot be an install target, so it cannot collide with one.
+			if let Ok(name) = ModName::new(spelling) {
+				unlisted.push(name);
+			}
+			continue;
+		};
+
+		let is_directory = metadata(entry.path())
+			.await
+			.context(ErrorMarker::environment_invalid(None).with_mod_name((*name).clone()))?
+			.is_dir();
+		if is_directory {
+			found.insert(spelling);
+		}
+	}
+
+	if let Some(missing) = installed
+		.iter()
+		.find(|installed| !found.contains(installed.name.as_str()))
+	{
+		return Err(report!(
+			ErrorMarker::environment_invalid(None).with_mod_name(missing.name.clone())
+		));
+	}
+	Ok(unlisted)
 }
 
 #[derive(Default)]
@@ -1514,6 +1529,87 @@ mod tests {
 			snapshot.file_dependencies.get("ordinary.dds").map(|fact| fact.state),
 			Some(FileDependencyState::Active)
 		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn snapshot_ignores_unlisted_entries_and_names_them() -> StdResult<(), Box<dyn Error>> {
+		let fixture = TempDir::new_in(current_dir()?)?;
+		let game = fixture.path().join("game");
+		fs::create_dir_all(game.join("Data"))?;
+		let root = EnvironmentRoot::new(fixture.path().join("environment"))
+			.expect("fixture environment root must be valid");
+		EnvironmentAdapter
+			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
+			.expect("fixture environment must initialize");
+		let mods = root.as_path().join("mods");
+		for name in ["Listed", "Unlisted"] {
+			fs::create_dir(mods.join(name))?;
+			fs::write(mods.join(name).join(format!("{name}.dds")), b"content")?;
+		}
+		fs::write(mods.join("Unlisted/meta.toml"), b"invalid")?;
+		fs::write(mods.join("stray.txt"), b"stray")?;
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+Listed\n")?;
+
+		let snapshot = load(
+			root.as_path(),
+			&initialization_plan(&game).game_binding,
+			InstallationStateAccess::Preview,
+			&CancellationToken::new(),
+		)
+		.await
+		.expect("unlisted entries must not invalidate the environment");
+
+		let installed: Vec<_> = snapshot
+			.installed_mods
+			.iter()
+			.map(|installed| installed.name.as_str())
+			.collect();
+		assert_eq!(installed, ["Listed"]);
+		let mut unlisted: Vec<_> = snapshot.unlisted_mod_names.iter().map(ModName::as_str).collect();
+		unlisted.sort_unstable();
+		assert_eq!(unlisted, ["Unlisted", "stray.txt"]);
+		let mut winners: Vec<_> = snapshot.current_winners.keys().map(DataRelativePath::as_str).collect();
+		winners.sort_unstable();
+		assert_eq!(winners, ["Listed.dds"]);
+		assert_eq!(fs::read(root.as_path().join("profile/modlist.txt"))?, b"+Listed\n");
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn snapshot_names_a_listed_mod_without_an_exactly_spelled_directory() -> StdResult<(), Box<dyn Error>> {
+		let fixture = TempDir::new_in(current_dir()?)?;
+		let game = fixture.path().join("game");
+		fs::create_dir_all(game.join("Data"))?;
+		let root = EnvironmentRoot::new(fixture.path().join("environment"))
+			.expect("fixture environment root must be valid");
+		EnvironmentAdapter
+			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
+			.expect("fixture environment must initialize");
+		fs::create_dir(root.as_path().join("mods/Present"))?;
+		fs::write(root.as_path().join("mods/File"), b"not a directory")?;
+
+		for (modlist, missing) in [
+			("+Missing\n", "Missing"),
+			("+present\n", "present"),
+			("-File\n", "File"),
+		] {
+			fs::write(root.as_path().join("profile/modlist.txt"), modlist)?;
+
+			let error = load(
+				root.as_path(),
+				&initialization_plan(&game).game_binding,
+				InstallationStateAccess::Preview,
+				&CancellationToken::new(),
+			)
+			.await
+			.expect_err("a listed mod without its directory must be invalid");
+
+			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
+			assert_eq!(error.current_context().mod_name().map(ModName::as_str), Some(missing));
+		}
 		Ok(())
 	}
 
