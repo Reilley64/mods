@@ -152,13 +152,13 @@ pub async fn create_shortcut(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::ErrorCode;
 	use crate::ErrorMarker;
 	use crate::ports::PortFuture;
 	use crate::ports::PreparedExecution;
 	use crate::settings::ResolvedSettings;
 	use crate::settings::SettingRecord;
 	use crate::settings::SettingSource;
-	use crate::shortcut::ShortcutFailure;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
 	use domain::ModName;
@@ -250,7 +250,7 @@ mod tests {
 			let mut dependencies = dependencies(None)?;
 			dependencies.locate_launcher = Arc::new(move || {
 				located.store(true, Ordering::SeqCst);
-				Box::pin(async { Err(report!(ShortcutFailure::InvalidLaunch)) })
+				Box::pin(async { Err(report!(ErrorMarker::shortcut_launch_invalid())) })
 			});
 			dependencies.resolve_launch_inputs = Arc::new(move |_, _, _, _| {
 				resolved.store(true, Ordering::SeqCst);
@@ -258,7 +258,7 @@ mod tests {
 			});
 			dependencies.persist = Arc::new(move |_| {
 				published.store(true, Ordering::SeqCst);
-				Box::pin(async { Err(report!(ShortcutFailure::Publication)) })
+				Box::pin(async { Err(report!(ErrorMarker::shortcut_failed())) })
 			});
 			let result = create_shortcut(
 				dependencies,
@@ -273,10 +273,9 @@ mod tests {
 			)
 			.await;
 			let error = result.err().ok_or_else(|| report!(CreateShortcutError))?;
-			assert!(error
-				.iter_reports()
-				.any(|cause| cause.downcast_current_context::<ShortcutFailure>()
-					== Some(&ShortcutFailure::InvalidName)));
+			assert!(error.iter_reports().any(|cause| cause
+				.downcast_current_context::<ErrorMarker>()
+				.is_some_and(|marker| marker.code() == ErrorCode::ShortcutNameInvalid)));
 			assert!(!called.load(Ordering::SeqCst));
 		}
 
@@ -402,7 +401,7 @@ mod tests {
 		let published = called.clone();
 		let mut dependencies = dependencies(None)?;
 		dependencies.locate_launcher =
-			Arc::new(|| Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) }));
+			Arc::new(|| Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) }));
 		dependencies.resolve_launch_inputs = Arc::new(move |_, _, _, _| {
 			resolved.store(true, Ordering::SeqCst);
 			Box::pin(async { Err(report!(ErrorMarker::program_unsupported())) }) as PortFuture<_>
@@ -424,13 +423,9 @@ mod tests {
 		)
 		.await;
 		let error = result.err().ok_or_else(|| report!(CreateShortcutError))?;
-		assert!(error
-			.iter_reports()
-			.any(|cause| cause.downcast_current_context::<ShortcutFailure>()
-				== Some(&ShortcutFailure::Unsupported)));
-		assert!(!error
-			.iter_reports()
-			.any(|cause| cause.downcast_current_context::<ErrorMarker>().is_some()));
+		assert!(error.iter_reports().any(|cause| cause
+			.downcast_current_context::<ErrorMarker>()
+			.is_some_and(|marker| marker.code() == ErrorCode::ShortcutUnsupported)));
 		assert!(!called.load(Ordering::SeqCst));
 		Ok(())
 	}

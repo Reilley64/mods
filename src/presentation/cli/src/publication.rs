@@ -69,6 +69,7 @@ mod tests {
 
 	fn required_output() -> RunOutcome {
 		RunOutcome {
+			presentation: None,
 			execution_failed: false,
 			diagnostic_log: None,
 			status: 0,

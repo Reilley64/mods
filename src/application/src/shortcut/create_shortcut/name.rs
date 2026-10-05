@@ -1,8 +1,8 @@
-use crate::shortcut::ShortcutFailure;
+use crate::ErrorMarker;
 use rootcause::Result;
 use rootcause::report;
 
-pub(super) fn shortcut_name(value: &str, explicit: bool) -> Result<String, ShortcutFailure> {
+pub(super) fn shortcut_name(value: &str, explicit: bool) -> Result<String, ErrorMarker> {
 	let forbidden = |character: char| character < ' ' || r#"<>:"/\|?*"#.contains(character);
 	let mut name = if explicit {
 		value.to_owned()
@@ -44,7 +44,7 @@ pub(super) fn shortcut_name(value: &str, explicit: bool) -> Result<String, Short
 		|| name.encode_utf16().count() > 251
 		|| (reserved && explicit)
 	{
-		return Err(report!(ShortcutFailure::InvalidName));
+		return Err(report!(ErrorMarker::shortcut_name_invalid()));
 	}
 
 	Ok(name)

@@ -5,9 +5,9 @@ A **Data Mod** contributes only beneath the game's `Data` directory. Use archive
 ## Preview, then install
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures.zip' --name 'Mojave Textures' --dry-run
+mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures.zip' --name 'Mojave Textures' --dry-run
 # After installation approval:
-mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures.zip' --name 'Mojave Textures'
+mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures.zip' --name 'Mojave Textures'
 ```
 
 `ARCHIVE` or a supported Nexus URL is required. `--name NAME` overrides the archive filename with its final extension removed. The **Mod Name** is case-insensitively unique. Use a valid directory name; reserved/invalid names fail instead of being silently repaired.
@@ -26,7 +26,7 @@ mods --environment 'D:\Mod Environments\Mojave' install 'https://www.nexusmods.c
 mods --environment 'D:\Mod Environments\Mojave' install 'https://www.nexusmods.com/newvegas/mods/12345?tab=files&file_id=67890' --dry-run
 ```
 
-These IDs are examples. An explicit URL file ID or `--file ID` selects that file. Conflicting IDs fail. Without a file ID, the command selects only when exactly one available Main file exists. Otherwise it lists available file IDs, names, versions, and categories and requires `--file`. It does not guess by date or version. Other games, NXM links, and malformed URLs are unsupported.
+These IDs are examples. An explicit URL file ID or `--file ID` selects that file. Conflicting IDs fail. Without a file ID, the command selects only when exactly one available Main file exists. Otherwise it lists available file IDs, names, versions, and categories and requires `--file`. With `--json`, this is a `nexus_file_selection_required` Problem on stderr with status 2 and `details.files` in the published order. It does not guess by date or version. Other games, NXM links, and malformed URLs are unsupported.
 
 New downloads require a Premium account API key. Add optional `nexus_api_key` to the selected environment's `mods.toml`, or supply `MODS_NEXUS_API_KEY` in the process environment. The environment variable overrides the stored key. Storage in `mods.toml` is plaintext. Do not share that file with a key in it. `config get` and `config list` never return the key, and there is no key argument or setter command. Changing `game-dir` preserves the stored key.
 
@@ -43,27 +43,27 @@ Successful URL installations write a `[nexus]` table in the Data Mod's `meta.tom
 ## Replacement
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-update.7z' --name 'Mojave Textures' --replace --dry-run
+mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-update.7z' --name 'Mojave Textures' --replace --dry-run
 # Only after replacement is authorized:
-mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-update.7z' --name 'Mojave Textures' --replace
+mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-update.7z' --name 'Mojave Textures' --replace
 ```
 
 `--replace` requires an existing Data Mod. It retains the existing canonical Mod Name, Mod Priority, list position, and enabled state. Without `--replace`, a matching name fails with `mod_already_exists`; replacement of a missing name fails with `mod_not_found`. Never add `--replace` automatically to bypass a collision.
 
 ## FOMOD Choices: resubmit complete state
 
-1. Start with `install ARCHIVE --dry-run` and inspect stdout. If it reports `outcome = "additional_selections_required"`, read every unresolved group's `id`, label, description, cardinality, and options. Use actual returned IDs, not display labels.
+1. Start with `mods --json install ARCHIVE --dry-run` and inspect stdout. If `outcome` is `"additional_selections_required"`, read every unresolved group's `id`, label, description, cardinality, and options. Use actual returned IDs, not display labels.
 2. Ask the user for unresolved preferences. Select only options marked selectable and respect cardinality. Optional groups can expose a synthetic `none`; use that returned option ID when appropriate, rather than inventing an empty selection.
 3. Repeat `--choice 'GROUP=OPTION'` in order. Each invocation carries **all previously accepted choices plus the new choices**. There is no persisted installation session. Values are not trimmed; copy IDs exactly. Changing an earlier choice can change which later groups exist.
-4. Repeat the preview until stdout says `outcome = "preview"`. Review the completed Install Plan. After installation approval, rerun with the full choice list and the same archive/name/replacement intent, omitting `--dry-run`. Inspect the outcome again; changed inputs may require choices again.
+4. Repeat the preview until `outcome` is `"preview"`. Review the completed Install Plan. After installation approval, rerun with the full choice list and the same archive/name/replacement intent, omitting `--dry-run`. Inspect the outcome again; changed inputs may require choices again.
 
 Illustrative syntax only, assuming the output actually returned `visuals`, `high`, `extras`, and `none`:
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Fomod.zip' --choice 'visuals=high' --dry-run
-mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Fomod.zip' --choice 'visuals=high' --choice 'extras=none' --dry-run
+mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Fomod.zip' --choice 'visuals=high' --dry-run
+mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Fomod.zip' --choice 'visuals=high' --choice 'extras=none' --dry-run
 # After approval, preserve the COMPLETE accepted list:
-mods --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Fomod.zip' --choice 'visuals=high' --choice 'extras=none'
+mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Fomod.zip' --choice 'visuals=high' --choice 'extras=none'
 ```
 
 An `invalid_selection` error can include `field`, `group_id`, `option_id`, and zero-based `sequence`. Correct invalid, repeated, out-of-order, hidden, or unselectable choices from current output; do not keep sending only the newest choice. Unsupported installer behavior is not a reason to bypass validation.
@@ -72,9 +72,10 @@ An `invalid_selection` error can include `field`, `group_id`, `option_id`, and z
 
 | Status and stdout | Meaning | Next action |
 | --- | --- | --- |
-| 0, `outcome = "additional_selections_required"` | Choices incomplete; no completed installation | Resubmit complete choices |
-| 0, `outcome = "preview"` | Completed Install Plan only; no publication | Review and obtain installation approval |
-| 0, empty stdout from non-dry-run install | Completed installation | Report completion and any stderr warnings; new install remains disabled |
-| Nonzero | Failed/cancelled operation | Read stderr and [troubleshooting](troubleshooting.md); preserve partial state |
+| 0, JSON `outcome` is `"additional_selections_required"`, or text `outcome = "additional_selections_required"` | Choices incomplete; no completed installation | Resubmit complete choices |
+| 0, JSON `outcome` is `"preview"`, or text `outcome = "preview"` | Completed Install Plan only; no publication | Review and obtain installation approval |
+| 0, JSON `outcome` is `"installed"`, or empty text stdout from a non-dry-run install | Completed installation | Report completion and `warnings` (stderr warning lines in text mode); new install remains disabled |
+| 2, `nexus_file_selection_required` (JSON Problem with `details.files`, or text `error [nexus_file_selection_required]` lines) | No file selected; nothing downloaded or installed | Ask the user to pick a `file_id`, then rerun with `--file ID` |
+| Nonzero | Failed/cancelled operation | Read the stderr Problem Details (or the text `error [code]` lines) and [troubleshooting](troubleshooting.md); preserve partial state |
 
 Incomplete choices can occur with or without `--dry-run`. Warnings can appear in every outcome. Never equate exit zero alone with installed files.

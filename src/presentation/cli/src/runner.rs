@@ -9,6 +9,9 @@ use crate::diagnostics::DiagnosticSession;
 use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
 use crate::error;
+use crate::json_conflicts;
+use crate::json_install;
+use crate::json_output;
 use crate::operation;
 use crate::output;
 use crate::path_resolution::resolve_path;
@@ -20,6 +23,7 @@ use application::conflicts::explain_path;
 use application::conflicts::inspect_mod_conflicts;
 use application::conflicts::list_effective_conflicts;
 use application::environment::InitializeEnvironmentDependencies;
+use application::environment::InitializeEnvironmentWarning;
 use application::environment::initialize_environment;
 use application::execution::ExecuteProgramDependencies;
 use application::execution::ExecutionWarning;
@@ -30,6 +34,7 @@ use application::installation::InstallModOutput;
 use application::installation::ModSource;
 use application::installation::RemoteModSource;
 use application::installation::install_mod;
+use application::ports::ProgressEvent;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
 use application::settings::SetGameDirectoryDependencies;
@@ -45,6 +50,7 @@ use domain::DataRelativePath;
 use domain::EnvironmentRoot;
 use domain::FomodChoice;
 use domain::GameInstallationPath;
+use domain::InvalidEnvironmentRoot;
 use domain::ModName;
 use domain::OutputTarget;
 use domain::Program;
@@ -53,11 +59,18 @@ use domain::WorkingDirectory;
 use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
+use serde_json::Value;
+use serde_json::json;
 use std::env::current_dir;
 use std::env::var_os;
+use std::error::Error;
 use std::ffi::OsString;
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -82,20 +95,93 @@ pub(crate) struct RunOutcome {
 	pub(crate) stderr: String,
 	pub(crate) execution_failed: bool,
 	pub(crate) diagnostic_log: Option<PathBuf>,
+	pub(crate) presentation: Option<JsonPresentation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum JsonPresentation {
+	Success(Value),
+	Problem(Value),
+}
+
+impl RunOutcome {
+	fn publish_json(mut self) -> Self {
+		if let Some(presentation) = self.presentation.take() {
+			match presentation {
+				JsonPresentation::Success(value) => {
+					self.stdout = json_output::document(&value);
+					self.stderr.clear();
+				}
+				JsonPresentation::Problem(value) => {
+					self.stdout.clear();
+					self.stderr = json_output::document(&value);
+				}
+			}
+		}
+
+		self
+	}
+}
+
+fn success(stdout: String, stderr: String, json_mode: bool, mut value: Value, warnings: Vec<Value>) -> RunOutcome {
+	let mut outcome = RunOutcome {
+		presentation: None,
+		execution_failed: false,
+		diagnostic_log: None,
+		status: 0,
+		stdout,
+		stderr,
+	};
+	if json_mode {
+		value["warnings"] = Value::Array(warnings);
+		outcome.presentation = Some(JsonPresentation::Success(value));
+	}
+	outcome
+}
+
+#[derive(Debug)]
+enum RootSelectionError {
+	LocalAppDataUnavailable,
+	InvalidRoot(InvalidEnvironmentRoot),
+}
+
+impl RootSelectionError {
+	fn message(&self) -> &'static str {
+		match self {
+			Self::LocalAppDataUnavailable => "LOCALAPPDATA is unavailable",
+			Self::InvalidRoot(_) => "environment root must be an absolute path",
+		}
+	}
+}
+
+impl fmt::Display for RootSelectionError {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str(self.message())
+	}
+}
+
+impl Error for RootSelectionError {
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
+		match self {
+			Self::LocalAppDataUnavailable => None,
+			Self::InvalidRoot(cause) => Some(cause),
+		}
+	}
 }
 
 fn select_environment_root(
 	cli: &Cli,
 	startup_directory: &Path,
 	local_app_data: Option<&Path>,
-) -> Result<EnvironmentRoot, String> {
+) -> Result<EnvironmentRoot, RootSelectionError> {
 	let path = match &cli.environment {
 		Some(path) => resolve_path(path, startup_directory),
 		None => local_app_data
-			.ok_or_else(|| "LOCALAPPDATA is unavailable".to_owned())?
+			.ok_or(RootSelectionError::LocalAppDataUnavailable)?
 			.join("mods/environments/default"),
 	};
-	EnvironmentRoot::new(path).map_err(|report| report.current_context().to_string())
+
+	EnvironmentRoot::new(path).map_err(|report| RootSelectionError::InvalidRoot(report.current_context().clone()))
 }
 
 pub(crate) async fn execute(
@@ -106,14 +192,26 @@ pub(crate) async fn execute(
 ) -> RunOutcome {
 	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
 		Ok(root) => root,
-		Err(message) => {
+		Err(selection_error) => {
+			let message = selection_error.message();
+			let presentation = cli.json.then(|| {
+				JsonPresentation::Problem(json_output::problem(
+					"environment_root_selection_failed",
+					"Environment Root selection failed",
+					message,
+					2,
+					json!({}),
+				))
+			});
 			return RunOutcome {
+				presentation,
 				execution_failed: true,
 				diagnostic_log: None,
 				status: 2,
 				stdout: String::new(),
 				stderr: format!("error: {message}\n"),
-			};
+			}
+			.publish_json();
 		}
 	};
 
@@ -158,19 +256,34 @@ pub(crate) async fn execute(
 			if let Some(id) = session_id {
 				stderr.push_str(&format!("diagnostic session: {id}\n"));
 			}
+
 			if let Some(session) = session.take() {
 				session.finish("failure");
 			}
+
+			let mut presentation =
+				cli.json.then(|| JsonPresentation::Problem(json_output::marker_problem(&marker, 1)));
+			if let Some(JsonPresentation::Problem(problem)) = &mut presentation {
+				if !diagnostic_warning.is_empty() {
+					problem["warnings"] = json!([json_output::diagnostic_warning()]);
+				}
+				if let Some(id) = session_id {
+					problem["instance"] = json!(id.to_string());
+				}
+			}
 			return RunOutcome {
+				presentation,
 				execution_failed: true,
 				diagnostic_log,
 				status: 1,
 				stdout: String::new(),
 				stderr,
-			};
+			}
+			.publish_json();
 		}
 	};
 
+	let json_mode = cli.json;
 	let quiet_success = matches!(&cli.command, Command::Shortcut(_));
 	let work = dispatch(
 		cli.command,
@@ -178,6 +291,7 @@ pub(crate) async fn execute(
 		root,
 		startup_directory,
 		cli.log_level.to_string(),
+		json_mode,
 	);
 	let mut result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
@@ -185,9 +299,6 @@ pub(crate) async fn execute(
 	};
 
 	result.diagnostic_log = diagnostic_log;
-	if !quiet_success || result.status != 0 {
-		result.stderr.push_str(&diagnostic_warning);
-	}
 	let terminal = if result.status == 0 {
 		"success"
 	} else if result.status == 0xC000_013A {
@@ -200,12 +311,36 @@ pub(crate) async fn execute(
 		session.finish(terminal);
 	}
 
-	if result.status != 0
-		&& let Some(id) = session_id
-	{
-		result.stderr.push_str(&format!("diagnostic session: {id}\n"));
+	if let Some(presentation) = &mut result.presentation {
+		match presentation {
+			JsonPresentation::Success(value) => {
+				if !diagnostic_warning.is_empty()
+					&& let Some(warnings) = value["warnings"].as_array_mut()
+				{
+					warnings.push(json_output::diagnostic_warning());
+				}
+			}
+			JsonPresentation::Problem(problem) => {
+				if !diagnostic_warning.is_empty() {
+					problem["warnings"] = json!([json_output::diagnostic_warning()]);
+				}
+				if let Some(id) = session_id {
+					problem["instance"] = json!(id.to_string());
+				}
+			}
+		}
+	} else {
+		if !quiet_success || result.status != 0 {
+			result.stderr.push_str(&diagnostic_warning);
+		}
+		if result.status != 0
+			&& let Some(id) = session_id
+		{
+			result.stderr.push_str(&format!("diagnostic session: {id}\n"));
+		}
 	}
-	result
+
+	result.publish_json()
 }
 
 async fn dispatch(
@@ -214,6 +349,7 @@ async fn dispatch(
 	root: EnvironmentRoot,
 	startup: PathBuf,
 	log_level: String,
+	json_mode: bool,
 ) -> RunOutcome {
 	match command {
 		Command::Init { game_install } => {
@@ -222,7 +358,7 @@ async fn dispatch(
 				.map(GameInstallationPath::new)
 				.transpose()
 			else {
-				return marker_outcome(ErrorMarker::game_install_invalid());
+				return marker_outcome(ErrorMarker::game_install_invalid(), json_mode);
 			};
 			match initialize_environment(
 				dependencies.initialize_environment,
@@ -234,43 +370,50 @@ async fn dispatch(
 			{
 				Ok(output) => {
 					let (stdout, stderr) = output::initialization(&output);
-					RunOutcome {
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 0,
-						stdout,
-						stderr,
-					}
+					let warnings = output
+						.warnings
+						.iter()
+						.map(|warning| match warning {
+							InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => {
+								json_output::warning(
+									"bethesda_registry_fallback_used",
+									"Bethesda registry fallback was used",
+									json!({}),
+								)
+							}
+						})
+						.collect();
+					success(stdout, stderr, json_mode, json!({}), warnings)
 				}
-				Err(report) => report_outcome(&report),
+				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
 		Command::Config { command } => match command {
 			ConfigCommand::List => match list_settings(dependencies.list_settings).await {
-				Ok(output) => RunOutcome {
-					execution_failed: false,
-					diagnostic_log: None,
-					status: 0,
-					stdout: output::settings(&output.settings),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(output) => success(
+					output::settings(&output.settings),
+					String::new(),
+					json_mode,
+					json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
+					vec![],
+				),
+				Err(report) => report_outcome(&report, json_mode),
 			},
 			ConfigCommand::Get { key } => match get_setting(dependencies.get_setting, key.into()).await {
-				Ok(output) => RunOutcome {
-					execution_failed: false,
-					diagnostic_log: None,
-					status: 0,
-					stdout: output::setting(&output.setting),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(output) => success(
+					output::setting(&output.setting),
+					String::new(),
+					json_mode,
+					json!({"setting": json_output::setting(&output.setting)}),
+					vec![],
+				),
+				Err(report) => report_outcome(&report, json_mode),
 			},
 			ConfigCommand::Set {
 				command: SetCommand::GameDir { value },
 			} => {
 				let Ok(path) = GameInstallationPath::new(resolve_path(&value, &startup)) else {
-					return marker_outcome(ErrorMarker::setting_value_invalid());
+					return marker_outcome(ErrorMarker::setting_value_invalid(), json_mode);
 				};
 				match set_game_directory(
 					dependencies.set_game_directory,
@@ -281,15 +424,10 @@ async fn dispatch(
 				{
 					Ok(output) => {
 						let (stdout, stderr) = output::set_game_directory(&output);
-						RunOutcome {
-							execution_failed: false,
-							diagnostic_log: None,
-							status: 0,
-							stdout,
-							stderr,
-						}
+						let warnings = json_output::game_directory_warnings(&output.warnings);
+						success(stdout, stderr, json_mode, json!({}), warnings)
 					}
-					Err(report) => report_outcome(&report),
+					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
 		},
@@ -305,17 +443,17 @@ async fn dispatch(
 				})
 			} else {
 				if arguments.file.is_some() {
-					return marker_outcome(ErrorMarker::nexus_source_invalid());
+					return marker_outcome(ErrorMarker::nexus_source_invalid(), json_mode);
 				}
 				let Ok(archive) = ArchivePath::new(resolve_path(&arguments.archive, &startup)) else {
-					return marker_outcome(ErrorMarker::unsafe_archive());
+					return marker_outcome(ErrorMarker::unsafe_archive(), json_mode);
 				};
 				ModSource::Local(archive)
 			};
 
 			let mod_name = if let Some(value) = arguments.name {
 				let Ok(value) = ModName::new(value) else {
-					return marker_outcome(ErrorMarker::invalid_mod_name());
+					return marker_outcome(ErrorMarker::invalid_mod_name(), json_mode);
 				};
 				Some(value)
 			} else {
@@ -323,7 +461,7 @@ async fn dispatch(
 			};
 			let choices = match parse_choices(arguments.choice) {
 				Ok(choices) => choices,
-				Err(report) => return report_outcome(&report),
+				Err(report) => return report_outcome(&report, json_mode),
 			};
 
 			match install_mod(
@@ -339,7 +477,7 @@ async fn dispatch(
 			{
 				Ok(InstallModOutput::SelectionRequired(files)) => {
 					let mut stderr = "error [nexus_file_selection_required]: Select a file with --file <id>.\n".to_owned();
-					for file in files {
+					for file in &files {
 						stderr.push_str(&format!(
 							"file_id = {}, name = {}, version = {}, category = {}\n",
 							file.file_id,
@@ -349,6 +487,11 @@ async fn dispatch(
 						));
 					}
 					RunOutcome {
+						presentation: json_mode.then(|| {
+							JsonPresentation::Problem(
+								json_install::file_selection_required(&files),
+							)
+						}),
 						execution_failed: false,
 						diagnostic_log: None,
 						status: 2,
@@ -360,34 +503,22 @@ async fn dispatch(
 					output_value,
 				))) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
-					RunOutcome {
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 0,
-						stdout,
-						stderr,
-					}
+					let value = json_install::additional(&output_value);
+					let warnings = json_install::warnings(&output_value.warnings);
+					success(stdout, stderr, json_mode, value, warnings)
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::Preview(output_value))) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
-					RunOutcome {
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 0,
-						stdout,
-						stderr,
-					}
+					let value = json_install::preview(&output_value);
+					let warnings = json_install::warnings(&output_value.plan.warnings);
+					success(stdout, stderr, json_mode, value, warnings)
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::Installed(output_value))) => {
-					RunOutcome {
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 0,
-						stdout: String::new(),
-						stderr: output::install_warnings(&output_value.warnings),
-					}
+					let stderr = output::install_warnings(&output_value.warnings);
+					let warnings = json_install::warnings(&output_value.warnings);
+					success(String::new(), stderr, json_mode, json_install::installed(), warnings)
 				}
-				Err(report) => report_outcome(&report),
+				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
 		Command::Conflicts { command } => match command {
@@ -398,14 +529,14 @@ async fn dispatch(
 			)
 			.await
 			{
-				Ok(output) => RunOutcome {
-					execution_failed: false,
-					diagnostic_log: None,
-					status: 0,
-					stdout: conflict_output::list(&output),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(output) => success(
+					conflict_output::list(&output),
+					String::new(),
+					json_mode,
+					json_conflicts::list(&output),
+					vec![],
+				),
+				Err(report) => report_outcome(&report, json_mode),
 			},
 			ConflictsCommand::Inspect {
 				mod_name,
@@ -416,6 +547,7 @@ async fn dispatch(
 					Err(report) => {
 						return report_outcome(
 							&report.context(ErrorMarker::invalid_mod_name()),
+							json_mode,
 						);
 					}
 				};
@@ -428,14 +560,14 @@ async fn dispatch(
 				)
 				.await
 				{
-					Ok(output) => RunOutcome {
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 0,
-						stdout: conflict_output::inspection(&output),
-						stderr: String::new(),
-					},
-					Err(report) => report_outcome(&report),
+					Ok(output) => success(
+						conflict_output::inspection(&output),
+						String::new(),
+						json_mode,
+						json_conflicts::inspection(&output),
+						vec![],
+					),
+					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
 			ConflictsCommand::Explain { path, compare_content } => {
@@ -444,6 +576,7 @@ async fn dispatch(
 					Err(report) => {
 						return report_outcome(
 							&report.context(ErrorMarker::invalid_data_path()),
+							json_mode,
 						);
 					}
 				};
@@ -456,21 +589,21 @@ async fn dispatch(
 				)
 				.await
 				{
-					Ok(output) => RunOutcome {
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 0,
-						stdout: conflict_output::explanation(&output),
-						stderr: String::new(),
-					},
-					Err(report) => report_outcome(&report),
+					Ok(output) => success(
+						conflict_output::explanation(&output),
+						String::new(),
+						json_mode,
+						json_conflicts::explanation(&output),
+						vec![],
+					),
+					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
 		},
 		Command::Shortcut(arguments) => {
 			let output_target = if let Some(name) = arguments.output_target {
 				let Ok(name) = ModName::new(name) else {
-					return marker_outcome(ErrorMarker::invalid_output_target());
+					return marker_outcome(ErrorMarker::invalid_output_target(), json_mode);
 				};
 				OutputTarget::DataMod(name)
 			} else {
@@ -480,18 +613,18 @@ async fn dispatch(
 				arguments.cwd.as_deref().unwrap_or(&startup),
 				&startup,
 			)) else {
-				return marker_outcome(ErrorMarker::invalid_working_directory());
+				return marker_outcome(ErrorMarker::invalid_working_directory(), json_mode);
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
-				return marker_outcome(ErrorMarker::program_not_found());
+				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
 			};
 			let Ok(program) = Program::new(program) else {
-				return marker_outcome(ErrorMarker::program_not_found());
+				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
 			};
 			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
 			else {
-				return marker_outcome(ErrorMarker::program_launch_failed());
+				return marker_outcome(ErrorMarker::program_launch_failed(), json_mode);
 			};
 
 			match create_shortcut(
@@ -507,24 +640,22 @@ async fn dispatch(
 			)
 			.await
 			{
-				Ok(_) => RunOutcome {
-					execution_failed: false,
-					diagnostic_log: None,
-					status: 0,
-					stdout: String::new(),
-					stderr: String::new(),
-				},
-				Err(report) => report_outcome(&report),
+				Ok(_) => success(String::new(), String::new(), json_mode, json!({}), vec![]),
+				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
 		Command::Exec(arguments) => {
 			if arguments.hidden && !cfg!(windows) {
+				let marker = ErrorMarker::program_unsupported();
 				return RunOutcome {
-					status: 126,
-					stdout: String::new(),
-					stderr: "error [program_unsupported]: hidden managed execution is unsupported on this platform\n".to_owned(),
 					execution_failed: true,
-					diagnostic_log: None,
+					..problem_outcome(
+						error::execution_exit_status(marker.code()),
+						"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
+							.to_owned(),
+						json_mode,
+						Some(&marker),
+					)
 				};
 			}
 
@@ -532,6 +663,8 @@ async fn dispatch(
 				let Ok(name) = ModName::new(name) else {
 					return execution_report_outcome(
 						&report!(ErrorMarker::invalid_output_target()),
+						json_mode,
+						false,
 					);
 				};
 				OutputTarget::DataMod(name)
@@ -547,19 +680,52 @@ async fn dispatch(
 				})
 				.transpose()
 			else {
-				return execution_report_outcome(&report!(ErrorMarker::invalid_working_directory()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::invalid_working_directory()),
+					json_mode,
+					false,
+				);
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
-				return execution_report_outcome(&report!(ErrorMarker::program_not_found()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::program_not_found()),
+					json_mode,
+					false,
+				);
 			};
 			let Ok(program) = Program::new(program) else {
-				return execution_report_outcome(&report!(ErrorMarker::program_not_found()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::program_not_found()),
+					json_mode,
+					false,
+				);
 			};
 			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
 			else {
-				return execution_report_outcome(&report!(ErrorMarker::program_launch_failed()));
+				return execution_report_outcome(
+					&report!(ErrorMarker::program_launch_failed()),
+					json_mode,
+					false,
+				);
 			};
+
+			let launched = Arc::new(AtomicBool::new(false));
+			let launch_state = launched.clone();
+			let mut execution = dependencies.execute_program;
+			let previous_reporter = execution.report_progress.take();
+			execution.report_progress = Some(Arc::new(move |event| {
+				let launch_state = launch_state.clone();
+				let previous_reporter = previous_reporter.clone();
+				Box::pin(async move {
+					if event == ProgressEvent::ExecutionPrepared {
+						launch_state.store(true, Ordering::Release);
+					}
+					if let Some(reporter) = previous_reporter {
+						reporter.call((event,)).await;
+					}
+				})
+			}));
 
 			let signals = if arguments.hidden {
 				None
@@ -573,7 +739,7 @@ async fn dispatch(
 				.map_or_else(CancellationToken::new, |signals| signals.cancellation.clone());
 
 			match execute_program(
-				dependencies.execute_program,
+				execution,
 				output_target,
 				working_directory,
 				program,
@@ -596,6 +762,7 @@ async fn dispatch(
 						stderr.push_str(&message);
 					}
 					RunOutcome {
+						presentation: None,
 						execution_failed: false,
 						diagnostic_log: None,
 						status: output.status.value(),
@@ -603,7 +770,9 @@ async fn dispatch(
 						stderr,
 					}
 				}
-				Err(report) => execution_report_outcome(&report),
+				Err(report) => {
+					execution_report_outcome(&report, json_mode, launched.load(Ordering::Acquire))
+				}
 			}
 		}
 	}
@@ -622,14 +791,12 @@ pub(crate) fn hidden_failure_dialog(outcome: &RunOutcome) -> Option<String> {
 	Some(message)
 }
 
-fn execution_report_outcome<E>(report: &Report<E>) -> RunOutcome {
+fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bool) -> RunOutcome {
+	let marker = error::application_marker(report);
+	let status = marker.map_or(125, |marker| error::execution_exit_status(marker.code()));
 	RunOutcome {
 		execution_failed: true,
-		diagnostic_log: None,
-		status: error::application_marker(report)
-			.map_or(125, |marker| error::execution_exit_status(marker.code())),
-		stdout: String::new(),
-		stderr: error::application_error(report),
+		..problem_outcome(status, error::application_error(report), json_mode && !launched, marker)
 	}
 }
 
@@ -653,25 +820,39 @@ fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarke
 		.collect()
 }
 
-fn marker_outcome(marker: ErrorMarker) -> RunOutcome {
+fn marker_outcome(marker: ErrorMarker, json_mode: bool) -> RunOutcome {
 	let status = error::exit_status(marker.code());
-	RunOutcome {
-		execution_failed: false,
-		diagnostic_log: None,
-		status,
-		stdout: String::new(),
-		stderr: error::marker(&marker),
-	}
+	problem_outcome(status, error::marker(&marker), json_mode, Some(&marker))
 }
 
-fn report_outcome<E>(report: &Report<E>) -> RunOutcome {
-	let status = error::application_marker(report).map_or(1, |marker| error::exit_status(marker.code()));
+fn report_outcome<E>(report: &Report<E>, json_mode: bool) -> RunOutcome {
+	let marker = error::application_marker(report);
+	let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
+	problem_outcome(status, error::application_error(report), json_mode, marker)
+}
+
+fn problem_outcome(status: u32, stderr: String, json_mode: bool, marker: Option<&ErrorMarker>) -> RunOutcome {
+	let presentation = json_mode.then(|| {
+		JsonPresentation::Problem(marker.map_or_else(
+			|| {
+				json_output::problem(
+					"operation_failed",
+					"Operation failed",
+					"operation failed",
+					status,
+					json!({}),
+				)
+			},
+			|marker| json_output::marker_problem(marker, status),
+		))
+	});
 	RunOutcome {
+		presentation,
 		execution_failed: false,
 		diagnostic_log: None,
 		status,
 		stdout: String::new(),
-		stderr: error::application_error(report),
+		stderr,
 	}
 }
 
@@ -723,6 +904,7 @@ mod tests {
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
 	use application::installation::ArchiveIndex;
+	use application::installation::DownloadModFile;
 	use application::installation::DownloadModOutput;
 	use application::installation::DownloadedMod;
 	use application::installation::FomodGroup;
@@ -741,6 +923,7 @@ mod tests {
 	use application::ports::PortFuture;
 	use application::ports::PrepareExecutionEnvironment;
 	use application::ports::PreparedExecution;
+	use application::ports::ProgressEvent;
 	use application::ports::ResolveLaunchInputs;
 	use application::ports::ResolvedGameInstallation;
 	use application::ports::ResolvedLaunch;
@@ -754,11 +937,11 @@ mod tests {
 	use application::settings::SettingSource;
 	use application::settings::SettingValue;
 	use application::shortcut::CreateShortcutDependencies;
-	use application::shortcut::ShortcutFailure;
 	use clap::Parser;
 	use domain::ArchiveIdentity;
 	use domain::ArchivePath;
 	use domain::DataRelativePath;
+	use domain::EnvironmentRoot;
 	use domain::FomodCardinality;
 	use domain::FomodCondition;
 	use domain::GameBinding;
@@ -778,10 +961,12 @@ mod tests {
 	use domain::SteamBuildId;
 	#[cfg(windows)]
 	use domain::WorkingDirectory;
-	#[cfg(not(windows))]
 	use infrastructure_dependencies::Resources;
 	use rootcause::compat::boxed_error::IntoBoxedError;
 	use rootcause::report;
+	use serde_json::Value;
+	use serde_json::from_str;
+	use serde_json::json;
 	use std::collections::HashMap;
 	use std::error::Error;
 	use std::ffi::OsString;
@@ -801,6 +986,7 @@ mod tests {
 	#[test]
 	fn hidden_dialog_reports_failures_but_not_child_exit_codes() {
 		let failure = RunOutcome {
+			presentation: None,
 			status: 126,
 			stdout: String::new(),
 			stderr: "error [program_launch_failed]: launch failed\n".into(),
@@ -982,15 +1168,17 @@ mod tests {
 		Dependencies {
 			create_shortcut: CreateShortcutDependencies {
 				locate_launcher: Arc::new(|| {
-					Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
 				}),
 				resolve_launch_inputs: resolve_launch_inputs.clone(),
 				prepare_execution_environment: prepare_execution_environment.clone(),
 				load_settings: list_settings.load_settings.clone(),
 				locate_environment_root: Arc::new(|| {
-					Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
 				}),
-				persist: Arc::new(|_| Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })),
+				persist: Arc::new(|_| {
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
+				}),
 			},
 			execution_force_cancellation: CancellationToken::new(),
 			execute_program: ExecuteProgramDependencies {
@@ -1909,6 +2097,310 @@ mod tests {
 		Ok(())
 	}
 	#[tokio::test]
+	async fn json_settings_root_failures_and_mutations_have_distinct_documents() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let root_failure = run(
+			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			None,
+			|_| Err(ErrorMarker::io_failure()),
+		)
+		.await?;
+		let error: Value = from_str(&root_failure.stderr)?;
+		assert_eq!(root_failure.status, 2);
+		assert_eq!(error["code"], "environment_root_selection_failed");
+		assert_eq!(error["exit_code"], 2);
+		assert!(root_failure.stdout.is_empty());
+
+		let settings = run(
+			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| successful_dependencies(temp.path()),
+		)
+		.await?;
+		let document: Value = from_str(&settings.stdout)?;
+		assert_eq!(document, json!({"settings": [], "warnings": []}));
+		assert!(settings.stderr.is_empty());
+
+		let mutation = run(
+			arguments!["mods", "--json", "--log-level", "off", "init", "--game-install", "game"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| successful_dependencies(temp.path()),
+		)
+		.await?;
+		assert_eq!(from_str::<Value>(&mutation.stdout)?, json!({"warnings": []}));
+		assert!(mutation.stderr.is_empty());
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_exec_distinguishes_prelaunch_and_postlaunch_failures() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for launched in [false, true] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, reporter, _| {
+				Box::pin(async move {
+					if launched && let Some(reporter) = reporter {
+						reporter.call((ProgressEvent::ExecutionPrepared,)).await;
+					}
+					Err(report!(ErrorMarker::execution_supervision_failed()))
+				}) as PortFuture<_>
+			});
+			let outcome = run(
+				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_| Ok(dependencies),
+			)
+			.await?;
+			assert_eq!(outcome.status, 125);
+			if launched {
+				assert!(outcome.stderr.starts_with("error [execution_supervision_failed]:"));
+			} else {
+				let problem: Value = from_str(&outcome.stderr)?;
+				assert_eq!(problem["code"], "execution_supervision_failed");
+			}
+			assert!(outcome.stdout.is_empty());
+		}
+		Ok(())
+	}
+	#[tokio::test]
+	async fn json_diagnostic_warning_and_failure_reference_are_structured() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let root = temp.path().join("blocked");
+		write(&root, b"file")?;
+		let warned = run(
+			arguments!["mods", "--json", "--environment", root.as_os_str(), "config", "list"],
+			temp.path().to_owned(),
+			None,
+			|_| successful_dependencies(&root),
+		)
+		.await?;
+		let document: Value = from_str(&warned.stdout)?;
+		assert_eq!(
+			document["warnings"][0],
+			json!({"code": "diagnostic_logging_unavailable", "message": "diagnostic session logging is unavailable", "details": {}})
+		);
+		assert!(warned.stderr.is_empty());
+
+		let valid_root = temp.path().join("environment");
+		let failed = run(
+			arguments![
+				"mods",
+				"--json",
+				"--environment",
+				valid_root.as_os_str(),
+				"install",
+				"missing.zip"
+			],
+			temp.path().to_owned(),
+			None,
+			|_| successful_dependencies(&valid_root),
+		)
+		.await?;
+		let problem: Value = from_str(&failed.stderr)?;
+		assert_eq!(problem["code"], "io_failure");
+		assert!(problem["instance"].as_str().is_some());
+		assert!(!problem["detail"]
+			.as_str()
+			.unwrap_or_default()
+			.contains("diagnostic session"));
+		Ok(())
+	}
+	#[tokio::test]
+	async fn invalid_environment_root_has_safe_json_and_unchanged_text() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let json = run(
+			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			Some(Path::new("relative-root").to_owned()),
+			|_| Err(ErrorMarker::io_failure()),
+		)
+		.await?;
+		assert_eq!(json.status, 2);
+		let problem: Value = from_str(&json.stderr)?;
+		assert_eq!(problem["detail"], "environment root must be an absolute path");
+
+		let text = run(
+			arguments!["mods", "--log-level", "off", "config", "list"],
+			temp.path().to_owned(),
+			Some(Path::new("relative-root").to_owned()),
+			|_| Err(ErrorMarker::io_failure()),
+		)
+		.await?;
+		assert_eq!(text.stderr, "error: environment root must be an absolute path\n");
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn nexus_file_selection_is_a_problem_with_files_in_published_order() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let files = vec![
+			DownloadModFile {
+				file_id: 9,
+				name: "Optional".into(),
+				version: "2.0".into(),
+				category: "OPTIONAL".into(),
+			},
+			DownloadModFile {
+				file_id: 7,
+				name: "Main".into(),
+				version: "1.0".into(),
+				category: "MAIN".into(),
+			},
+		];
+		let game_binding = GameBinding::new(
+			GameInstallationPath::new(temp.path().join("game")).map_err(|_| "game fixture")?,
+			SteamBuildId::new(1).map_err(|_| "build fixture")?,
+		);
+		let mut outcomes = Vec::new();
+		for json_flag in [true, false] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.install_mod.install_archive.load_installation_state = Arc::new({
+				let game_binding = game_binding.clone();
+				move |_, _| {
+					let game_binding = game_binding.clone();
+					Box::pin(async move {
+						Ok(InstallationState {
+							game_binding,
+							installed_mods: Vec::new(),
+							current_winners: HashMap::new(),
+							file_dependencies: HashMap::new(),
+						})
+					}) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.download_mod = Arc::new({
+				let files = files.clone();
+				move |_, _| {
+					let files = files.clone();
+					Box::pin(async move { Ok(DownloadModOutput::SelectionRequired(files)) })
+						as PortFuture<_>
+				}
+			});
+			let mut arguments = arguments!["mods", "--log-level", "off"];
+			if json_flag {
+				arguments.push(OsString::from("--json"));
+			}
+			arguments.extend(arguments!["install", "https://www.nexusmods.com/newvegas/mods/42"]);
+			outcomes.push(
+				run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+					Ok(dependencies)
+				})
+				.await?,
+			);
+		}
+
+		let problem: Value = from_str(&outcomes[0].stderr)?;
+		assert_eq!(outcomes[0].status, 2);
+		assert!(outcomes[0].stdout.is_empty());
+		assert_eq!(problem["code"], "nexus_file_selection_required");
+		assert_eq!(problem["exit_code"], 2);
+		assert_eq!(
+			problem["details"]["files"],
+			json!([
+				{"file_id": 9, "name": "Optional", "version": "2.0", "category": "OPTIONAL"},
+				{"file_id": 7, "name": "Main", "version": "1.0", "category": "MAIN"},
+			])
+		);
+		assert_eq!(outcomes[1].status, 2);
+		assert_eq!(
+			outcomes[1].stderr,
+			concat!(
+				"error [nexus_file_selection_required]: Select a file with --file <id>.\n",
+				"file_id = 9, name = \"Optional\", version = \"2.0\", category = \"OPTIONAL\"\n",
+				"file_id = 7, name = \"Main\", version = \"1.0\", category = \"MAIN\"\n",
+			)
+		);
+		Ok(())
+	}
+
+	fn system_dependencies(root: &EnvironmentRoot, startup: &Path) -> Dependencies {
+		let resources = Resources::system(root.clone());
+		let execution_force_cancellation = CancellationToken::new();
+		Dependencies {
+			create_shortcut: resources.create_shortcut_dependencies(startup.to_owned()),
+			execute_program: resources
+				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
+			execution_force_cancellation,
+			initialize_environment: resources.initialize_environment_dependencies(),
+			list_settings: resources.list_settings_dependencies(),
+			get_setting: resources.get_setting_dependencies(),
+			set_game_directory: resources.set_game_directory_dependencies(),
+			install_mod: resources.install_mod_dependencies(),
+			list_effective_conflicts: resources.list_effective_conflicts_dependencies(),
+			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(),
+			explain_path: resources.explain_path_dependencies(),
+		}
+	}
+
+	#[tokio::test]
+	async fn stored_nexus_api_key_never_reaches_cli_output() -> Result<(), Box<dyn Error>> {
+		let secret = "synthetic-nexus-secret";
+		let temp = TempDir::new()?;
+		let root = temp.path().canonicalize()?;
+		let game = TempDir::new()?;
+		for directory in ["mods", "profile", "profile/saves", "overwrite", "cache", "temp"] {
+			create_dir_all(root.join(directory))?;
+		}
+		for file in ["plugins.txt", "loadorder.txt", "modlist.txt"] {
+			write(root.join("profile").join(file), b"")?;
+		}
+		write(
+			root.join("profile/Fallout.ini"),
+			concat!(
+				"[General]\nbUseMyGamesDirectory=1\nSLocalSavePath=__mods_saves\\\n",
+				"[Archive]\nbInvalidateOlderFiles=1\nSInvalidationFile=\n",
+				"sArchiveList=Fallout - Invalidation.bsa\n",
+			),
+		)?;
+		let mut empty_bsa = b"BSA\0".to_vec();
+		for value in [0x68_u32, 36, 0x3, 0, 0, 0, 0, 0] {
+			empty_bsa.extend_from_slice(&value.to_le_bytes());
+		}
+		write(root.join("cache/Fallout - Invalidation.bsa"), empty_bsa)?;
+		let manifest = format!(
+			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = '{}'\nobserved_build_id = 1\nnexus_api_key = '{secret}'\n",
+			game.path().display()
+		);
+		let missing_archive = root.join("missing.zip");
+		let environment = root.as_os_str().to_owned();
+
+		for (manifest, expect_success) in [(manifest.clone(), true), (format!("{manifest}broken = [\n"), false)]
+		{
+			write(root.join("mods.toml"), &manifest)?;
+			for (command, succeeds) in [
+				(arguments!["config", "list"], expect_success),
+				(arguments!["config", "get", "game-dir"], expect_success),
+				(arguments!["install", missing_archive.as_os_str(), "--dry-run"], false),
+			] {
+				for json_flag in [true, false] {
+					let mut arguments = arguments![
+						"mods",
+						"--log-level",
+						"off",
+						"--environment",
+						environment.clone()
+					];
+					if json_flag {
+						arguments.push(OsString::from("--json"));
+					}
+					arguments.extend(command.clone());
+					let outcome = run(arguments, root.clone(), None, |environment_root| {
+						Ok(system_dependencies(environment_root, &root))
+					})
+					.await?;
+					assert_eq!(outcome.status == 0, succeeds, "{}", outcome.stderr);
+					assert!(!outcome.stdout.contains(secret));
+					assert!(!outcome.stderr.contains(secret));
+				}
+			}
+		}
+		Ok(())
+	}
+	#[tokio::test]
 	async fn shortcut_forwards_startup_relative_paths_and_stays_quiet_without_execution()
 	-> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
@@ -2038,7 +2530,7 @@ mod tests {
 			dependencies.create_shortcut.persist = Arc::new(move |_| {
 				Box::pin(async move {
 					if !succeeds {
-						return Err(report!(ShortcutFailure::Publication));
+						return Err(report!(ErrorMarker::shortcut_failed()));
 					}
 					Ok(())
 				})
@@ -2098,6 +2590,72 @@ mod tests {
 			outcome.stderr,
 			"error [shortcut_unsupported]: Launch Shortcuts are supported only on Windows\n"
 		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_shortcut_reports_warnings_and_marker_problems() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		write(temp.path().join("logs"), b"block diagnostic directory creation")?;
+		let cases = [
+			(arguments!["--log-level", "off", "shortcut", "--", "tool.exe"], 0),
+			(arguments!["--log-level", "debug", "shortcut", "--", "tool.exe"], 0),
+			(
+				arguments!["--log-level", "off", "shortcut", "--name", "a/b", "--", "tool.exe"],
+				1,
+			),
+			(
+				arguments![
+					"--log-level",
+					"off",
+					"shortcut",
+					"--output-target",
+					"",
+					"--",
+					"tool.exe"
+				],
+				1,
+			),
+		];
+		let mut documents = Vec::new();
+		for (command, status) in cases {
+			let mut dependencies = successful_dependencies(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let launcher = temp.path().join("mods.exe");
+			let environment = temp.path().to_owned();
+			dependencies.create_shortcut.locate_launcher = Arc::new(move || {
+				let launcher = launcher.clone();
+				Box::pin(async move { Ok(launcher) })
+			});
+			dependencies.create_shortcut.locate_environment_root = Arc::new(move || {
+				let environment = environment.clone();
+				Box::pin(async move { Ok(environment) })
+			});
+			dependencies.create_shortcut.persist = Arc::new(|_| Box::pin(async { Ok(()) }));
+			let mut values = arguments!["mods", "--json", "--environment", temp.path().as_os_str()];
+			values.extend(command);
+			let outcome = run(values, temp.path().to_owned(), None, |_| Ok(dependencies)).await?;
+
+			assert_eq!(outcome.status, status, "{}", outcome.stderr);
+			let (document, other) = if status == 0 {
+				(&outcome.stdout, &outcome.stderr)
+			} else {
+				(&outcome.stderr, &outcome.stdout)
+			};
+			assert!(other.is_empty());
+			documents.push(from_str::<Value>(document)?);
+		}
+
+		assert_eq!(documents[0], json!({"warnings": []}));
+		assert_eq!(documents[1]["warnings"][0]["code"], "diagnostic_logging_unavailable");
+		assert_eq!(documents[2]["code"], "shortcut_name_invalid");
+		assert_eq!(documents[2]["exit_code"], 1);
+		assert_eq!(
+			documents[2]["detail"],
+			"shortcut name must be a valid Windows filename without a path"
+		);
+		assert_eq!(documents[3]["code"], "invalid_output_target");
+		assert_eq!(documents[3]["exit_code"], 1);
 		Ok(())
 	}
 }

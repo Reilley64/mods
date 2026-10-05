@@ -1,10 +1,12 @@
 use application::settings::SettingKey;
 use clap::ArgAction;
 use clap::Args;
+use clap::CommandFactory;
 use clap::Error as ClapError;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
+use clap::error::ErrorKind;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
@@ -14,6 +16,8 @@ use std::path::PathBuf;
 pub(crate) struct Cli {
 	#[arg(long, global = true, value_name = "PATH")]
 	pub(crate) environment: Option<PathBuf>,
+	#[arg(long, global = true)]
+	pub(crate) json: bool,
 	#[arg(long, global = true, value_enum, default_value_t = LogLevel::Info)]
 	pub(crate) log_level: LogLevel,
 	#[command(subcommand)]
@@ -168,7 +172,15 @@ where
 	I: IntoIterator<Item = T>,
 	T: Into<OsString> + Clone,
 {
-	Cli::try_parse_from(arguments)
+	let cli = Cli::try_parse_from(arguments)?;
+	if cli.json && matches!(&cli.command, Command::Exec(exec) if exec.hidden) {
+		return Err(Cli::command().error(
+			ErrorKind::ArgumentConflict,
+			"the argument '--hidden' cannot be used with '--json'",
+		));
+	}
+
+	Ok(cli)
 }
 
 #[cfg(test)]
@@ -259,7 +271,8 @@ mod tests {
 					command: ConfigCommand::Get {
 						key: SettingKeyArgument::GameDir
 					}
-				}
+				},
+				..
 			})
 		));
 	}
@@ -364,8 +377,15 @@ mod tests {
 	}
 
 	#[test]
-	fn rejects_json_and_unknown_setting_keys() {
-		assert!(parse_from(["mods", "--json", "config", "list"]).is_err());
+	fn accepts_global_json_without_consuming_child_arguments() -> Result<(), Box<dyn Error>> {
+		assert!(parse_from(["mods", "--json", "config", "list"]).is_ok());
+		let parsed = parse_from(["mods", "exec", "--", "tool.exe", "--json"])?;
+		assert!(matches!(parsed.command, Command::Exec(args) if args.command[1] == "--json"));
+		Ok(())
+	}
+
+	#[test]
+	fn rejects_unknown_setting_keys() {
 		assert!(parse_from(["mods", "config", "get", "unknown"]).is_err());
 	}
 

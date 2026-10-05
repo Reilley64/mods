@@ -1,7 +1,7 @@
 use crate::Resources;
 use crate::execution_adapter::ExecutionAdapter;
+use application::ErrorMarker;
 use application::shortcut::CreateShortcutDependencies;
-use application::shortcut::ShortcutFailure;
 #[cfg(windows)]
 use infrastructure_execution::persist_shortcut;
 #[cfg(windows)]
@@ -24,15 +24,17 @@ impl Resources {
 		{
 			CreateShortcutDependencies {
 				locate_launcher: Arc::new(|| {
-					Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
 				}),
 				resolve_launch_inputs: execution.resolve_port(),
 				prepare_execution_environment: execution.prepare_port(),
 				load_settings: self.settings.load_port(),
 				locate_environment_root: Arc::new(|| {
-					Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
 				}),
-				persist: Arc::new(|_| Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })),
+				persist: Arc::new(|_| {
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
+				}),
 			}
 		}
 		#[cfg(windows)]
@@ -42,22 +44,22 @@ impl Resources {
 				locate_launcher: Arc::new(|| {
 					let launcher = current_exe()
 						.and_then(canonicalize)
-						.context(ShortcutFailure::InvalidLaunch);
+						.context(ErrorMarker::shortcut_launch_invalid());
 					Box::pin(async move { launcher })
 				}),
 				resolve_launch_inputs: execution.resolve_port(),
 				prepare_execution_environment: execution.prepare_port(),
 				load_settings: self.settings.load_port(),
 				locate_environment_root: Arc::new(move || {
-					let environment =
-						canonicalize(root.as_path()).context(ShortcutFailure::InvalidLaunch);
+					let environment = canonicalize(root.as_path())
+						.context(ErrorMarker::shortcut_launch_invalid());
 					Box::pin(async move { environment })
 				}),
 				persist: Arc::new(|definition| {
 					Box::pin(async move {
 						spawn_blocking(move || persist_shortcut(definition))
 							.await
-							.context(ShortcutFailure::Publication)?
+							.context(ErrorMarker::shortcut_failed())?
 					})
 				}),
 			}

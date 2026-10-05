@@ -46,9 +46,9 @@ A **Mod Environment** is one isolated setup, not a separately selectable profile
 After approval, select a new Environment Root and a real Steam Game Installation:
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
-mods --environment 'D:\Mod Environments\Mojave' config list
-mods --environment 'D:\Mod Environments\Mojave' config get game-dir
+mods --json --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
+mods --json --environment 'D:\Mod Environments\Mojave' config list
+mods --json --environment 'D:\Mod Environments\Mojave' config get game-dir
 ```
 
 A **Game Binding** records the Game Installation's Steam identity, path, and observed build. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.

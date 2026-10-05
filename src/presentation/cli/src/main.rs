@@ -1,10 +1,15 @@
 #![forbid(unsafe_code)]
+#![feature(fn_traits)]
 
 mod commands;
 mod conflict_output;
 mod diagnostics;
 mod error;
 mod install_warning;
+mod json_conflicts;
+mod json_install;
+mod json_output;
+mod json_values;
 mod operation;
 mod output;
 mod path_resolution;
@@ -20,6 +25,7 @@ use infrastructure_dependencies::detach_console;
 use infrastructure_dependencies::show_error;
 use std::env::args_os;
 use std::ffi::OsString;
+use std::io::Write;
 use std::io::stderr;
 use std::io::stdout;
 use std::process::exit;
@@ -30,6 +36,11 @@ const BUILD_COMMIT: &str = env!("BUILD_COMMIT");
 #[tokio::main]
 async fn main() {
 	let arguments: Vec<OsString> = args_os().collect();
+	let json_requested = arguments
+		.iter()
+		.skip(1)
+		.take_while(|value| value != &&OsString::from("--"))
+		.any(|value| value == "--json");
 	let hidden = parse_from(arguments.clone())
 		.ok()
 		.is_some_and(|cli| matches!(cli.command, Command::Exec(exec) if exec.hidden));
@@ -87,11 +98,22 @@ async fn main() {
 			}
 
 			let status = error.exit_code();
-			let print_result = error.print();
 			let stdout = stdout();
 			let stderr = stderr();
-			let flush_result = publication::flush(&mut stdout.lock(), &mut stderr.lock());
-			let publication_result = print_result.and(flush_result);
+			let publication_result = if json_requested {
+				let mut stdout = stdout.lock();
+				let mut stderr = stderr.lock();
+
+				let value = json_output::clap_document(&error);
+				let text = json_output::document(&value);
+
+				let stream: &mut dyn Write = if status == 0 { &mut stdout } else { &mut stderr };
+				stream.write_all(text.as_bytes())
+					.and_then(|_| publication::flush(&mut stdout, &mut stderr))
+			} else {
+				error.print()
+					.and_then(|_| publication::flush(&mut stdout.lock(), &mut stderr.lock()))
+			};
 			exit(publication::exit_status(status, &publication_result));
 		}
 	};

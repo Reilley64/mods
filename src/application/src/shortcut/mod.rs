@@ -8,4 +8,3 @@ pub use types::LocateEnvironmentRoot;
 pub use types::LocateLauncher;
 pub use types::PersistShortcut;
 pub use types::ShortcutDefinition;
-pub use types::ShortcutFailure;

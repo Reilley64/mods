@@ -46,6 +46,12 @@ pub enum ErrorCode {
 	VfsFailed,
 	ExecutionSupervisionFailed,
 	OperationCancelled,
+	ShortcutUnsupported,
+	ShortcutNameInvalid,
+	ShortcutDestinationInvalid,
+	ShortcutLaunchInvalid,
+	ShortcutArgumentsTooLong,
+	ShortcutFailed,
 }
 
 impl ErrorCode {
@@ -94,6 +100,12 @@ impl ErrorCode {
 			Self::VfsFailed => "vfs_failed",
 			Self::ExecutionSupervisionFailed => "execution_supervision_failed",
 			Self::OperationCancelled => "operation_cancelled",
+			Self::ShortcutUnsupported => "shortcut_unsupported",
+			Self::ShortcutNameInvalid => "shortcut_name_invalid",
+			Self::ShortcutDestinationInvalid => "shortcut_destination_invalid",
+			Self::ShortcutLaunchInvalid => "shortcut_launch_invalid",
+			Self::ShortcutArgumentsTooLong => "shortcut_arguments_too_long",
+			Self::ShortcutFailed => "shortcut_failed",
 		}
 	}
 }
@@ -315,6 +327,24 @@ impl ErrorMarker {
 	pub fn operation_cancelled() -> Self {
 		Self::simple(ErrorCode::OperationCancelled)
 	}
+	pub fn shortcut_unsupported() -> Self {
+		Self::simple(ErrorCode::ShortcutUnsupported)
+	}
+	pub fn shortcut_name_invalid() -> Self {
+		Self::simple(ErrorCode::ShortcutNameInvalid)
+	}
+	pub fn shortcut_destination_invalid() -> Self {
+		Self::simple(ErrorCode::ShortcutDestinationInvalid)
+	}
+	pub fn shortcut_launch_invalid() -> Self {
+		Self::simple(ErrorCode::ShortcutLaunchInvalid)
+	}
+	pub fn shortcut_arguments_too_long() -> Self {
+		Self::simple(ErrorCode::ShortcutArgumentsTooLong)
+	}
+	pub fn shortcut_failed() -> Self {
+		Self::simple(ErrorCode::ShortcutFailed)
+	}
 
 	pub fn settings_environment_invalid() -> Self {
 		Self {
@@ -428,6 +458,16 @@ impl ErrorMarker {
 			ErrorCode::VfsFailed => "Virtual Game View setup failed",
 			ErrorCode::ExecutionSupervisionFailed => "process supervision failed",
 			ErrorCode::OperationCancelled => "operation cancelled",
+			ErrorCode::ShortcutUnsupported => "Launch Shortcuts are supported only on Windows",
+			ErrorCode::ShortcutNameInvalid => {
+				"shortcut name must be a valid Windows filename without a path"
+			}
+			ErrorCode::ShortcutDestinationInvalid => {
+				"destination must be a directory; only an existing Shell Link may be replaced"
+			}
+			ErrorCode::ShortcutLaunchInvalid => "unable to capture valid absolute launch paths",
+			ErrorCode::ShortcutArgumentsTooLong => "saved arguments exceed the Shell Link storage limit",
+			ErrorCode::ShortcutFailed => "unable to prepare or publish the Launch Shortcut",
 		}
 	}
 }
