@@ -28,7 +28,7 @@ mods install --help
 mods --json --environment 'D:\Mod Environments\Mojave' --log-level off config list
 ```
 
-`--json` needs a release that includes JSON output; released v0.1.0 rejects it with exit status 2 and `unexpected argument '--json'`. In that case, omit `--json` from the examples in these references and read the text output. The CLI has no MCP command, conflict-resolution command, uninstall command, or mod enable/reorder command. Use supported commands and installed help rather than inventing flags.
+`exec --hidden` does not accept `--json`. `--json` needs a release that includes JSON output; released v0.1.0 rejects it with exit status 2 and `unexpected argument '--json'`. In that case, omit `--json` from the examples in these references and read the text output. The CLI has no MCP command, conflict-resolution command, uninstall command, or mod enable/reorder command. Use supported commands and installed help rather than inventing flags.
 
 ## Initialization and settings
 

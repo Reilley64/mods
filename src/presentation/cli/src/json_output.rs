@@ -136,6 +136,7 @@ mod tests {
 	use super::marker_problem;
 	use super::setting;
 	use crate::commands::parse_from;
+	use application::ErrorCode;
 	use application::ErrorMarker;
 	use application::settings::SetGameDirectoryWarning;
 	use application::settings::SettingKey;
@@ -213,5 +214,130 @@ mod tests {
 			assert!(document.get("status").is_none());
 		}
 		Ok(())
+	}
+
+	#[test]
+	fn hidden_exec_rejects_json_before_any_launch() -> Result<(), Box<dyn Error>> {
+		for arguments in [
+			vec!["mods", "--json", "exec", "--hidden", "--", "tool.exe"],
+			vec!["mods", "exec", "--hidden", "--json", "--", "tool.exe"],
+		] {
+			let error = parse_from(arguments).err().ok_or("expected argument conflict")?;
+			let document = clap_document(&error);
+			assert_eq!(document["code"], "invalid_arguments");
+			assert_eq!(document["exit_code"], 2);
+		}
+		assert!(parse_from(["mods", "exec", "--hidden", "--", "tool.exe", "--json"]).is_ok());
+		Ok(())
+	}
+
+	#[test]
+	fn every_problem_code_has_a_problem_anchor() {
+		let problems = include_str!("../../../../docs/cli/problems.md");
+		let codes = [
+			ErrorCode::NexusSourceInvalid,
+			ErrorCode::NexusPremiumRequired,
+			ErrorCode::NexusCredentialsInvalid,
+			ErrorCode::NexusAccessDenied,
+			ErrorCode::NexusRateLimited,
+			ErrorCode::NexusUnavailable,
+			ErrorCode::NexusNetworkFailure,
+			ErrorCode::NexusResponseInvalid,
+			ErrorCode::EnvironmentNotInitialized,
+			ErrorCode::EnvironmentAlreadyInitialized,
+			ErrorCode::EnvironmentRootNotEmpty,
+			ErrorCode::EnvironmentRootUnsafe,
+			ErrorCode::EnvironmentSchemaUnsupported,
+			ErrorCode::EnvironmentInvalid,
+			ErrorCode::EnvironmentPublicationFailed,
+			ErrorCode::ManualCleanupRequired,
+			ErrorCode::GameInstallNotFound,
+			ErrorCode::GameInstallInvalid,
+			ErrorCode::GameBuildMismatch,
+			ErrorCode::SettingUnknown,
+			ErrorCode::SettingReadOnly,
+			ErrorCode::SettingValueInvalid,
+			ErrorCode::InvalidSelection,
+			ErrorCode::UnsupportedInstaller,
+			ErrorCode::DependencyUnsatisfied,
+			ErrorCode::UnsafeArchive,
+			ErrorCode::AmbiguousInstallPlan,
+			ErrorCode::InvalidModName,
+			ErrorCode::InvalidDataPath,
+			ErrorCode::ModAlreadyExists,
+			ErrorCode::ModNotFound,
+			ErrorCode::IoFailure,
+			ErrorCode::TransactionFailure,
+			ErrorCode::InvalidOutputTarget,
+			ErrorCode::OutputTargetNotFound,
+			ErrorCode::OutputTargetDisabled,
+			ErrorCode::InvalidWorkingDirectory,
+			ErrorCode::ProgramNotFound,
+			ErrorCode::ProgramUnsupported,
+			ErrorCode::ProgramLaunchFailed,
+			ErrorCode::VfsFailed,
+			ErrorCode::ExecutionSupervisionFailed,
+			ErrorCode::OperationCancelled,
+		];
+		for code in codes {
+			match code {
+				ErrorCode::NexusSourceInvalid
+				| ErrorCode::NexusPremiumRequired
+				| ErrorCode::NexusCredentialsInvalid
+				| ErrorCode::NexusAccessDenied
+				| ErrorCode::NexusRateLimited
+				| ErrorCode::NexusUnavailable
+				| ErrorCode::NexusNetworkFailure
+				| ErrorCode::NexusResponseInvalid
+				| ErrorCode::EnvironmentNotInitialized
+				| ErrorCode::EnvironmentAlreadyInitialized
+				| ErrorCode::EnvironmentRootNotEmpty
+				| ErrorCode::EnvironmentRootUnsafe
+				| ErrorCode::EnvironmentSchemaUnsupported
+				| ErrorCode::EnvironmentInvalid
+				| ErrorCode::EnvironmentPublicationFailed
+				| ErrorCode::ManualCleanupRequired
+				| ErrorCode::GameInstallNotFound
+				| ErrorCode::GameInstallInvalid
+				| ErrorCode::GameBuildMismatch
+				| ErrorCode::SettingUnknown
+				| ErrorCode::SettingReadOnly
+				| ErrorCode::SettingValueInvalid
+				| ErrorCode::InvalidSelection
+				| ErrorCode::UnsupportedInstaller
+				| ErrorCode::DependencyUnsatisfied
+				| ErrorCode::UnsafeArchive
+				| ErrorCode::AmbiguousInstallPlan
+				| ErrorCode::InvalidModName
+				| ErrorCode::InvalidDataPath
+				| ErrorCode::ModAlreadyExists
+				| ErrorCode::ModNotFound
+				| ErrorCode::IoFailure
+				| ErrorCode::TransactionFailure
+				| ErrorCode::InvalidOutputTarget
+				| ErrorCode::OutputTargetNotFound
+				| ErrorCode::OutputTargetDisabled
+				| ErrorCode::InvalidWorkingDirectory
+				| ErrorCode::ProgramNotFound
+				| ErrorCode::ProgramUnsupported
+				| ErrorCode::ProgramLaunchFailed
+				| ErrorCode::VfsFailed
+				| ErrorCode::ExecutionSupervisionFailed
+				| ErrorCode::OperationCancelled => {}
+			}
+		}
+		let synthetic = [
+			"invalid_arguments",
+			"environment_root_selection_failed",
+			"startup_failed",
+			"operation_failed",
+			"nexus_file_selection_required",
+		];
+		for code in codes.map(ErrorCode::as_str).into_iter().chain(synthetic) {
+			assert!(
+				problems.contains(&format!("<a id=\"{code}\"></a>\n## {code}\n")),
+				"{code}"
+			);
+		}
 	}
 }

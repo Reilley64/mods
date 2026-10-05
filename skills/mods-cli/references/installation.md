@@ -26,7 +26,7 @@ mods --environment 'D:\Mod Environments\Mojave' install 'https://www.nexusmods.c
 mods --environment 'D:\Mod Environments\Mojave' install 'https://www.nexusmods.com/newvegas/mods/12345?tab=files&file_id=67890' --dry-run
 ```
 
-These IDs are examples. An explicit URL file ID or `--file ID` selects that file. Conflicting IDs fail. Without a file ID, the command selects only when exactly one available Main file exists. Otherwise it lists available file IDs, names, versions, and categories and requires `--file`. It does not guess by date or version. Other games, NXM links, and malformed URLs are unsupported.
+These IDs are examples. An explicit URL file ID or `--file ID` selects that file. Conflicting IDs fail. Without a file ID, the command selects only when exactly one available Main file exists. Otherwise it lists available file IDs, names, versions, and categories and requires `--file`. With `--json`, this is a `nexus_file_selection_required` Problem on stderr with status 2 and `details.files` in the published order. It does not guess by date or version. Other games, NXM links, and malformed URLs are unsupported.
 
 New downloads require a Premium account API key. Add optional `nexus_api_key` to the selected environment's `mods.toml`, or supply `MODS_NEXUS_API_KEY` in the process environment. The environment variable overrides the stored key. Storage in `mods.toml` is plaintext. Do not share that file with a key in it. `config get` and `config list` never return the key, and there is no key argument or setter command. Changing `game-dir` preserves the stored key.
 
@@ -75,6 +75,7 @@ An `invalid_selection` error can include `field`, `group_id`, `option_id`, and z
 | 0, JSON `outcome` is `"additional_selections_required"`, or text `outcome = "additional_selections_required"` | Choices incomplete; no completed installation | Resubmit complete choices |
 | 0, JSON `outcome` is `"preview"`, or text `outcome = "preview"` | Completed Install Plan only; no publication | Review and obtain installation approval |
 | 0, JSON `outcome` is `"installed"`, or empty text stdout from a non-dry-run install | Completed installation | Report completion and `warnings` (stderr warning lines in text mode); new install remains disabled |
+| 2, `nexus_file_selection_required` (JSON Problem with `details.files`, or text `error [nexus_file_selection_required]` lines) | No file selected; nothing downloaded or installed | Ask the user to pick a `file_id`, then rerun with `--file ID` |
 | Nonzero | Failed/cancelled operation | Read the stderr Problem Details (or the text `error [code]` lines) and [troubleshooting](troubleshooting.md); preserve partial state |
 
 Incomplete choices can occur with or without `--dry-run`. Warnings can appear in every outcome. Never equate exit zero alone with installed files.

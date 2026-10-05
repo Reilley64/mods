@@ -1,10 +1,12 @@
 use application::settings::SettingKey;
 use clap::ArgAction;
 use clap::Args;
+use clap::CommandFactory;
 use clap::Error as ClapError;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
+use clap::error::ErrorKind;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
@@ -131,7 +133,6 @@ pub(crate) struct ExecArgs {
 	pub(crate) cwd: Option<PathBuf>,
 	#[arg(
 		long,
-		conflicts_with = "json",
 		help = "Detach the launcher console and show launch failures in dialogs (Windows only)"
 	)]
 	pub(crate) hidden: bool,
@@ -156,7 +157,15 @@ where
 	I: IntoIterator<Item = T>,
 	T: Into<OsString> + Clone,
 {
-	Cli::try_parse_from(arguments)
+	let cli = Cli::try_parse_from(arguments)?;
+	if cli.json && matches!(&cli.command, Command::Exec(exec) if exec.hidden) {
+		return Err(Cli::command().error(
+			ErrorKind::ArgumentConflict,
+			"the argument '--hidden' cannot be used with '--json'",
+		));
+	}
+
+	Ok(cli)
 }
 
 #[cfg(test)]

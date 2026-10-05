@@ -845,6 +845,7 @@ mod tests {
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
 	use application::installation::ArchiveIndex;
+	use application::installation::DownloadModFile;
 	use application::installation::DownloadModOutput;
 	use application::installation::DownloadedMod;
 	use application::installation::FomodGroup;
@@ -873,6 +874,7 @@ mod tests {
 	use domain::ArchiveIdentity;
 	use domain::ArchivePath;
 	use domain::DataRelativePath;
+	use domain::EnvironmentRoot;
 	use domain::FomodCardinality;
 	use domain::FomodCondition;
 	use domain::GameBinding;
@@ -892,6 +894,7 @@ mod tests {
 	use domain::SteamBuildId;
 	#[cfg(windows)]
 	use domain::WorkingDirectory;
+	use infrastructure_dependencies::Resources;
 	use rootcause::report;
 	use serde_json::Value;
 	use serde_json::from_str;
@@ -2074,6 +2077,172 @@ mod tests {
 		)
 		.await?;
 		assert_eq!(text.stderr, "error: environment root must be an absolute path\n");
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn nexus_file_selection_is_a_problem_with_files_in_published_order() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let files = vec![
+			DownloadModFile {
+				file_id: 9,
+				name: "Optional".into(),
+				version: "2.0".into(),
+				category: "OPTIONAL".into(),
+			},
+			DownloadModFile {
+				file_id: 7,
+				name: "Main".into(),
+				version: "1.0".into(),
+				category: "MAIN".into(),
+			},
+		];
+		let game_binding = GameBinding::new(
+			GameInstallationPath::new(temp.path().join("game")).map_err(|_| "game fixture")?,
+			SteamBuildId::new(1).map_err(|_| "build fixture")?,
+		);
+		let mut outcomes = Vec::new();
+		for json_flag in [true, false] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.install_mod.install_archive.load_installation_state = Arc::new({
+				let game_binding = game_binding.clone();
+				move |_, _| {
+					let game_binding = game_binding.clone();
+					Box::pin(async move {
+						Ok(InstallationState {
+							game_binding,
+							installed_mods: Vec::new(),
+							current_winners: HashMap::new(),
+							file_dependencies: HashMap::new(),
+						})
+					}) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.download_mod = Arc::new({
+				let files = files.clone();
+				move |_, _| {
+					let files = files.clone();
+					Box::pin(async move { Ok(DownloadModOutput::SelectionRequired(files)) })
+						as PortFuture<_>
+				}
+			});
+			let mut arguments = arguments!["mods", "--log-level", "off"];
+			if json_flag {
+				arguments.push(OsString::from("--json"));
+			}
+			arguments.extend(arguments!["install", "https://www.nexusmods.com/newvegas/mods/42"]);
+			outcomes.push(
+				run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+					Ok(dependencies)
+				})
+				.await?,
+			);
+		}
+
+		let problem: Value = from_str(&outcomes[0].stderr)?;
+		assert_eq!(outcomes[0].status, 2);
+		assert!(outcomes[0].stdout.is_empty());
+		assert_eq!(problem["code"], "nexus_file_selection_required");
+		assert_eq!(problem["exit_code"], 2);
+		assert_eq!(
+			problem["details"]["files"],
+			json!([
+				{"file_id": 9, "name": "Optional", "version": "2.0", "category": "OPTIONAL"},
+				{"file_id": 7, "name": "Main", "version": "1.0", "category": "MAIN"},
+			])
+		);
+		assert_eq!(outcomes[1].status, 2);
+		assert_eq!(
+			outcomes[1].stderr,
+			concat!(
+				"error [nexus_file_selection_required]: Select a file with --file <id>.\n",
+				"file_id = 9, name = \"Optional\", version = \"2.0\", category = \"OPTIONAL\"\n",
+				"file_id = 7, name = \"Main\", version = \"1.0\", category = \"MAIN\"\n",
+			)
+		);
+		Ok(())
+	}
+
+	fn system_dependencies(root: &EnvironmentRoot, startup: &Path) -> Dependencies {
+		let resources = Resources::system(root.clone());
+		let execution_force_cancellation = CancellationToken::new();
+		Dependencies {
+			execute_program: resources
+				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
+			execution_force_cancellation,
+			initialize_environment: resources.initialize_environment_dependencies(),
+			list_settings: resources.list_settings_dependencies(),
+			get_setting: resources.get_setting_dependencies(),
+			set_game_directory: resources.set_game_directory_dependencies(),
+			install_mod: resources.install_mod_dependencies(),
+			list_effective_conflicts: resources.list_effective_conflicts_dependencies(),
+			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(),
+			explain_path: resources.explain_path_dependencies(),
+		}
+	}
+
+	#[tokio::test]
+	async fn stored_nexus_api_key_never_reaches_cli_output() -> Result<(), Box<dyn Error>> {
+		let secret = "synthetic-nexus-secret";
+		let temp = TempDir::new()?;
+		let root = temp.path().canonicalize()?;
+		let game = TempDir::new()?;
+		for directory in ["mods", "profile", "profile/saves", "overwrite", "cache", "temp"] {
+			create_dir_all(root.join(directory))?;
+		}
+		for file in ["plugins.txt", "loadorder.txt", "modlist.txt"] {
+			write(root.join("profile").join(file), b"")?;
+		}
+		write(
+			root.join("profile/Fallout.ini"),
+			concat!(
+				"[General]\nbUseMyGamesDirectory=1\nSLocalSavePath=__mods_saves\\\n",
+				"[Archive]\nbInvalidateOlderFiles=1\nSInvalidationFile=\n",
+				"sArchiveList=Fallout - Invalidation.bsa\n",
+			),
+		)?;
+		let mut empty_bsa = b"BSA\0".to_vec();
+		for value in [0x68_u32, 36, 0x3, 0, 0, 0, 0, 0] {
+			empty_bsa.extend_from_slice(&value.to_le_bytes());
+		}
+		write(root.join("cache/Fallout - Invalidation.bsa"), empty_bsa)?;
+		let manifest = format!(
+			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = '{}'\nobserved_build_id = 1\nnexus_api_key = '{secret}'\n",
+			game.path().display()
+		);
+		let missing_archive = root.join("missing.zip");
+		let environment = root.as_os_str().to_owned();
+
+		for (manifest, expect_success) in [(manifest.clone(), true), (format!("{manifest}broken = [\n"), false)]
+		{
+			write(root.join("mods.toml"), &manifest)?;
+			for (command, succeeds) in [
+				(arguments!["config", "list"], expect_success),
+				(arguments!["config", "get", "game-dir"], expect_success),
+				(arguments!["install", missing_archive.as_os_str(), "--dry-run"], false),
+			] {
+				for json_flag in [true, false] {
+					let mut arguments = arguments![
+						"mods",
+						"--log-level",
+						"off",
+						"--environment",
+						environment.clone()
+					];
+					if json_flag {
+						arguments.push(OsString::from("--json"));
+					}
+					arguments.extend(command.clone());
+					let outcome = run(arguments, root.clone(), None, |environment_root| {
+						Ok(system_dependencies(environment_root, &root))
+					})
+					.await?;
+					assert_eq!(outcome.status == 0, succeeds, "{}", outcome.stderr);
+					assert!(!outcome.stdout.contains(secret));
+					assert!(!outcome.stderr.contains(secret));
+				}
+			}
+		}
 		Ok(())
 	}
 }

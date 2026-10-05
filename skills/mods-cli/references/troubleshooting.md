@@ -15,7 +15,7 @@ Capture `$LASTEXITCODE` immediately after `mods` in PowerShell. Preserve stdout 
 | Cancellation | Windows `0xC000013A` (shells may display a signed value) |
 | Child finished under managed execution | Child's actual 32-bit exit status |
 
-A Nexus mod-page input without a file ID selects a file only when exactly one available Main file exists. With zero or several, the command exits with status 2. Stderr starts with `error [nexus_file_selection_required]` and lists one line per available file with `file_id`, `name`, `version`, and `category`. Rerun with `--file ID`; do not pick a file without the user's choice.
+A Nexus mod-page input without a file ID selects a file only when exactly one available Main file exists. With zero or several, the command exits with status 2. Stderr starts with `error [nexus_file_selection_required]` and lists one line per available file with `file_id`, `name`, `version`, and `category`. With `--json`, stderr is a `nexus_file_selection_required` Problem whose `details.files` holds the same fields in the same order. Rerun with `--file ID`; do not pick a file without the user's choice.
 
 Failures before execution dispatch can still use general statuses. Output write/flush failure, including a broken pipe, produces status 1. A child can itself return 125–127; distinguish the source using stderr, not the number alone. A nonzero child status does not by itself mean the manager failed to launch it.
 

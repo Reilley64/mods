@@ -22,6 +22,51 @@ The CLI could not determine the caller startup directory.
 
 An operation failed without a safe application error marker.
 
+<a id="nexus_file_selection_required"></a>
+## nexus_file_selection_required
+
+A Nexus mod-page input has zero or several available Main files, so the CLI cannot choose one. `exit_code` is 2. `details.files` lists every available file in the published order, each with `file_id`, `name`, `version`, and `category`. Rerun with `--file ID`.
+
+<a id="nexus_source_invalid"></a>
+## nexus_source_invalid
+
+The Nexus source or file selection is invalid. Use a New Vegas Nexus mod-page or file URL. Do not combine `--file` with a local archive path or with a different URL file ID.
+
+<a id="nexus_premium_required"></a>
+## nexus_premium_required
+
+A new Nexus download needs a Premium account API key in `nexus_api_key` or `MODS_NEXUS_API_KEY`.
+
+<a id="nexus_credentials_invalid"></a>
+## nexus_credentials_invalid
+
+Nexus rejected the configured API key.
+
+<a id="nexus_access_denied"></a>
+## nexus_access_denied
+
+Nexus denied access to the mod or file.
+
+<a id="nexus_rate_limited"></a>
+## nexus_rate_limited
+
+Nexus rate limited the request.
+
+<a id="nexus_unavailable"></a>
+## nexus_unavailable
+
+The Nexus mod or selected file is missing, removed, or not downloadable.
+
+<a id="nexus_network_failure"></a>
+## nexus_network_failure
+
+A Nexus request or transfer failed. Partial download bytes are removed.
+
+<a id="nexus_response_invalid"></a>
+## nexus_response_invalid
+
+Nexus returned a response that the CLI cannot use.
+
 <a id="environment_not_initialized"></a>
 ## environment_not_initialized
 
@@ -50,7 +95,7 @@ The Environment Manifest uses an unsupported schema.
 <a id="environment_invalid"></a>
 ## environment_invalid
 
-The selected Mod Environment is invalid.
+The selected Mod Environment is invalid. `details.phase` can name the invalid part. For example, `download_cache` means the Nexus download cache is invalid.
 
 <a id="environment_publication_failed"></a>
 ## environment_publication_failed

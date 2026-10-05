@@ -67,6 +67,15 @@ The user then made two contract decisions:
 - One provider shape. Installation results now use the File Conflict provider object, so `priority` is a rank object and every provider has `participation_reason`. The shared mapping lives in `json_values.rs`. The schema drops `install_provider` and `install_tombstone`, and `install_effective_result` becomes the shared `effective_result`. The preview example now includes an overlap. All 12 examples passed their command definitions and the aggregate schema again, and the old integer provider priority is rejected.
 - Versioning. Before 1.0.0, the JSON format may change in any release. The compatibility rules in `docs/cli/json.md` start at 1.0.0.
 
+## Coverage after merging #111 and #128
+
+- `exec --hidden`: `--json` with `--hidden` is rejected in `parse_from` as `invalid_arguments` (exit 2). The parse fails, so `main.rs` never detaches the console, and the hidden failure dialog never receives JSON. Clap `conflicts_with` cannot name a subcommand argument from the global `--json`, so the check is a post-parse guard. On other platforms, `--hidden` goes through the Problem path as `program_unsupported` (126). Its text output is unchanged.
+- Nexus file selection: JSON mode returns a `nexus_file_selection_required` Problem (exit 2) with `details.files` in published order. The schema has a typed `details` shape for it, and `docs/cli/examples/problem-nexus-file-selection.json` is the example. Text output is unchanged.
+- `docs/cli/problems.md` has anchors for all `nexus_*` codes. `environment_invalid` notes the `download_cache` phase. A unit test checks that every `ErrorCode` and synthetic problem code has an anchor.
+- Nexus provenance is not added to JSON. `InstallPreview` and `InstalledArchive` do not expose it; only `ApprovedInstallation` carries it into `meta.toml`.
+- Secret safety: a runner test uses real infrastructure adapters with a stored `nexus_api_key`. `config list`, `config get game-dir`, and a failed install, with valid and malformed manifests, in JSON and text mode, never print the key. Process-environment `MODS_NEXUS_API_KEY` is not covered, because setting a process variable needs `unsafe`. Infrastructure settings tests cover the override.
+- All 13 examples, and captured CLI documents for `config list`, the `--json --hidden` rejection, and an install failure, pass `docs/cli/schema.json`.
+
 ## Follow-ups outside this ticket
 
 The marker has `setting_key` and `mod_name`, but the existing text error allowlist omits them. Extending the allowlist needs a separate decision. Serializer-switch deduplication and broader typed JSON representations can be considered after the public contract is reviewed. Neither follow-up changes this ticket's output.

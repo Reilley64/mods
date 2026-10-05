@@ -67,6 +67,65 @@
         "required": [
           "status"
         ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "code"
+            ],
+            "properties": {
+              "code": {
+                "const": "nexus_file_selection_required"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "details"
+            ],
+            "properties": {
+              "details": {
+                "$ref": "#/$defs/nexus_file_selection_details"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nexus_file_selection_details": {
+      "type": "object",
+      "required": [
+        "files"
+      ],
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "file_id",
+              "name",
+              "version",
+              "category"
+            ],
+            "properties": {
+              "file_id": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "category": {
+                "type": "string"
+              }
+            }
+          }
+        }
       }
     },
     "setting": {
