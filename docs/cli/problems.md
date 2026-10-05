@@ -97,11 +97,6 @@ The Environment Manifest uses an unsupported schema.
 
 The selected Mod Environment is invalid. `details.phase` can name the invalid part. For example, `download_cache` means the Nexus download cache is invalid.
 
-<a id="environment_publication_failed"></a>
-## environment_publication_failed
-
-Publishing an initialized Mod Environment failed.
-
 <a id="manual_cleanup_required"></a>
 ## manual_cleanup_required
 
@@ -116,11 +111,6 @@ The requested Game Installation was not found.
 ## game_install_invalid
 
 The Game Installation cannot be used.
-
-<a id="game_build_mismatch"></a>
-## game_build_mismatch
-
-The observed Game Installation build differs from the recorded build.
 
 <a id="setting_unknown"></a>
 ## setting_unknown

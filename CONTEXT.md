@@ -17,7 +17,7 @@ The `mods.toml` file that marks an Environment Root and records its schema, opti
 _Avoid_: Global registry, profile manifest
 
 **Game Binding**:
-The association between one Mod Environment and one Game Installation, including its Steam identity, path, and observed build.
+The association between one Mod Environment and one Game Installation, identified by its path.
 _Avoid_: Profile, global game setting
 
 **Game Installation**:

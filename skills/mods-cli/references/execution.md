@@ -51,6 +51,7 @@ mods --json --environment 'D:\Mod Environments\Mojave' shortcut --name 'Mojave G
 - A same-named valid `.lnk` is replaced. Directories, symbolic links, and other files are not replaced.
 - Success prints nothing in text mode, and `{"warnings": [...]}` with `--json`.
 - The shortcut stores `exec --hidden` without `--json`, so a launch from it never emits JSON. Launch failures appear in a Windows dialog.
+- Without `--cwd`, the shortcut starts the program in the bound Game Installation directory, as `exec` does.
 - The shortcut uses the environment's current mods and settings. Recreate it after moving the executable, its directory, or the Environment Root.
 
 ## Runtime limits

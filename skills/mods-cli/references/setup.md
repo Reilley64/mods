@@ -51,7 +51,7 @@ mods --json --environment 'D:\Mod Environments\Mojave' config list
 mods --json --environment 'D:\Mod Environments\Mojave' config get game-dir
 ```
 
-A **Game Binding** records the Game Installation's Steam identity, path, and observed build. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.
+A **Game Binding** records the Game Installation's path. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.
 
 Initialization creates the manifest and Profile State. Use a nonexistent or empty root; existing `logs` and an empty `temp` are permitted when safe. An existing `mods.toml`, other contents, unsafe paths, or unfinished temporary state can block initialization. It is not a repair/reset command. Initialization writes the layout directly into the root and writes `mods.toml` last. A failed initialization can leave a partial layout, which blocks a retry until it is removed.
 
@@ -63,7 +63,7 @@ Initialization creates the manifest and Profile State. Use a nonexistent or empt
 - Missing DLL/proxy or VFS startup failure: restore the entire matching ZIP layout and check both VC++ redistributables. Inspect security-tool quarantine; do not disable security controls automatically.
 - Hash mismatch or extraction failure: stop; check that the asset and checksum belong together and use a fresh destination. Do not overlay a partly extracted installation.
 - Missing `LOCALAPPDATA`: specify an absolute `--environment`.
-- Game discovery or build mismatch: inspect `config get game-dir`, inherited `MODS_GAME_DIR`, and the real Steam installation before an approved binding change. Do not copy mod files into Steam Data as a workaround.
+- Game discovery failure: inspect `config get game-dir`, inherited `MODS_GAME_DIR`, and the real Steam installation before an approved binding change. Do not copy mod files into Steam Data as a workaround.
 - Invalid or already initialized root: inspect the selected path and existing state. Do not delete it or rerun initialization as an automatic fix.
 
 For error codes, retained partial state, and logs, read [troubleshooting](troubleshooting.md).
