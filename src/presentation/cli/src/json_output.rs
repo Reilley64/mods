@@ -233,7 +233,7 @@ mod tests {
 
 	#[test]
 	fn every_problem_code_has_a_problem_anchor() {
-		let problems = include_str!("../../../../docs/cli/problems.md");
+		let problems = include_str!("../../../../docs/cli/problems.md").replace("\r\n", "\n");
 		let codes = [
 			ErrorCode::NexusSourceInvalid,
 			ErrorCode::NexusPremiumRequired,

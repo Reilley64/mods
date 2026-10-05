@@ -69,7 +69,7 @@ The user then made two contract decisions:
 
 ## Coverage after merging #111 and #128
 
-- `exec --hidden`: `--json` with `--hidden` is rejected in `parse_from` as `invalid_arguments` (exit 2). The parse fails, so `main.rs` never detaches the console, and the hidden failure dialog never receives JSON. Clap `conflicts_with` cannot name a subcommand argument from the global `--json`, so the check is a post-parse guard. On other platforms, `--hidden` goes through the Problem path as `program_unsupported` (126). Its text output is unchanged.
+- `exec --hidden`: `--json` with `--hidden` is rejected in `parse_from` as `invalid_arguments` (exit 2). The parse fails, so `main.rs` never detaches the console, and the hidden failure dialog never receives JSON. Clap `conflicts_with` cannot name a subcommand argument from the global `--json`, so the check is a post-parse guard. On other platforms, text-mode `--hidden` goes through the marker path as `program_unsupported` (126). Its text output is unchanged. With `--json`, the parse guard rejects the combination first.
 - Nexus file selection: JSON mode returns a `nexus_file_selection_required` Problem (exit 2) with `details.files` in published order. The schema has a typed `details` shape for it, and `docs/cli/examples/problem-nexus-file-selection.json` is the example. Text output is unchanged.
 - `docs/cli/problems.md` has anchors for all `nexus_*` codes. `environment_invalid` notes the `download_cache` phase. A unit test checks that every `ErrorCode` and synthetic problem code has an anchor.
 - Nexus provenance is not added to JSON. `InstallPreview` and `InstalledArchive` do not expose it; only `ApprovedInstallation` carries it into `meta.toml`.
