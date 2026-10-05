@@ -69,8 +69,6 @@ impl ExecutionAdapter {
 		self
 	}
 
-	/// Resolves the program from the caller's directory and PATH. Only Windows can
-	/// launch programs, so other platforms report the program as unsupported.
 	pub fn resolve_launch_target_port(&self) -> ResolveLaunchTarget {
 		let adapter = self.clone();
 		Arc::new(move |program, arguments, working_directory| {

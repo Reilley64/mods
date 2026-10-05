@@ -7,9 +7,10 @@ Each `type` points to a permanent anchor below. The final path fragment is also 
 `details` holds only these allowlisted fields. Each appears only when it applies.
 
 - `phase`, `field`, `group_id`, `option_id`, `sequence`: the failing step and FOMOD choice, as described for each problem type.
+- `files`: the available Nexus files of a `nexus_file_selection_required` Problem.
 - `mod_name`: the Data Mod the problem is about, such as a `modlist.txt` entry without its folder, an existing or unlisted entry in `mods`, or an Output Target.
 - `load_order_file`: the plugin or BSA whose modification time could not be read or set. `phase` is then `load_order`.
-- `retained_execution_inis`: the staged profile INIs that `exec` kept. Inspect their edits after all managed processes have stopped.
+- `retained_execution_inis`: the staged profile INIs that `exec` kept when it failed after staging them and before launch, for example `vfs_failed`, `program_launch_failed`, or `operation_cancelled`. After launch, such failures are plain text and the text names the same path.
 - `output`: the `export` output folder that was requested.
 - `retained_partial_output`: the `export` output folder that holds partial files.
 - `retained_export_stage`: the `export` INI stage left in the Environment Root's `temp` folder. Delete it before the next `exec` or `export`.
@@ -183,7 +184,7 @@ The target Data Mod exists and replacement was not requested. `mod_name` names t
 <a id="mod_not_found"></a>
 ## mod_not_found
 
-The requested Data Mod does not exist.
+The requested Data Mod does not exist. `mod_name` can name it.
 
 <a id="io_failure"></a>
 ## io_failure
@@ -203,12 +204,12 @@ The requested Output Target is invalid.
 <a id="output_target_not_found"></a>
 ## output_target_not_found
 
-The requested Output Target was not found.
+The requested Output Target was not found. `mod_name` names it.
 
 <a id="output_target_disabled"></a>
 ## output_target_disabled
 
-The requested Output Target is disabled.
+The requested Output Target is disabled. `mod_name` names it.
 
 <a id="invalid_working_directory"></a>
 ## invalid_working_directory
@@ -238,7 +239,7 @@ Setting up or cleaning up the Virtual Game View failed. `details.phase` identifi
 <a id="execution_supervision_failed"></a>
 ## execution_supervision_failed
 
-Managing the child process failed. A failure after launch is plain stderr, not this JSON type. With `phase` `profile_retained`, `retained_execution_inis` names the kept INI stage.
+Managing the child process failed. A failure after launch is plain stderr, not this JSON type. Before launch, `phase` `launch` can come with `retained_execution_inis`, the kept INI stage.
 
 <a id="operation_cancelled"></a>
 ## operation_cancelled

@@ -55,7 +55,7 @@ pub struct LoadedSettings {
 }
 
 impl LoadedSettings {
-	/// The effective Nexus API key. It stays outside the queryable settings records.
+	/// Kept outside the queryable settings records, so output never shows it.
 	pub fn nexus_api_key(&self) -> Option<&str> {
 		self.nexus_api_key.as_deref()
 	}

@@ -58,10 +58,6 @@ pub(crate) fn marker_problem(marker: &ErrorMarker, status: u32) -> Value {
 	problem(code, &title, marker.message(), status, Value::Object(details))
 }
 
-/// Returns the typed report attachments that a Problem may expose.
-///
-/// A retained staged profile is named by `retained_profile`, because exec and
-/// export give it different recovery meanings.
 pub(crate) fn report_details<C>(report: &Report<C>, retained_profile: &str) -> Map<String, Value> {
 	let mut details = Map::new();
 	if let Some(file) = report
@@ -386,6 +382,7 @@ mod tests {
 		if let Some(details) = marker_problem(&marker, 1)["details"].as_object() {
 			keys.extend(details.keys().cloned());
 		}
+		keys.extend(["output", "files"].map(str::to_owned));
 
 		assert!(keys.len() > 6);
 		for key in keys {

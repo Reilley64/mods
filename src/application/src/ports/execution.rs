@@ -13,8 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// A resolved program and its child working directory. The adapter state holds
-/// the launch details only the launching adapter reads.
+/// Only the launching adapter reads `state`.
 pub struct LaunchTarget {
 	pub program: PathBuf,
 	pub working_directory: PathBuf,

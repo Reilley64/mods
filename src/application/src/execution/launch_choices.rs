@@ -9,14 +9,12 @@ use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 
-/// Returns the requested working directory, or the bound game directory.
-///
-/// The game resolves `Data\` and its script-extender loaders relative to its
-/// working directory, so a child without `--cwd` starts in the game directory.
 pub(crate) fn child_working_directory(
 	working_directory: Option<WorkingDirectory>,
 	game_binding: &GameBinding,
 ) -> Result<WorkingDirectory, ErrorMarker> {
+	// The game resolves `Data\` and its script-extender loaders relative to its
+	// working directory, so a child without `--cwd` starts in the game directory.
 	working_directory.map_or_else(
 		|| {
 			WorkingDirectory::new(game_binding.game_directory().as_path().to_owned())
@@ -26,11 +24,6 @@ pub(crate) fn child_working_directory(
 	)
 }
 
-/// Returns the Data Mod that receives new files, or `None` for Overwrite.
-///
-/// # Errors
-///
-/// A named Data Mod must be installed and enabled.
 pub(crate) fn output_mod(plan: &EnvironmentPlan, output_target: OutputTarget) -> Result<Option<ModName>, ErrorMarker> {
 	let OutputTarget::DataMod(name) = output_target else {
 		return Ok(None);

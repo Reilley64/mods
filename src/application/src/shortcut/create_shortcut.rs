@@ -47,16 +47,6 @@ impl fmt::Display for CreateShortcutError {
 	}
 }
 
-/// Validates the launch choices as `exec` would, then saves a shortcut that runs
-/// `exec --hidden` with them.
-///
-/// Without `working_directory`, the shortcut starts the program in the bound
-/// game directory, like `exec`.
-///
-/// # Errors
-///
-/// Returns [`CreateShortcutError`] with the failing step's marker. Nothing is
-/// saved after a failure.
 #[expect(
 	clippy::too_many_arguments,
 	reason = "Keep independent launch and publication choices explicit at the application boundary"
@@ -85,6 +75,7 @@ pub async fn create_shortcut(
 		.call(())
 		.await
 		.context(CreateShortcutError)?;
+
 	let working_directory =
 		child_working_directory(working_directory, &settings.effective_binding).context(CreateShortcutError)?;
 	let LaunchTarget {
@@ -96,6 +87,7 @@ pub async fn create_shortcut(
 		.call((program, arguments.clone(), working_directory))
 		.await
 		.context(CreateShortcutError)?;
+
 	let PreparedEnvironment { plan, .. } = prepare_environment(
 		&dependencies.prepare_environment_plan,
 		&dependencies.project_profile,

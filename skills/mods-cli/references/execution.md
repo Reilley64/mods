@@ -35,12 +35,13 @@ The tool and `--example-argument` above are placeholders: use the actual tool's 
 - An **Output Target** receives new Data files and new copy/file-move destinations for this execution. It does not change Mod Priority or relocate an existing destination from its provider. Do not promise that every write goes to the Output Target.
 - Without `--cwd`, the child starts in the bound Game Installation directory, because the game and its script-extender loaders resolve `Data\` from their working directory. `--cwd PATH` selects another directory; a relative PATH resolves against the caller's startup directory. The working directory never changes executable lookup. It does change how the child reads relative paths: without `--cwd`, relative program arguments and files the child opens by relative path resolve against the game directory, not the caller's directory. Pass absolute argument paths, or pass `--cwd`.
 - Path-like PROGRAM values resolve from the caller's startup directory. Bare names search inherited PATH, not an implicit current directory. If no extension is supplied, `.exe` fallback is supported. Prefer an absolute `.exe` path. Scripts and shell syntax are not implicitly interpreted; unsupported targets fail. Command-line size and NUL validation also apply.
+- Before it launches anything, `exec` prepares the environment. This creates a missing `meta.toml` for each enabled mod.
 - Without `--hidden`, child stdout and stderr are forwarded live and byte-for-byte in both modes; stdin remains inherited. `--json` applies to pre-launch CLI failures, but a launched child has no JSON success wrapper. The CLI returns the child's exit status after managed supervision; read [statuses](troubleshooting.md) to distinguish launch/management errors from child failures.
 - `exec --hidden` (Windows only) detaches the launcher console, captures child output privately instead of forwarding it, and shows launch or management failures in a dialog. The exit status is the only machine signal. `--hidden` cannot be combined with `--json`: the CLI rejects it as `invalid_arguments` with status 2 before it detaches or launches anything. On other platforms, `--hidden` fails with `program_unsupported` and status 126.
 
 ## Create a Launch Shortcut
 
-On Windows, `shortcut` writes a desktop `.lnk` that later runs `mods exec --hidden` with the same Output Target, working directory, child arguments, and log level. It does not start the program. It writes a file and can replace a same-named `.lnk`, so get the user's approval first.
+On Windows, `shortcut` writes a desktop `.lnk` that later runs `mods exec --hidden` with the same Output Target, working directory, child arguments, and log level. It does not start the program. Like `exec`, it first prepares the environment, which creates a missing `meta.toml` for enabled mods. It writes a file and can replace a same-named `.lnk`, so get the user's approval first.
 
 ```powershell
 # After approval:

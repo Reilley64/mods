@@ -683,8 +683,10 @@ async fn dispatch(
 				Err(report) => {
 					let marker = error::application_marker(&report);
 					let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
+
 					let mut details = json_output::report_details(&report, "retained_export_stage");
 					details.insert("output".into(), json!(output_path.display().to_string()));
+
 					with_problem_details(
 						problem_outcome(
 							status,
@@ -896,18 +898,18 @@ fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bo
 }
 
 fn with_problem_details(mut outcome: RunOutcome, details: Map<String, Value>) -> RunOutcome {
+	let Some(JsonPresentation::Problem(Value::Object(problem))) = &mut outcome.presentation else {
+		return outcome;
+	};
 	if details.is_empty() {
 		return outcome;
 	}
 
-	if let Some(JsonPresentation::Problem(problem)) = &mut outcome.presentation {
-		if problem.get("details").is_none() {
-			problem["details"] = json!({});
-		}
-		if let Some(target) = problem["details"].as_object_mut() {
-			target.extend(details);
-		}
+	match problem.entry("details").or_insert_with(|| json!({})) {
+		Value::Object(existing) => existing.extend(details),
+		other => *other = Value::Object(details),
 	}
+
 	outcome
 }
 

@@ -495,8 +495,6 @@ async fn validate_layout(directory: &Path, cancellation: &CancellationToken) -> 
 	validate_bsa_file(&directory.join("cache"), cancellation).await
 }
 
-/// Requires `cache` to hold the generated archive and, after a Nexus download,
-/// the `downloads` directory.
 pub(crate) async fn validate_download_cache_entries(
 	cache: &Path,
 	cancellation: &CancellationToken,
