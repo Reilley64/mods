@@ -34,7 +34,8 @@ use tracing::dispatcher::with_default;
 #[cfg(windows)]
 mod native;
 
-/// Composes one managed upstream execution without a shell or detached lifetime.
+/// Resolves launch inputs, prepares the environment, and composes one managed upstream
+/// execution without a shell or detached lifetime.
 #[derive(Clone)]
 pub(crate) struct ExecutionAdapter {
 	root: EnvironmentRoot,
@@ -111,6 +112,7 @@ impl ExecutionAdapter {
 			.call((effective_binding, cancellation.clone()))
 			.await?;
 		let prepared = EnvironmentAdapter.prepare_execution(&self.root, &binding, &cancellation)?;
+
 		if let OutputTarget::DataMod(name) = output_target {
 			let provider = prepared
 				.providers

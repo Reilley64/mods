@@ -83,6 +83,7 @@ pub async fn create_shortcut(
 		.call((output_target.clone(), cancellation))
 		.await
 		.context(CreateShortcutError)?;
+
 	let settings = dependencies.load_settings.call(()).await.context(CreateShortcutError)?;
 	let environment = dependencies
 		.locate_environment_root
@@ -114,6 +115,7 @@ pub async fn create_shortcut(
 		let executable_name = resolved_program.file_stem().unwrap_or_default().to_string_lossy();
 		shortcut_name(&format!("{environment_name} — {executable_name}"), false).context(CreateShortcutError)?
 	};
+
 	let mut saved_arguments = vec![
 		OsString::from("--environment"),
 		environment.into_os_string(),
@@ -151,7 +153,6 @@ pub async fn create_shortcut(
 mod tests {
 	use super::*;
 	use crate::ErrorMarker;
-	use crate::installation::InstallationState;
 	use crate::ports::PortFuture;
 	use crate::ports::PreparedExecution;
 	use crate::settings::ResolvedSettings;
@@ -163,7 +164,6 @@ mod tests {
 	use domain::ModName;
 	use domain::SteamBuildId;
 	use rootcause::report;
-	use std::collections::HashMap;
 	use std::env::temp_dir;
 	use std::sync::Arc;
 	use std::sync::atomic::AtomicBool;
@@ -186,14 +186,7 @@ mod tests {
 			profile_directory: temp_dir().join("profile"),
 			data_directory: temp_dir().join("game").join("Data"),
 			cache_directory: temp_dir().join("cache"),
-			consumed_state: InstallationState {
-				game_binding: binding,
-				installed_mods: Vec::new(),
-				current_winners: HashMap::new(),
-				file_dependencies: HashMap::new(),
-			},
-			consumed_bytes: Vec::new(),
-			file_lengths: Vec::new(),
+			revalidation_basis: Arc::new(()),
 		}
 	}
 
@@ -317,7 +310,7 @@ mod tests {
 			let prepare = dependencies.prepare_execution_environment.clone();
 			dependencies.prepare_execution_environment = Arc::new(move |target, cancellation| {
 				assert!(matches!(&target, OutputTarget::DataMod(name) if name.as_str() == "Generated"));
-				prepare(target, cancellation)
+				prepare.call((target, cancellation))
 			});
 			dependencies.persist = Arc::new(move |definition| {
 				assert_eq!(definition.launcher, PathBuf::from("/bin/mods.exe"));
@@ -452,7 +445,7 @@ mod tests {
 		let resolve = dependencies.resolve_launch_inputs.clone();
 		dependencies.resolve_launch_inputs = Arc::new(move |cwd, program, arguments, token| {
 			assert!(token.is_cancelled());
-			resolve(cwd, program, arguments, token)
+			resolve.call((cwd, program, arguments, token))
 		});
 		dependencies.prepare_execution_environment = Arc::new(|_, token| {
 			Box::pin(async move {

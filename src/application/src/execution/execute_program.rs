@@ -59,6 +59,7 @@ pub async fn execute_program(
 		.call((output_target.clone(), cancellation.clone()))
 		.await
 		.context(ExecuteProgramError)?;
+
 	let output = dependencies
 		.run_managed_program
 		.call((
@@ -85,7 +86,6 @@ mod tests {
 	use super::execute_program;
 	use crate::ErrorMarker;
 	use crate::execution::ExecutionWarning;
-	use crate::installation::InstallationState;
 	use crate::ports::PortFuture;
 	use crate::ports::PreparedExecution;
 	use crate::ports::ResolvedLaunch;
@@ -100,7 +100,6 @@ mod tests {
 	use rootcause::Result;
 	use rootcause::prelude::ResultExt;
 	use rootcause::report;
-	use std::collections::HashMap;
 	use std::env::temp_dir;
 	use std::sync::Arc;
 	use std::sync::atomic::AtomicBool;
@@ -131,14 +130,7 @@ mod tests {
 			profile_directory: temp_dir().join("profile"),
 			data_directory: temp_dir().join("game").join("Data"),
 			cache_directory: temp_dir().join("cache"),
-			consumed_state: InstallationState {
-				game_binding: binding,
-				installed_mods: Vec::new(),
-				current_winners: HashMap::new(),
-				file_dependencies: HashMap::new(),
-			},
-			consumed_bytes: Vec::new(),
-			file_lengths: Vec::new(),
+			revalidation_basis: Arc::new(()),
 		})
 	}
 
@@ -148,7 +140,7 @@ mod tests {
 		let cancellation = CancellationToken::new();
 		let observed_cancellation = cancellation.clone();
 		let prepared = prepared_execution()?;
-		let expected_prepared = prepared.clone();
+		let expected_basis = prepared.revalidation_basis.clone();
 		let target = OutputTarget::DataMod(
 			ModName::new("Output".into()).context(ErrorMarker::invalid_output_target())?,
 		);
@@ -173,7 +165,7 @@ mod tests {
 			run_managed_program: Arc::new(move |target, launch, prepared, _, token| {
 				assert_eq!(target, expected_target);
 				assert_eq!(launch.program, temp_dir().join("tool.exe"));
-				assert_eq!(prepared, expected_prepared);
+				assert!(Arc::ptr_eq(&prepared.revalidation_basis, &expected_basis));
 				token.cancel();
 				Box::pin(async {
 					Ok(ExecuteProgramOutput {

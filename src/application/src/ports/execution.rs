@@ -1,5 +1,4 @@
 use crate::execution::ExecuteProgramOutput;
-use crate::installation::InstallationState;
 use crate::ports::PortFuture;
 use crate::ports::ReportProgress;
 use domain::DataRelativePath;
@@ -10,6 +9,7 @@ use domain::ProgramArgument;
 use domain::ProviderIdentity;
 use domain::ProviderReference;
 use domain::WorkingDirectory;
+use std::any::Any;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ pub struct ExecutionProfileText {
 /// runtime visibility. Profile texts come from canonical Profile State.
 /// This is not a coherent concurrent filesystem snapshot. Revalidation must make a
 /// fresh preparation immediately before process creation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PreparedExecution {
 	pub game_binding: GameBinding,
 	pub providers: Vec<ExecutionProvider>,
@@ -59,9 +59,7 @@ pub struct PreparedExecution {
 	pub profile_directory: PathBuf,
 	pub data_directory: PathBuf,
 	pub cache_directory: PathBuf,
-	pub consumed_state: InstallationState,
-	pub consumed_bytes: Vec<(PathBuf, Vec<u8>)>,
-	pub file_lengths: Vec<u64>,
+	pub revalidation_basis: Arc<dyn Any + Send + Sync>,
 }
 
 pub type ResolveLaunchInputs = Arc<

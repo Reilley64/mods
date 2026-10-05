@@ -956,14 +956,7 @@ mod tests {
 			profile_directory: PathBuf::new(),
 			data_directory: binding.game_directory().as_path().join("Data"),
 			cache_directory: PathBuf::new(),
-			consumed_state: InstallationState {
-				game_binding: binding,
-				installed_mods: Vec::new(),
-				current_winners: HashMap::new(),
-				file_dependencies: HashMap::new(),
-			},
-			consumed_bytes: Vec::new(),
-			file_lengths: Vec::new(),
+			revalidation_basis: Arc::new(()),
 		}
 	}
 
@@ -1941,12 +1934,10 @@ mod tests {
 			});
 			let resolved_cwd = expected_cwd.clone();
 			let resolved_program = program.clone();
-			let prepare = dependencies.create_shortcut.prepare_execution_environment.clone();
-			let settings = named_settings(
-				test_binding(temp.path())
-					.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?,
-				"Vanilla Plus",
-			);
+			let binding = test_binding(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let prepared = prepared_execution(binding.clone());
+			let settings = named_settings(binding, "Vanilla Plus");
 			dependencies.create_shortcut = CreateShortcutDependencies {
 				locate_launcher: Arc::new(move || {
 					let launcher = launcher.clone();
@@ -1965,7 +1956,7 @@ mod tests {
 					let launch = resolved_launch(resolved_cwd.clone(), resolved_program.clone());
 					Box::pin(async move { Ok(launch) }) as PortFuture<_>
 				}),
-				prepare_execution_environment: Arc::new(move |target, cancellation| {
+				prepare_execution_environment: Arc::new(move |target, _| {
 					if custom {
 						assert!(
 							matches!(&target, OutputTarget::DataMod(name) if name.as_str() == "--Generated")
@@ -1973,7 +1964,8 @@ mod tests {
 					} else {
 						assert_eq!(target, OutputTarget::Overwrite);
 					}
-					prepare(target, cancellation)
+					let prepared = prepared.clone();
+					Box::pin(async move { Ok(prepared) }) as PortFuture<_>
 				}),
 				load_settings: Arc::new(move || {
 					let settings = settings.clone();

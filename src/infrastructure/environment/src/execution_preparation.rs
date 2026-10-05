@@ -19,9 +19,18 @@ use domain::ProviderIdentity;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+use std::path::PathBuf;
 use std::str::from_utf8;
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+
+#[derive(PartialEq, Eq)]
+struct ConsumedExecutionInputs {
+	state: InstallationState,
+	bytes: Vec<(PathBuf, Vec<u8>)>,
+	file_lengths: Vec<u64>,
+}
 
 impl EnvironmentAdapter {
 	/// Reads execution inputs without repairing or rewriting canonical state.
@@ -167,14 +176,16 @@ impl EnvironmentAdapter {
 			profile_directory,
 			data_directory,
 			cache_directory: root.as_path().join("cache"),
-			consumed_state: InstallationState {
-				game_binding: snapshot.game_binding,
-				installed_mods: snapshot.installed_mods,
-				current_winners: snapshot.current_winners,
-				file_dependencies: snapshot.file_dependencies,
-			},
-			consumed_bytes,
-			file_lengths,
+			revalidation_basis: Arc::new(ConsumedExecutionInputs {
+				state: InstallationState {
+					game_binding: snapshot.game_binding,
+					installed_mods: snapshot.installed_mods,
+					current_winners: snapshot.current_winners,
+					file_dependencies: snapshot.file_dependencies,
+				},
+				bytes: consumed_bytes,
+				file_lengths,
+			}),
 		})
 	}
 
@@ -189,8 +200,31 @@ impl EnvironmentAdapter {
 		prepared: &PreparedExecution,
 		cancellation: &CancellationToken,
 	) -> Result<(), ErrorMarker> {
-		let current = self.prepare_execution(root, &prepared.game_binding, cancellation)?;
-		if current != *prepared {
+		let PreparedExecution {
+			game_binding,
+			providers,
+			winners,
+			visible_files,
+			profile_files,
+			profile_directory,
+			data_directory,
+			cache_directory,
+			revalidation_basis,
+		} = self.prepare_execution(root, &prepared.game_binding, cancellation)?;
+		let consumed_unchanged = revalidation_basis
+			.downcast_ref::<ConsumedExecutionInputs>()
+			.zip(prepared.revalidation_basis.downcast_ref::<ConsumedExecutionInputs>())
+			.is_some_and(|(current, consumed)| current == consumed);
+		let unchanged = game_binding == prepared.game_binding
+			&& providers == prepared.providers
+			&& winners == prepared.winners
+			&& visible_files == prepared.visible_files
+			&& profile_files == prepared.profile_files
+			&& profile_directory == prepared.profile_directory
+			&& data_directory == prepared.data_directory
+			&& cache_directory == prepared.cache_directory
+			&& consumed_unchanged;
+		if !unchanged {
 			return Err(report!(ErrorMarker::environment_invalid(Some(
 				"execution_state_changed"
 			))));
@@ -334,7 +368,12 @@ mod tests {
 		assert_eq!(visible, ["FalloutNV.esm", "TEXTURES/RESTORED.txt", "WINNER.txt"]);
 		assert!(matches!(prepared.winners[1], ProviderReference::DataMod { .. }));
 		assert!(matches!(prepared.winners[2], ProviderReference::Overwrite { .. }));
-		assert_eq!(prepared.file_lengths, [7, 4, 9]);
+		assert_eq!(
+			prepared.revalidation_basis
+				.downcast_ref::<ConsumedExecutionInputs>()
+				.map(|consumed| consumed.file_lengths.as_slice()),
+			Some([7, 4, 9].as_slice())
+		);
 		EnvironmentAdapter.revalidate_execution(&root, &prepared, &cancellation)?;
 
 		fs::write(
