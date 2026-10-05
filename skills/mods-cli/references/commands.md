@@ -20,14 +20,14 @@ mods --json exec [--output-target NAME] [--cwd PATH] -- PROGRAM [ARGS]...
 Global `--environment` and `--log-level` also work after subcommands. Log levels are `trace`, `debug`, `info` (default), `warn`, `error`, `off`. `-h`/`--help` show help; root `-V`/`--version` shows version. Clap's `help` subcommand also provides command help, for example `mods help install`.
 
 ```powershell
-mods --json --version
-mods --json --help
-mods --json config set --help
-mods --json install --help
+mods --version
+mods --help
+mods config set --help
+mods install --help
 mods --json --environment 'D:\Mod Environments\Mojave' --log-level off config list
 ```
 
-The CLI has no MCP command, conflict-resolution command, uninstall command, or mod enable/reorder command. Use supported commands and installed help rather than inventing flags.
+`--json` needs a release that includes JSON output; released v0.1.0 rejects it with exit status 2 and `unexpected argument '--json'`. In that case, omit `--json` from the examples in these references and read the text output. The CLI has no MCP command, conflict-resolution command, uninstall command, or mod enable/reorder command. Use supported commands and installed help rather than inventing flags.
 
 ## Initialization and settings
 

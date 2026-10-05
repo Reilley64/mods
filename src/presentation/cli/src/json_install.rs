@@ -10,6 +10,7 @@ use application::installation::InstallPlan;
 use application::installation::InstallPreview;
 use application::installation::InstallWarning;
 use application::installation::LoserReason;
+use application::installation::MalformedGroupRepair;
 use application::installation::ProjectedModState;
 use application::installation::WinnerReason;
 use domain::ArchiveIdentity;
@@ -89,7 +90,7 @@ fn warning(value: &InstallWarning) -> Value {
 		InstallWarning::FomodMalformedGroupRepaired { group_id, repair } => (
 			"fomod_malformed_group_repaired",
 			"a malformed FOMOD group was repaired",
-			json!({"group_id": group_id, "repair": match repair { application::installation::MalformedGroupRepair::SingleOptionExactlyOneToSelectAll => "single_option_exactly_one_to_select_all" }}),
+			json!({"group_id": group_id, "repair": match repair { MalformedGroupRepair::SingleOptionExactlyOneToSelectAll => "single_option_exactly_one_to_select_all" }}),
 		),
 		InstallWarning::FomodFommDependencyAssumedCompatible { minimum_version } => (
 			"fomod_fomm_dependency_assumed_compatible",

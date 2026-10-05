@@ -24,7 +24,7 @@ Explicit global `--json` covers command results, help, version, startup and argu
 
 The gate emits advisory findings that vary by run. The following dispositions cover every unique reported rule; accepted findings are not a clean gate pass.
 
-- Fixed: `runner.rs`, `main.rs`, and `json_output.rs` phase spacing at publication and warning phases; `json_conflicts.rs`, `json_install.rs`, and `json_output.rs` import placement with module-level imports and only necessary qualified paths; `json_output.rs` Rustdoc-format finding by removing the misplaced comment; `runner.rs` readability by keeping JSON state typed until publication; six deterministic Clippy findings.
+- Fixed: `runner.rs`, `main.rs`, and `json_output.rs` phase spacing at publication and warning phases; `json_conflicts.rs`, `json_install.rs`, and `json_output.rs` import placement with module-level imports (the qualified paths that remained were fixed in the repair cycle below); `json_output.rs` Rustdoc-format finding by removing the misplaced comment; `runner.rs` readability by keeping JSON state typed until publication; six deterministic Clippy findings.
 - Accepted, presentation-only false positive: `main.rs` and `runner.rs` use-case parameters and declaration order, and `runner.rs` focused use-case orchestration. Neither file defines an application use case. They own CLI composition and dispatch.
 - Accepted, ticket-specific code: narrow custom implementation findings in `main.rs`, `runner.rs`, `json_output.rs`, `json_install.rs`, and `json_conflicts.rs`. These files map approved CLI results to a stable, allowlisted public JSON contract; they do not implement general-purpose serialization infrastructure.
 - Accepted, test-only result shape: `commands.rs` and `json_output.rs` tests use standard `Result` to surface Clap errors without `unwrap` or `panic`. The rootcause lower-layer-results rubric applies to production lower-layer APIs, not presentation tests.
@@ -40,7 +40,7 @@ The latest advisory gate still reports these file-level findings. They remain ex
 | File under `src/presentation/cli/src/` | Rule | Disposition and reason |
 | --- | --- | --- |
 | `json_conflicts.rs` | Import placement and use | Accepted as unsupported. Imports are module-level; the read-only review found no concrete violating location. |
-| `json_install.rs` | Import placement and use | The identified qualified enum paths were fixed and rechecked. Accept the remaining file-level allegation because it supplies no further location. |
+| `json_install.rs` | Import placement and use | Fixed in the repair cycle. The earlier record wrongly said the qualified enum paths were fixed: the `MalformedGroupRepair` path was still qualified. It is now imported. |
 | `runner.rs` | Phase spacing | The identified classification and publication phases were separated and rechecked. Accept the remaining allegation because no further violating location was established. |
 | `main.rs` | Phase spacing | Acquisition, transformation, and publication now have separate phases. The reviewer verified the final fix. Accept the residual file-level allegation as stale or unsupported. |
 | `json_output.rs` | Phase spacing | Detail collection, title construction, and output are separated. The reviewer confirmed the repair. Accept the remaining allegation as unsupported. |
@@ -52,6 +52,15 @@ The latest advisory gate still reports these file-level findings. They remain ex
 | `runner.rs` | Use-case declaration order | Accepted as inapplicable to presentation dispatch rather than application use cases. |
 
 These acceptances do not bypass enforce mode. If the gate is enforcing, its explicit override mechanism is still required.
+
+## Repair cycle
+
+The PR audit found style blockers against the current `CODING_STYLE.md`. The repair commit fixes them without changing JSON field shapes or text output:
+
+- Import placement and use: `json_install.rs` imports `MalformedGroupRepair`. `runner.rs` imports `InitializeEnvironmentWarning`, `InvalidEnvironmentRoot`, `std::error::Error`, and `std::fmt`. The `json_output.rs` tests import `parse_from` and `std::error::Error`. The `runner.rs` JSON tests import `serde_json::Value`, `from_str`, and `json`. The initialization warning mapping in `runner.rs` is now rustfmt-formatted.
+- Prefer Option and Result combinators: the `json_output.rs` clap document test uses `ok_or` and `?` instead of `let … else`.
+- Match only for multi-way logic: `json_conflicts.rs` content comparison uses `if let` for the two digest-bearing variants instead of a one-arm `match` with a no-op wildcard.
+- The `mods-cli` skill no longer assumes that the released v0.1.0 CLI accepts `--json`. The validation reference no longer cites JSON source files as v0.1.0 evidence.
 
 ## Follow-ups outside this ticket
 

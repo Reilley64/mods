@@ -45,7 +45,7 @@ All source paths below are under the fixed [v0.1.0 tree](https://github.com/Reil
 | --- | --- |
 | Every command, positional argument, flag, level and setting key; example syntax | `src/presentation/cli/src/commands.rs`, including parser tests |
 | Environment Root default and relative path semantics; install outcomes and child status forwarding | `src/presentation/cli/src/runner.rs`, `path_resolution.rs` |
-| Settings and FOMOD/preview text, warnings, quiet mutations | `src/presentation/cli/src/output.rs`, `install_warning.rs`, `json_install.rs`, `json_output.rs` |
+| Settings and FOMOD/preview text, warnings, quiet mutations | `src/presentation/cli/src/output.rs`, `install_warning.rs` |
 | Init precedence, target constraints, overrides | `src/application/src/environment/initialize_environment.rs`; `src/infrastructure/game_platform/src/resolution.rs`; `src/infrastructure/environment/src/lib.rs`; `src/infrastructure/settings/src/config_source.rs` |
 | Archive formats, name derivation, replacement and disabled new installs | `src/infrastructure/archive/src/index.rs`; `src/domain/src/installation.rs`; `src/application/src/installation/install_archive.rs` |
 | Complete ordered choices, cardinality and synthetic none | `CONTEXT.md`; `src/application/src/installation/install_archive/fomod.rs` |
@@ -54,7 +54,9 @@ All source paths below are under the fixed [v0.1.0 tree](https://github.com/Reil
 | Errors, cancellation, child statuses, diagnostics | `src/presentation/cli/src/error.rs`, `main.rs`, `publication.rs`, `diagnostics.rs`, `operation.rs`; `src/infrastructure/execution/src/managed.rs` |
 | Runtime prerequisites and files | Published runtime ZIP, `BUILD-AND-SOURCE.md`, runtime checksum asset; tagged `docs/distribution.md` |
 
-Examples were checked against these released definitions and tests. Paths, tool names/arguments, and FOMOD IDs are illustrative, not claims of executed game workflows. Windows commands must still be checked against the user's installed help.
+v0.1.0 has no `--json` flag, so the table above is not evidence for JSON output. JSON output comes from issue #131 and is unreleased at this reference version. Its source is `src/presentation/cli/src/json_output.rs`, `json_install.rs`, and `json_conflicts.rs` on the default branch, and its contract is [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
+
+Examples were checked against these released definitions and tests. The `--json` flag in the examples was checked against the default-branch source above, not against v0.1.0. Paths, tool names/arguments, and FOMOD IDs are illustrative, not claims of executed game workflows. Windows commands must still be checked against the user's installed help.
 
 ## Validation results
 

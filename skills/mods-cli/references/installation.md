@@ -31,7 +31,7 @@ mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Tex
 1. Start with `mods --json install ARCHIVE --dry-run` and inspect stdout. If `outcome` is `"additional_selections_required"`, read every unresolved group's `id`, label, description, cardinality, and options. Use actual returned IDs, not display labels.
 2. Ask the user for unresolved preferences. Select only options marked selectable and respect cardinality. Optional groups can expose a synthetic `none`; use that returned option ID when appropriate, rather than inventing an empty selection.
 3. Repeat `--choice 'GROUP=OPTION'` in order. Each invocation carries **all previously accepted choices plus the new choices**. There is no persisted installation session. Values are not trimmed; copy IDs exactly. Changing an earlier choice can change which later groups exist.
-4. Repeat the preview until the JSON `outcome` is `"preview"`. Review the completed Install Plan. After installation approval, rerun with the full choice list and the same archive/name/replacement intent, omitting `--dry-run`. Inspect the outcome again; changed inputs may require choices again.
+4. Repeat the preview until `outcome` is `"preview"`. Review the completed Install Plan. After installation approval, rerun with the full choice list and the same archive/name/replacement intent, omitting `--dry-run`. Inspect the outcome again; changed inputs may require choices again.
 
 Illustrative syntax only, assuming the output actually returned `visuals`, `high`, `extras`, and `none`:
 
@@ -48,9 +48,9 @@ An `invalid_selection` error can include `field`, `group_id`, `option_id`, and z
 
 | Status and stdout | Meaning | Next action |
 | --- | --- | --- |
-| 0, JSON `outcome` is `"additional_selections_required"` | Choices incomplete; no completed installation | Resubmit complete choices |
-| 0, JSON `outcome` is `"preview"` | Completed Install Plan only; no publication | Review and obtain installation approval |
-| 0, JSON `outcome` is `"installed"` | Completed installation | Report completion and `warnings`; new install remains disabled |
-| Nonzero | Failed/cancelled operation | Read the stderr Problem Details and [troubleshooting](troubleshooting.md); preserve partial state |
+| 0, JSON `outcome` is `"additional_selections_required"`, or text `outcome = "additional_selections_required"` | Choices incomplete; no completed installation | Resubmit complete choices |
+| 0, JSON `outcome` is `"preview"`, or text `outcome = "preview"` | Completed Install Plan only; no publication | Review and obtain installation approval |
+| 0, JSON `outcome` is `"installed"`, or empty text stdout from a non-dry-run install | Completed installation | Report completion and `warnings` (stderr warning lines in text mode); new install remains disabled |
+| Nonzero | Failed/cancelled operation | Read the stderr Problem Details (or the text `error [code]` lines) and [troubleshooting](troubleshooting.md); preserve partial state |
 
 Incomplete choices can occur with or without `--dry-run`. Warnings can appear in every outcome. Never equate exit zero alone with installed files.

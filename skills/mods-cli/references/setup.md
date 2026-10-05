@@ -8,8 +8,8 @@ Install through WinGet after user approval:
 
 ```powershell
 winget install Reilley64.Mods
-mods --json --version
-mods --json --help
+mods --version
+mods --help
 ```
 
 Confirm that WinGet selects `Reilley64.Mods`; stop if it reports an ambiguous or different package. If `mods` is not immediately available, open a new terminal and check `Get-Command mods` before retrying installation.
@@ -30,7 +30,7 @@ usvfs/usvfs_proxy_x64.exe
 
 Do not move only `mods.exe` or substitute native files from another release. The original all-in-one `mods-v0.1.0-x86_64-pc-windows-msvc.zip` remains supported and has its own `SHA256SUMS`; it includes corresponding source. The smaller runtime ZIP has a separate source download linked in `BUILD-AND-SOURCE.md`.
 
-Use the full executable path with PowerShell's `&` operator, or add its installation directory to PATH with user approval. Check `mods --json --version` and `mods --json --help` after setup. Do not assume Chocolatey or Scoop availability.
+Use the full executable path with PowerShell's `&` operator, or add its installation directory to PATH with user approval. Check `mods --version` and `mods --help` after setup. Do not assume Chocolatey or Scoop availability.
 
 ## Select a Mod Environment
 

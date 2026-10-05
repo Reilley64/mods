@@ -135,6 +135,7 @@ mod tests {
 	use super::game_directory_warnings;
 	use super::marker_problem;
 	use super::setting;
+	use crate::commands::parse_from;
 	use application::ErrorMarker;
 	use application::settings::SetGameDirectoryWarning;
 	use application::settings::SettingKey;
@@ -142,6 +143,7 @@ mod tests {
 	use application::settings::SettingSource;
 	use application::settings::SettingValue;
 	use serde_json::json;
+	use std::error::Error;
 
 	#[test]
 	fn setting_uses_null_and_structured_override_without_human_sentinels() {
@@ -199,16 +201,13 @@ mod tests {
 		);
 	}
 	#[test]
-	fn help_version_and_argument_failure_have_one_structured_document() -> Result<(), Box<dyn std::error::Error>> {
+	fn help_version_and_argument_failure_have_one_structured_document() -> Result<(), Box<dyn Error>> {
 		for (arguments, key) in [
 			(vec!["mods", "--json", "--help"], "help"),
 			(vec!["mods", "--json", "--version"], "version"),
 			(vec!["mods", "--json", "missing"], "type"),
 		] {
-			let error = crate::commands::parse_from(arguments).err();
-			let Some(error) = error else {
-				return Err("expected clap document".into());
-			};
+			let error = parse_from(arguments).err().ok_or("expected clap document")?;
 			let document = clap_document(&error);
 			assert!(document.get(key).is_some());
 			assert!(document.get("status").is_none());

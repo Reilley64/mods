@@ -178,21 +178,19 @@ fn comparison(value: &ContentComparison) -> Value {
 		ContentState::Unstable => "unstable",
 	};
 	let mut result = json!({"state": state, "winner": provider(value.winner()), "loser": provider(value.loser())});
-	match value {
-		ContentComparison::SameSha256 {
-			winner_sha256,
-			loser_sha256,
-			..
-		}
-		| ContentComparison::DifferentSha256 {
-			winner_sha256,
-			loser_sha256,
-			..
-		} => {
-			result["winner_sha256"] = json!(winner_sha256.as_str());
-			result["loser_sha256"] = json!(loser_sha256.as_str());
-		}
-		_ => {}
+	if let ContentComparison::SameSha256 {
+		winner_sha256,
+		loser_sha256,
+		..
+	}
+	| ContentComparison::DifferentSha256 {
+		winner_sha256,
+		loser_sha256,
+		..
+	} = value
+	{
+		result["winner_sha256"] = json!(winner_sha256.as_str());
+		result["loser_sha256"] = json!(loser_sha256.as_str());
 	}
 	result
 }

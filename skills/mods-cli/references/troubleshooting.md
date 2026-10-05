@@ -25,6 +25,7 @@ With `--json`, errors are Problem Details on stderr. Use `type` as the machine i
 
 | Error or symptom | Next step |
 | --- | --- |
+| `unexpected argument '--json'` with status 2 | The installed release has no JSON output; rerun without `--json` and read the text output |
 | `environment_already_initialized`, `environment_root_not_empty`, `environment_root_unsafe` | Confirm Environment Root and inspect existing contents; do not wipe it |
 | `environment_invalid`, settings/override errors | Inspect manifest and `config list`; only `MODS_GAME_DIR` is a supported `MODS_*` setting variable; malformed/unknown overrides can fail validation |
 | Game Installation not found/invalid or observed-build mismatch | Check Steam installation and effective/stored Game Binding; ask before updating it |

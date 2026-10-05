@@ -23,6 +23,7 @@ use application::conflicts::explain_path;
 use application::conflicts::inspect_mod_conflicts;
 use application::conflicts::list_effective_conflicts;
 use application::environment::InitializeEnvironmentDependencies;
+use application::environment::InitializeEnvironmentWarning;
 use application::environment::initialize_environment;
 use application::execution::ExecuteProgramDependencies;
 use application::execution::ExecutionWarning;
@@ -44,6 +45,7 @@ use domain::DataRelativePath;
 use domain::EnvironmentRoot;
 use domain::FomodChoice;
 use domain::GameInstallationPath;
+use domain::InvalidEnvironmentRoot;
 use domain::ModName;
 use domain::OutputTarget;
 use domain::Program;
@@ -56,7 +58,9 @@ use serde_json::Value;
 use serde_json::json;
 use std::env::current_dir;
 use std::env::var_os;
+use std::error::Error;
 use std::ffi::OsString;
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -122,7 +126,7 @@ fn success(mut outcome: RunOutcome, json_mode: bool, mut value: Value, warnings:
 #[derive(Debug)]
 enum RootSelectionError {
 	LocalAppDataUnavailable,
-	InvalidRoot(domain::InvalidEnvironmentRoot),
+	InvalidRoot(InvalidEnvironmentRoot),
 }
 
 impl RootSelectionError {
@@ -134,14 +138,14 @@ impl RootSelectionError {
 	}
 }
 
-impl std::fmt::Display for RootSelectionError {
-	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for RootSelectionError {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
 		formatter.write_str(self.message())
 	}
 }
 
-impl std::error::Error for RootSelectionError {
-	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl Error for RootSelectionError {
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
 		match self {
 			Self::LocalAppDataUnavailable => None,
 			Self::InvalidRoot(cause) => Some(cause),
@@ -332,11 +336,19 @@ async fn dispatch(
 			{
 				Ok(output) => {
 					let (stdout, stderr) = output::initialization(&output);
-					let warnings = output.warnings.iter().map(|warning| match warning {
-                        application::environment::InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => json_output::warning(
-                            "bethesda_registry_fallback_used", "Bethesda registry fallback was used", json!({}),
-                        ),
-                    }).collect();
+					let warnings = output
+						.warnings
+						.iter()
+						.map(|warning| match warning {
+							InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => {
+								json_output::warning(
+									"bethesda_registry_fallback_used",
+									"Bethesda registry fallback was used",
+									json!({}),
+								)
+							}
+						})
+						.collect();
 					success(
 						RunOutcome {
 							presentation: None,
@@ -826,6 +838,9 @@ mod tests {
 	use domain::ProviderReference;
 	use domain::SteamBuildId;
 	use rootcause::report;
+	use serde_json::Value;
+	use serde_json::from_str;
+	use serde_json::json;
 	use std::error::Error;
 	use std::ffi::OsString;
 	use std::fs::read_dir;
@@ -1528,7 +1543,7 @@ mod tests {
 			|_| Err(ErrorMarker::io_failure()),
 		)
 		.await?;
-		let error: serde_json::Value = serde_json::from_str(&root_failure.stderr)?;
+		let error: Value = from_str(&root_failure.stderr)?;
 		assert_eq!(root_failure.status, 2);
 		assert_eq!(error["code"], "environment_root_selection_failed");
 		assert_eq!(error["exit_code"], 2);
@@ -1541,8 +1556,8 @@ mod tests {
 			|_| successful_dependencies(temp.path()),
 		)
 		.await?;
-		let document: serde_json::Value = serde_json::from_str(&settings.stdout)?;
-		assert_eq!(document, serde_json::json!({"settings": [], "warnings": []}));
+		let document: Value = from_str(&settings.stdout)?;
+		assert_eq!(document, json!({"settings": [], "warnings": []}));
 		assert!(settings.stderr.is_empty());
 
 		let mutation = run(
@@ -1552,10 +1567,7 @@ mod tests {
 			|_| successful_dependencies(temp.path()),
 		)
 		.await?;
-		assert_eq!(
-			serde_json::from_str::<serde_json::Value>(&mutation.stdout)?,
-			serde_json::json!({"warnings": []})
-		);
+		assert_eq!(from_str::<Value>(&mutation.stdout)?, json!({"warnings": []}));
 		assert!(mutation.stderr.is_empty());
 		Ok(())
 	}
@@ -1584,7 +1596,7 @@ mod tests {
 			if launched {
 				assert!(outcome.stderr.starts_with("error [execution_supervision_failed]:"));
 			} else {
-				let problem: serde_json::Value = serde_json::from_str(&outcome.stderr)?;
+				let problem: Value = from_str(&outcome.stderr)?;
 				assert_eq!(problem["code"], "execution_supervision_failed");
 			}
 			assert!(outcome.stdout.is_empty());
@@ -1603,10 +1615,10 @@ mod tests {
 			|_| successful_dependencies(&root),
 		)
 		.await?;
-		let document: serde_json::Value = serde_json::from_str(&warned.stdout)?;
+		let document: Value = from_str(&warned.stdout)?;
 		assert_eq!(
 			document["warnings"][0],
-			serde_json::json!({"code": "diagnostic_logging_unavailable", "message": "diagnostic session logging is unavailable", "details": {}})
+			json!({"code": "diagnostic_logging_unavailable", "message": "diagnostic session logging is unavailable", "details": {}})
 		);
 		assert!(warned.stderr.is_empty());
 
@@ -1625,7 +1637,7 @@ mod tests {
 			|_| successful_dependencies(&valid_root),
 		)
 		.await?;
-		let problem: serde_json::Value = serde_json::from_str(&failed.stderr)?;
+		let problem: Value = from_str(&failed.stderr)?;
 		assert_eq!(problem["code"], "io_failure");
 		assert!(problem["instance"].as_str().is_some());
 		assert!(!problem["detail"]
@@ -1645,7 +1657,7 @@ mod tests {
 		)
 		.await?;
 		assert_eq!(json.status, 2);
-		let problem: serde_json::Value = serde_json::from_str(&json.stderr)?;
+		let problem: Value = from_str(&json.stderr)?;
 		assert_eq!(problem["detail"], "environment root must be an absolute path");
 
 		let text = run(
