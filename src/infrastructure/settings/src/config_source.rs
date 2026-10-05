@@ -74,13 +74,13 @@ fn scan_environment(
 		} else {
 			continue;
 		};
+		if value.is_empty() {
+			continue;
+		}
 		if result.contains_key(canonical) {
 			return Err(report!(invalid.clone()));
 		}
 		let value = value.to_str().ok_or_else(|| report!(invalid.clone()))?;
-		if value.is_empty() && canonical == "MODS_GAME_DIR" {
-			return Err(report!(invalid.clone()));
-		}
 		result.insert(canonical.to_owned(), value.to_owned());
 	}
 	Ok(result)
@@ -142,7 +142,7 @@ mod tests {
 	fn unknown_mods_variables_are_ignored() {
 		let environment = vec![
 			(OsString::from("MODS_GAMEDIR"), OsString::from("x")),
-			(OsString::from("MODS_USVFS_ARTIFACTS"), OsString::from("")),
+			(OsString::from("MODS_USVFS_ARTIFACTS"), OsString::from("artifacts")),
 			(OsString::from("MODS_GAME_DIR"), OsString::from("game")),
 		];
 		assert_eq!(
@@ -152,14 +152,42 @@ mod tests {
 	}
 
 	#[test]
-	fn duplicate_and_empty_mods_values_fail() {
+	fn empty_mods_values_are_unset() {
+		let empty = vec![(OsString::from("MODS_GAME_DIR"), OsString::from(""))];
+		assert_eq!(initialization_override(&empty).ok(), Some(None));
+		let empty_and_set = vec![
+			(OsString::from("mods_game_dir"), OsString::from("")),
+			(OsString::from("MODS_GAME_DIR"), OsString::from("game")),
+		];
+		assert_eq!(
+			initialization_override(&empty_and_set).ok(),
+			Some(Some("game".to_owned()))
+		);
+		let manifest = "schema_version=1\nsteam_app_id=22380\ngame_dir='game'\nobserved_build_id=1\nnexus_api_key='synthetic-stored-key'";
+		let environment = vec![
+			(OsString::from("MODS_GAME_DIR"), OsString::from("")),
+			(OsString::from("MODS_NEXUS_API_KEY"), OsString::from("")),
+		];
+		let result = super::read_sources(
+			manifest,
+			&environment,
+			application::ErrorMarker::settings_environment_invalid(),
+		);
+		assert!(result.is_ok());
+		if let Ok((_, effective, shadowed)) = result {
+			assert_eq!(effective.game_dir, "game");
+			assert_eq!(effective.nexus_api_key.as_deref(), Some("synthetic-stored-key"));
+			assert!(!shadowed);
+		}
+	}
+
+	#[test]
+	fn duplicate_mods_values_fail() {
 		let duplicate = vec![
 			(OsString::from("MODS_GAME_DIR"), OsString::from("a")),
 			(OsString::from("mods_game_dir"), OsString::from("b")),
 		];
 		assert!(initialization_override(&duplicate).is_err());
-		let empty = vec![(OsString::from("MODS_GAME_DIR"), OsString::from(""))];
-		assert!(initialization_override(&empty).is_err());
 	}
 
 	#[cfg(unix)]
