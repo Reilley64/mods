@@ -73,7 +73,7 @@ The user then made two contract decisions:
 - Nexus file selection: JSON mode returns a `nexus_file_selection_required` Problem (exit 2) with `details.files` in published order. The schema has a typed `details` shape for it, and `docs/cli/examples/problem-nexus-file-selection.json` is the example. Text output is unchanged.
 - `docs/cli/problems.md` has anchors for all `nexus_*` codes. `environment_invalid` notes the `download_cache` phase. A unit test checks that every `ErrorCode` and synthetic problem code has an anchor.
 - Nexus provenance is not added to JSON. `InstallPreview` and `InstalledArchive` do not expose it; only `ApprovedInstallation` carries it into `meta.toml`.
-- Secret safety: a runner test uses real infrastructure adapters with a stored `nexus_api_key`. `config list`, `config get game-dir`, and a failed install, with valid and malformed manifests, in JSON and text mode, never print the key. Process-environment `MODS_NEXUS_API_KEY` is not covered, because setting a process variable needs `unsafe`. Infrastructure settings tests cover the override.
+- Secret safety: the settings and manifest tests from #128 inject the environment and assert that a stored or overriding key never appears in settings output or parse errors. JSON output renders only those allowlisted settings and markers. A runner test with real adapters was dropped: it read the process environment, and CI sets the build-time `MODS_USVFS_ARTIFACTS`, which the settings allowlist rejects.
 - All 13 examples, and captured CLI documents for `config list`, the `--json --hidden` rejection, and an install failure, pass `docs/cli/schema.json`.
 
 ## Coverage after merging #117
