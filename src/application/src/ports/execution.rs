@@ -47,6 +47,8 @@ pub struct ExecutionProfileText {
 /// Validated, read-only inputs for managed execution.
 /// Winners and visible files describe the analytical Data projection, not observed
 /// runtime visibility. Profile texts come from canonical Profile State.
+/// This is not a coherent concurrent filesystem snapshot. Revalidation must make a
+/// fresh preparation immediately before process creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedExecution {
 	pub game_binding: GameBinding,

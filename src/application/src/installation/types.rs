@@ -1,5 +1,6 @@
 use crate::conflicts::ListEffectiveConflictsOutput;
 use domain::ArchiveIdentity;
+use domain::ArchivePath;
 use domain::DataRelativePath;
 use domain::EffectiveResult;
 use domain::FileDependencyState;
@@ -340,6 +341,7 @@ pub struct InstallPlan {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovedInstallation {
+	pub nexus: Option<NexusProvenance>,
 	pub source_basename: String,
 	pub fomod_schema_version: Option<String>,
 	pub plan: InstallPlan,
@@ -364,4 +366,55 @@ pub struct InstalledArchive {
 	pub plan: InstallPlan,
 	pub conflicts: ListEffectiveConflictsOutput,
 	pub warnings: Vec<InstallWarning>,
+}
+
+#[derive(Debug, Clone)]
+pub enum InstallArchiveSource {
+	Local(ArchivePath),
+	Downloaded(DownloadedMod),
+}
+impl From<ArchivePath> for InstallArchiveSource {
+	fn from(archive: ArchivePath) -> Self {
+		Self::Local(archive)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NexusProvenance {
+	pub game_domain: String,
+	pub mod_id: u64,
+	pub file_id: u64,
+	pub file_version: String,
+	pub mod_version: String,
+	pub mod_name: String,
+	pub file_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModSource {
+	Local(ArchivePath),
+	Remote(RemoteModSource),
+}
+#[derive(Debug, Clone)]
+pub struct RemoteModSource {
+	pub url: String,
+	pub file_id: Option<u64>,
+}
+#[derive(Debug, Clone)]
+pub struct DownloadedMod {
+	pub suggested_name: String,
+	pub archive: ArchivePath,
+	pub provenance: Option<NexusProvenance>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadModFile {
+	pub file_id: u64,
+	pub name: String,
+	pub version: String,
+	pub category: String,
+}
+#[derive(Debug, Clone)]
+pub enum DownloadModOutput {
+	Downloaded(DownloadedMod),
+	SelectionRequired(Vec<DownloadModFile>),
 }

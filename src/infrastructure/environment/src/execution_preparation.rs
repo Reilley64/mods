@@ -5,7 +5,6 @@ use crate::profile::PROFILE_FILES;
 use crate::profile::decode;
 use crate::safe_fs::SafeDir;
 use crate::safe_fs::read_bounded;
-use crate::snapshot::MAX_PROVIDER_METADATA_BYTES;
 use crate::snapshot::load_execution;
 use application::ErrorMarker;
 use application::installation::InstallationState;
@@ -98,30 +97,16 @@ impl EnvironmentAdapter {
 				.iter()
 				.find(|provider| provider.identity == winner.identity())
 				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
-			let mut directory = SafeDir::open_absolute(&provider.root)
-				.context(ErrorMarker::environment_invalid(None))?;
-			let mut components = winner.original_path().components().peekable();
-			while let Some(component) = components.next() {
-				if components.peek().is_some() {
-					directory = directory
-						.open_dir(component)
-						.context(ErrorMarker::environment_invalid(None))?;
-					continue;
-				}
-				let file = directory
-					.open_regular(component)
-					.context(ErrorMarker::environment_invalid(None))?;
-				let metadata = file.metadata().context(ErrorMarker::environment_invalid(None))?;
-				file_lengths.push(metadata.len());
-				visible_files.push(ExecutionVisibleFile {
-					path: winner.original_path().clone(),
-					physical_path: provider.root.join(winner.original_path().as_str()),
-					modified: metadata
-						.modified()
-						.context(ErrorMarker::environment_invalid(None))?
-						.into_std(),
-				});
-			}
+			let details = snapshot
+				.file_details
+				.get(winner.original_path().comparison_key())
+				.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
+			file_lengths.push(details.length);
+			visible_files.push(ExecutionVisibleFile {
+				path: winner.original_path().clone(),
+				physical_path: provider.root.join(winner.original_path().as_str()),
+				modified: details.modified,
+			});
 		}
 
 		let root_directory =
@@ -168,29 +153,7 @@ impl EnvironmentAdapter {
 		)?;
 		consumed_bytes.push((root.as_path().join("mods.toml"), manifest));
 
-		for provider in &providers {
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			if provider.identity == ProviderIdentity::SteamData {
-				continue;
-			}
-			let directory = SafeDir::open_absolute(&provider.root)
-				.context(ErrorMarker::environment_invalid(None))?;
-			if directory
-				.exists("meta.toml")
-				.context(ErrorMarker::environment_invalid(None))?
-			{
-				let bytes = read_bounded(
-					&directory,
-					"meta.toml",
-					MAX_PROVIDER_METADATA_BYTES,
-					ErrorMarker::environment_invalid(None),
-					cancellation,
-				)?;
-				consumed_bytes.push((provider.root.join("meta.toml"), bytes));
-			}
-		}
+		consumed_bytes.extend(snapshot.provider_metadata);
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -271,10 +234,12 @@ impl EnvironmentAdapter {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::snapshot::INVENTORY_IO;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
 	use application::ports::ProfileSource;
 	use domain::GameInstallationPath;
+	use domain::ProviderReference;
 	use domain::SteamBuildId;
 	use std::env::current_dir;
 	use std::fs;
@@ -308,6 +273,126 @@ mod tests {
 			&CancellationToken::new(),
 		)?;
 		Ok((temp, root, binding))
+	}
+
+	#[test]
+	fn execution_collects_each_provider_once() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture()?;
+		for name in ["Enabled", "Disabled"] {
+			let directory = root.as_path().join("mods").join(name);
+			fs::create_dir(&directory).context(ErrorMarker::io_failure())?;
+			fs::write(directory.join("meta.toml"), b"schema_version = 1\n")
+				.context(ErrorMarker::io_failure())?;
+			fs::write(directory.join("test.txt"), name).context(ErrorMarker::io_failure())?;
+		}
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+Enabled\r\n-Disabled\r\n")
+			.context(ErrorMarker::io_failure())?;
+		INVENTORY_IO.with(|count| count.set((0, 0)));
+		let prepared = EnvironmentAdapter.prepare_execution(&root, &binding, &CancellationToken::new())?;
+		let counts = INVENTORY_IO.with(|count| count.get());
+		assert_eq!(prepared.winners.len(), 2);
+		assert_eq!(counts, (4, 2));
+
+		EnvironmentAdapter.revalidate_execution(&root, &prepared, &CancellationToken::new())?;
+		assert_eq!(INVENTORY_IO.with(|count| count.get()), (8, 4));
+		Ok(())
+	}
+
+	#[test]
+	fn inventories_preserve_priority_tombstones_and_fresh_revalidation() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture()?;
+		let data = binding.game_directory().as_path().join("Data");
+		fs::create_dir(data.join("Textures")).context(ErrorMarker::io_failure())?;
+		fs::write(data.join("Textures/hidden.txt"), b"base").context(ErrorMarker::io_failure())?;
+		fs::write(data.join("Textures/restored.txt"), b"base").context(ErrorMarker::io_failure())?;
+		fs::write(data.join("exact.txt"), b"base").context(ErrorMarker::io_failure())?;
+		for name in ["Low", "High", "Disabled"] {
+			fs::create_dir(root.as_path().join("mods").join(name)).context(ErrorMarker::io_failure())?;
+		}
+		fs::write(
+			root.as_path().join("mods/Low/meta.toml"),
+			b"schema_version = 1\n[tombstones]\nfiles = ['exact.txt']\ndirectories = ['textures']\n",
+		)
+		.context(ErrorMarker::io_failure())?;
+		fs::create_dir(root.as_path().join("mods/High/TEXTURES")).context(ErrorMarker::io_failure())?;
+		fs::write(root.as_path().join("mods/High/TEXTURES/RESTORED.txt"), b"high")
+			.context(ErrorMarker::io_failure())?;
+		fs::write(root.as_path().join("mods/High/winner.txt"), b"high").context(ErrorMarker::io_failure())?;
+		fs::write(root.as_path().join("mods/Disabled/winner.txt"), b"disabled")
+			.context(ErrorMarker::io_failure())?;
+		fs::write(root.as_path().join("overwrite/WINNER.txt"), b"overwrite")
+			.context(ErrorMarker::io_failure())?;
+		fs::write(
+			root.as_path().join("profile/modlist.txt"),
+			b"+Low\r\n+High\r\n-Disabled\r\n",
+		)
+		.context(ErrorMarker::io_failure())?;
+
+		let cancellation = CancellationToken::new();
+		let prepared = EnvironmentAdapter.prepare_execution(&root, &binding, &cancellation)?;
+		let visible: Vec<_> = prepared.visible_files.iter().map(|file| file.path.as_str()).collect();
+		assert_eq!(visible, ["FalloutNV.esm", "TEXTURES/RESTORED.txt", "WINNER.txt"]);
+		assert!(matches!(prepared.winners[1], ProviderReference::DataMod { .. }));
+		assert!(matches!(prepared.winners[2], ProviderReference::Overwrite { .. }));
+		assert_eq!(prepared.file_lengths, [7, 4, 9]);
+		EnvironmentAdapter.revalidate_execution(&root, &prepared, &cancellation)?;
+
+		fs::write(
+			root.as_path().join("mods/High/TEXTURES/RESTORED.txt"),
+			b"changed length",
+		)
+		.context(ErrorMarker::io_failure())?;
+		assert!(EnvironmentAdapter
+			.revalidate_execution(&root, &prepared, &cancellation)
+			.is_err());
+		let prepared = EnvironmentAdapter.prepare_execution(&root, &binding, &cancellation)?;
+		fs::write(root.as_path().join("mods/Disabled/meta.toml"), b"schema_version = 1\n")
+			.context(ErrorMarker::io_failure())?;
+		assert!(EnvironmentAdapter
+			.revalidate_execution(&root, &prepared, &cancellation)
+			.is_err());
+		fs::write(root.as_path().join("mods/Disabled/meta.toml"), b"schema_version = 2\n")
+			.context(ErrorMarker::io_failure())?;
+		assert!(EnvironmentAdapter
+			.prepare_execution(&root, &binding, &cancellation)
+			.is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn folder_sets_reject_mismatches_duplicates_and_spelling_changes() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture()?;
+		fs::create_dir(root.as_path().join("mods/Present")).context(ErrorMarker::io_failure())?;
+		for modlist in [
+			"+Missing\n",
+			"+Present\n+Present\n",
+			"+Present\n-present\n",
+			"+present\n",
+			"",
+		] {
+			fs::write(root.as_path().join("profile/modlist.txt"), modlist)
+				.context(ErrorMarker::io_failure())?;
+			assert!(
+				EnvironmentAdapter
+					.prepare_execution(&root, &binding, &CancellationToken::new())
+					.is_err(),
+				"{modlist:?}"
+			);
+		}
+		fs::write(root.as_path().join("profile/modlist.txt"), b"-Present\n")
+			.context(ErrorMarker::io_failure())?;
+		EnvironmentAdapter.prepare_execution(&root, &binding, &CancellationToken::new())?;
+		Ok(())
+	}
+
+	#[test]
+	fn inventory_rejects_cross_provider_file_directory_collision() -> Result<(), ErrorMarker> {
+		let (_temp, root, binding) = fixture()?;
+		fs::create_dir(root.as_path().join("overwrite/FalloutNV.esm")).context(ErrorMarker::io_failure())?;
+		assert!(EnvironmentAdapter
+			.prepare_execution(&root, &binding, &CancellationToken::new())
+			.is_err());
+		Ok(())
 	}
 
 	#[test]

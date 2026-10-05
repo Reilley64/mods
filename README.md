@@ -39,7 +39,7 @@ New Data Mods start disabled. The released CLI has no enable command. Installati
 
 - `init` creates a Mod Environment.
 - `config` reads settings or changes the Game Binding.
-- `install` previews, installs, or replaces a Data Mod.
+- `install` previews, installs, or replaces a Data Mod. Nexus URL acquisition requires a personal API key from a Premium account for new downloads; see [Nexus URL input](skills/mods-cli/references/installation.md#nexus-url-input).
 - `conflicts` lists File Conflicts, inspects a Data Mod, or explains a Data-relative path.
 - `exec` runs a game or tool with a Virtual Game View. Overwrite is the default Output Target.
 

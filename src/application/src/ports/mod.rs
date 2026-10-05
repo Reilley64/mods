@@ -58,3 +58,5 @@ pub use settings::StoreGameBinding;
 pub use settings::StoredAndEffectiveBinding;
 
 pub type PortFuture<T, ErrorContext = ErrorMarker> = Pin<Box<dyn Future<Output = Result<T, ErrorContext>> + Send>>;
+mod download_mod;
+pub use download_mod::DownloadMod;
