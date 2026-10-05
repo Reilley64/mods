@@ -941,6 +941,7 @@ mod tests {
 	use domain::ArchiveIdentity;
 	use domain::ArchivePath;
 	use domain::DataRelativePath;
+	use domain::EnvironmentRoot;
 	use domain::FomodCardinality;
 	use domain::FomodCondition;
 	use domain::GameBinding;
@@ -2316,6 +2317,89 @@ mod tests {
 		Ok(())
 	}
 
+	fn system_dependencies(root: &EnvironmentRoot, startup: &Path) -> Dependencies {
+		let resources = Resources::system(root.clone());
+		let execution_force_cancellation = CancellationToken::new();
+		Dependencies {
+			create_shortcut: resources.create_shortcut_dependencies(startup.to_owned()),
+			execute_program: resources
+				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
+			execution_force_cancellation,
+			initialize_environment: resources.initialize_environment_dependencies(),
+			list_settings: resources.list_settings_dependencies(),
+			get_setting: resources.get_setting_dependencies(),
+			set_game_directory: resources.set_game_directory_dependencies(),
+			install_mod: resources.install_mod_dependencies(),
+			list_effective_conflicts: resources.list_effective_conflicts_dependencies(),
+			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(),
+			explain_path: resources.explain_path_dependencies(),
+		}
+	}
+
+	#[tokio::test]
+	async fn stored_nexus_api_key_never_reaches_cli_output() -> Result<(), Box<dyn Error>> {
+		let secret = "synthetic-nexus-secret";
+		let temp = TempDir::new()?;
+		let root = temp.path().canonicalize()?;
+		let game = TempDir::new()?;
+		for directory in ["mods", "profile", "profile/saves", "overwrite", "cache", "temp"] {
+			create_dir_all(root.join(directory))?;
+		}
+		for file in ["plugins.txt", "loadorder.txt", "modlist.txt"] {
+			write(root.join("profile").join(file), b"")?;
+		}
+		write(
+			root.join("profile/Fallout.ini"),
+			concat!(
+				"[General]\nbUseMyGamesDirectory=1\nSLocalSavePath=__mods_saves\\\n",
+				"[Archive]\nbInvalidateOlderFiles=1\nSInvalidationFile=\n",
+				"sArchiveList=Fallout - Invalidation.bsa\n",
+			),
+		)?;
+		let mut empty_bsa = b"BSA\0".to_vec();
+		for value in [0x68_u32, 36, 0x3, 0, 0, 0, 0, 0] {
+			empty_bsa.extend_from_slice(&value.to_le_bytes());
+		}
+		write(root.join("cache/Fallout - Invalidation.bsa"), empty_bsa)?;
+		let manifest = format!(
+			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = '{}'\nobserved_build_id = 1\nnexus_api_key = '{secret}'\n",
+			game.path().display()
+		);
+		let missing_archive = root.join("missing.zip");
+		let environment = root.as_os_str().to_owned();
+
+		for (manifest, expect_success) in [(manifest.clone(), true), (format!("{manifest}broken = [\n"), false)]
+		{
+			write(root.join("mods.toml"), &manifest)?;
+			for (command, succeeds) in [
+				(arguments!["config", "list"], expect_success),
+				(arguments!["config", "get", "game-dir"], expect_success),
+				(arguments!["install", missing_archive.as_os_str(), "--dry-run"], false),
+			] {
+				for json_flag in [true, false] {
+					let mut arguments = arguments![
+						"mods",
+						"--log-level",
+						"off",
+						"--environment",
+						environment.clone()
+					];
+					if json_flag {
+						arguments.push(OsString::from("--json"));
+					}
+					arguments.extend(command.clone());
+					let outcome = run(arguments, root.clone(), None, |environment_root| {
+						Ok(system_dependencies(environment_root, &root))
+					})
+					.await?;
+					assert_eq!(outcome.status == 0, succeeds, "{}", outcome.stderr);
+					assert!(!outcome.stdout.contains(secret));
+					assert!(!outcome.stderr.contains(secret));
+				}
+			}
+		}
+		Ok(())
+	}
 	#[tokio::test]
 	async fn shortcut_forwards_startup_relative_paths_and_stays_quiet_without_execution()
 	-> Result<(), Box<dyn Error>> {
