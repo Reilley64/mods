@@ -17,7 +17,68 @@
       "priority": 0,
       "list_position": 0,
       "enabled": false,
-      "overlaps": []
+      "overlaps": [
+        {
+          "path": "Textures\\A.dds",
+          "proposed_provider": {
+            "kind": "data_mod",
+            "mod_name": "Visuals",
+            "priority": {
+              "kind": "regular",
+              "priority": 0
+            },
+            "original_path": "Textures\\A.dds",
+            "participation_reason": "hypothetical_enabled_mod"
+          },
+          "overlapping_physical_files": [
+            {
+              "kind": "steam_data",
+              "priority": {
+                "kind": "base"
+              },
+              "original_path": "Textures\\A.dds",
+              "participation_reason": "steam_base"
+            }
+          ],
+          "before": {
+            "kind": "file",
+            "provider": {
+              "kind": "steam_data",
+              "priority": {
+                "kind": "base"
+              },
+              "original_path": "Textures\\A.dds",
+              "participation_reason": "steam_base"
+            }
+          },
+          "after_operation": {
+            "kind": "file",
+            "provider": {
+              "kind": "data_mod",
+              "mod_name": "Visuals",
+              "priority": {
+                "kind": "regular",
+                "priority": 0
+              },
+              "original_path": "Textures\\A.dds",
+              "participation_reason": "hypothetical_enabled_mod"
+            }
+          },
+          "hypothetical_enabled": {
+            "kind": "file",
+            "provider": {
+              "kind": "data_mod",
+              "mod_name": "Visuals",
+              "priority": {
+                "kind": "regular",
+                "priority": 0
+              },
+              "original_path": "Textures\\A.dds",
+              "participation_reason": "hypothetical_enabled_mod"
+            }
+          }
+        }
+      ]
     }
   },
   "hypothetical_enabled_conflicts": {

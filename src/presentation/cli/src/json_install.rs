@@ -1,5 +1,8 @@
 use crate::json_conflicts;
 use crate::json_output;
+use crate::json_values::effective_result;
+use crate::json_values::path;
+use crate::json_values::provider;
 use application::installation::AcceptedChoice;
 use application::installation::AdditionalSelectionsRequired;
 use application::installation::CandidateDecision;
@@ -14,16 +17,12 @@ use application::installation::MalformedGroupRepair;
 use application::installation::ProjectedModState;
 use application::installation::WinnerReason;
 use domain::ArchiveIdentity;
-use domain::EffectiveResult;
 use domain::FileDependencyState;
 use domain::FomodCardinality;
 use domain::InstallCandidateOrigin;
 use domain::InstallationPhase;
 use domain::OptionFileTrigger;
-use domain::ParticipationReason;
-use domain::ProviderReference;
 use domain::ResolvedOptionType;
-use domain::TombstoneScope;
 use serde_json::Value;
 use serde_json::json;
 
@@ -200,7 +199,7 @@ fn plan(value: &InstallPlan) -> Value {
 		    "candidate_id": candidate.candidate_id, "origin": origin(&candidate.origin), "phase": phase_name(candidate.phase),
 		    "declared_priority": candidate.declared_priority, "descriptor_order": candidate.descriptor_order,
 		    "source_member": candidate.source_member, "destination": path(candidate.destination.as_str()),
-		    "current_winner": effective(&item.current_winner),
+		    "current_winner": effective_result(&item.current_winner),
 		    "proposed_winner": {"candidate_id": item.proposed_winner.candidate_id, "source_member": item.proposed_winner.source_member},
 		    "decision": match item.decision {
 			CandidateDecision::Winner { reason } => json!({"kind": "winner", "reason": match reason {
@@ -241,46 +240,10 @@ fn projected(value: &ProjectedModState) -> Value {
 	    "overlaps": value.overlaps.iter().map(|overlap| json!({
 		"path": path(overlap.path.as_str()), "proposed_provider": provider(&overlap.proposed_provider),
 		"overlapping_physical_files": overlap.overlapping_physical_files.iter().map(provider).collect::<Vec<_>>(),
-		"before": effective(&overlap.before), "after_operation": effective(&overlap.after_operation),
-		"hypothetical_enabled": effective(&overlap.hypothetical_enabled),
+		"before": effective_result(&overlap.before), "after_operation": effective_result(&overlap.after_operation),
+		"hypothetical_enabled": effective_result(&overlap.hypothetical_enabled),
 	    })).collect::<Vec<_>>(),
 	})
-}
-
-fn effective(value: &EffectiveResult) -> Value {
-	match value {
-		EffectiveResult::File(provider_value) => json!({"kind": "file", "provider": provider(provider_value)}),
-		EffectiveResult::Absent { controlling_tombstone } => {
-			json!({"kind": "absent", "controlling_tombstone": controlling_tombstone.as_ref().map(|tombstone| json!({
-			    "scope": match tombstone.scope { TombstoneScope::ExactFile => "exact_file", TombstoneScope::DirectorySubtree => "directory_subtree" },
-			    "owner": provider(&tombstone.owner),
-			}))})
-		}
-	}
-}
-
-fn provider(value: &ProviderReference) -> Value {
-	match value {
-		ProviderReference::SteamData { original_path } => {
-			json!({"kind": "steam_data", "original_path": path(original_path.as_str())})
-		}
-		ProviderReference::DataMod {
-			mod_name,
-			priority,
-			original_path,
-			participation_reason,
-		} => json!({
-		    "kind": "data_mod", "mod_name": mod_name.as_str(), "priority": priority.get(), "original_path": path(original_path.as_str()),
-		    "participation_reason": match participation_reason {
-			ParticipationReason::SteamBase => "steam_base", ParticipationReason::EnabledMod => "enabled_mod",
-			ParticipationReason::DisabledMod => "disabled_mod", ParticipationReason::HypotheticalEnabledMod => "hypothetical_enabled_mod",
-			ParticipationReason::ProjectedDisabledMod => "projected_disabled_mod", ParticipationReason::Overwrite => "overwrite",
-		    },
-		}),
-		ProviderReference::Overwrite { original_path } => {
-			json!({"kind": "overwrite", "original_path": path(original_path.as_str())})
-		}
-	}
 }
 
 fn phase_name(value: InstallationPhase) -> &'static str {
@@ -289,10 +252,6 @@ fn phase_name(value: InstallationPhase) -> &'static str {
 		InstallationPhase::SelectedOrForced => "selected_or_forced",
 		InstallationPhase::Conditional => "conditional",
 	}
-}
-
-fn path(value: &str) -> String {
-	value.replace('/', "\\")
 }
 
 #[cfg(test)]
@@ -305,6 +264,7 @@ mod tests {
 	use application::installation::AdditionalSelectionsRequired;
 	use application::installation::ConditionEvaluation;
 	use application::installation::InstallMode;
+	use application::installation::InstallOverlap;
 	use application::installation::InstallPlan;
 	use application::installation::InstallPreview;
 	use application::installation::InstallWarning;
@@ -313,10 +273,14 @@ mod tests {
 	use application::installation::UnresolvedGroup;
 	use application::installation::VisibleOption;
 	use domain::ArchiveIdentity;
+	use domain::DataRelativePath;
+	use domain::EffectiveResult;
 	use domain::FomodCardinality;
 	use domain::FomodCondition;
 	use domain::ModName;
 	use domain::ModPriority;
+	use domain::ParticipationReason;
+	use domain::ProviderReference;
 	use domain::ResolutionStatus;
 	use domain::ResolvedOptionType;
 	use domain::Sha256Digest;
@@ -385,6 +349,16 @@ mod tests {
 			group_id: "look".into(),
 			option_id: "empty".into(),
 		};
+		let path = DataRelativePath::new("Textures/A.dds".to_owned())?;
+		let proposed = ProviderReference::DataMod {
+			mod_name: ModName::new("Visuals".to_owned())?,
+			priority: ModPriority::new(0),
+			original_path: path.clone(),
+			participation_reason: ParticipationReason::HypotheticalEnabledMod,
+		};
+		let steam = ProviderReference::SteamData {
+			original_path: path.clone(),
+		};
 		let plan = InstallPlan {
 			archive_identity: ArchiveIdentity::DataArchive {
 				archive_sha256: Sha256Digest::new("b".repeat(64))?,
@@ -403,7 +377,14 @@ mod tests {
 				priority: ModPriority::new(0),
 				list_position: 0,
 				enabled: false,
-				overlaps: vec![],
+				overlaps: vec![InstallOverlap {
+					path,
+					proposed_provider: proposed.clone(),
+					overlapping_physical_files: vec![steam.clone()],
+					before: EffectiveResult::File(steam),
+					after_operation: EffectiveResult::File(proposed.clone()),
+					hypothetical_enabled: EffectiveResult::File(proposed),
+				}],
 			},
 		};
 		let output = InstallPreview {
@@ -419,6 +400,26 @@ mod tests {
 		assert_eq!(
 			value["plan"]["warnings"][0]["details"],
 			json!({"group_id": "look", "option_id": "empty"})
+		);
+		let overlap = &value["plan"]["projected_state"]["overlaps"][0];
+		assert_eq!(
+			overlap["proposed_provider"],
+			json!({
+				"kind": "data_mod",
+				"mod_name": "Visuals",
+				"priority": {"kind": "regular", "priority": 0},
+				"original_path": "Textures\\A.dds",
+				"participation_reason": "hypothetical_enabled_mod",
+			})
+		);
+		assert_eq!(
+			overlap["before"]["provider"],
+			json!({
+				"kind": "steam_data",
+				"priority": {"kind": "base"},
+				"original_path": "Textures\\A.dds",
+				"participation_reason": "steam_base",
+			})
 		);
 		assert_eq!(value["hypothetical_enabled_conflicts"]["resolution_status"], "invalid");
 		assert_eq!(warnings(&[warning])[0]["code"], "fomod_empty_option_accepted");

@@ -493,41 +493,7 @@
               "type": "null"
             },
             {
-              "type": "object",
-              "required": [
-                "kind",
-                "provider"
-              ],
-              "properties": {
-                "kind": {
-                  "const": "file"
-                },
-                "provider": {
-                  "$ref": "#/$defs/provider"
-                }
-              }
-            },
-            {
-              "type": "object",
-              "required": [
-                "kind",
-                "controlling_tombstone"
-              ],
-              "properties": {
-                "kind": {
-                  "const": "absent"
-                },
-                "controlling_tombstone": {
-                  "oneOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "$ref": "#/$defs/tombstone"
-                    }
-                  ]
-                }
-              }
+              "$ref": "#/$defs/effective_result"
             }
           ]
         },
@@ -1063,93 +1029,7 @@
         }
       }
     },
-    "install_provider": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "original_path"
-          ],
-          "properties": {
-            "kind": {
-              "const": "steam_data"
-            },
-            "original_path": {
-              "type": "string"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "mod_name",
-            "priority",
-            "original_path",
-            "participation_reason"
-          ],
-          "properties": {
-            "kind": {
-              "const": "data_mod"
-            },
-            "mod_name": {
-              "type": "string"
-            },
-            "priority": {
-              "type": "integer"
-            },
-            "original_path": {
-              "type": "string"
-            },
-            "participation_reason": {
-              "enum": [
-                "steam_base",
-                "enabled_mod",
-                "disabled_mod",
-                "hypothetical_enabled_mod",
-                "projected_disabled_mod",
-                "overwrite"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "original_path"
-          ],
-          "properties": {
-            "kind": {
-              "const": "overwrite"
-            },
-            "original_path": {
-              "type": "string"
-            }
-          }
-        }
-      ]
-    },
-    "install_tombstone": {
-      "type": "object",
-      "required": [
-        "scope",
-        "owner"
-      ],
-      "properties": {
-        "scope": {
-          "enum": [
-            "exact_file",
-            "directory_subtree"
-          ]
-        },
-        "owner": {
-          "$ref": "#/$defs/install_provider"
-        }
-      }
-    },
-    "install_effective_result": {
+    "effective_result": {
       "oneOf": [
         {
           "type": "object",
@@ -1162,7 +1042,7 @@
               "const": "file"
             },
             "provider": {
-              "$ref": "#/$defs/install_provider"
+              "$ref": "#/$defs/provider"
             }
           }
         },
@@ -1182,7 +1062,7 @@
                   "type": "null"
                 },
                 {
-                  "$ref": "#/$defs/install_tombstone"
+                  "$ref": "#/$defs/tombstone"
                 }
               ]
             }
@@ -1335,7 +1215,7 @@
           "type": "string"
         },
         "current_winner": {
-          "$ref": "#/$defs/install_effective_result"
+          "$ref": "#/$defs/effective_result"
         },
         "proposed_winner": {
           "type": "object",
@@ -1372,22 +1252,22 @@
           "type": "string"
         },
         "proposed_provider": {
-          "$ref": "#/$defs/install_provider"
+          "$ref": "#/$defs/provider"
         },
         "overlapping_physical_files": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/install_provider"
+            "$ref": "#/$defs/provider"
           }
         },
         "before": {
-          "$ref": "#/$defs/install_effective_result"
+          "$ref": "#/$defs/effective_result"
         },
         "after_operation": {
-          "$ref": "#/$defs/install_effective_result"
+          "$ref": "#/$defs/effective_result"
         },
         "hypothetical_enabled": {
-          "$ref": "#/$defs/install_effective_result"
+          "$ref": "#/$defs/effective_result"
         }
       }
     },

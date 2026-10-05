@@ -9,6 +9,7 @@ mod install_warning;
 mod json_conflicts;
 mod json_install;
 mod json_output;
+mod json_values;
 mod operation;
 mod output;
 mod path_resolution;

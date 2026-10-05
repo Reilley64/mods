@@ -62,6 +62,11 @@ The PR audit found style blockers against the current `CODING_STYLE.md`. The rep
 - Match only for multi-way logic: `json_conflicts.rs` content comparison uses `if let` for the two digest-bearing variants instead of a one-arm `match` with a no-op wildcard.
 - The `mods-cli` skill no longer assumes that the released v0.1.0 CLI accepts `--json`. The validation reference no longer cites JSON source files as v0.1.0 evidence.
 
+The user then made two contract decisions:
+
+- One provider shape. Installation results now use the File Conflict provider object, so `priority` is a rank object and every provider has `participation_reason`. The shared mapping lives in `json_values.rs`. The schema drops `install_provider` and `install_tombstone`, and `install_effective_result` becomes the shared `effective_result`. The preview example now includes an overlap. All 12 examples passed their command definitions and the aggregate schema again, and the old integer provider priority is rejected.
+- Versioning. Before 1.0.0, the JSON format may change in any release. The compatibility rules in `docs/cli/json.md` start at 1.0.0.
+
 ## Follow-ups outside this ticket
 
 The marker has `setting_key` and `mod_name`, but the existing text error allowlist omits them. Extending the allowlist needs a separate decision. Serializer-switch deduplication and broader typed JSON representations can be considered after the public contract is reviewed. Neither follow-up changes this ticket's output.
