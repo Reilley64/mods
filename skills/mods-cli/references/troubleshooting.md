@@ -29,7 +29,7 @@ With `--json`, errors are Problem Details on stderr. Use `type` as the machine i
 | --- | --- |
 | `unexpected argument '--json'` with status 2 | The installed release has no JSON output; rerun without `--json` and read the text output |
 | `environment_already_initialized`, `environment_root_not_empty`, `environment_root_unsafe` | Confirm Environment Root and inspect existing contents; do not wipe it |
-| `environment_invalid`, settings/override errors | Inspect manifest and `config list`; the supported `MODS_*` variables are `MODS_GAME_DIR` and `MODS_NEXUS_API_KEY`; malformed/unknown overrides can fail validation |
+| `environment_invalid`, settings/override errors | Inspect manifest and `config list`; the supported `MODS_*` variables are `MODS_GAME_DIR` and `MODS_NEXUS_API_KEY`; other `MODS_*` variables are ignored, empty ones count as unset, and a duplicate or non-Unicode override fails validation |
 | `environment_invalid` with `phase = download_cache` | A completed entry in `cache/downloads/newvegas-MOD_ID-FILE_ID/` has malformed metadata, a different Nexus identity, or an archive of the wrong size; with the user's approval, delete that entry and rerun |
 | `nexus_source_invalid` | Use a New Vegas Nexus mod-page or file URL; do not combine `--file` with a local path or with a different URL `file_id` |
 | `nexus_premium_required` | A new download needs a Premium account API key in `nexus_api_key` or `MODS_NEXUS_API_KEY`; otherwise install a local archive |
