@@ -71,17 +71,23 @@ impl ExecutionAdapter {
 
 	pub fn resolve_launch_target_port(&self) -> ResolveLaunchTarget {
 		let adapter = self.clone();
-		Arc::new(move |program, arguments, working_directory| {
-			#[cfg(not(windows))]
-			let result = {
-				let _ = (&adapter, program, arguments, working_directory);
-				Err(report!(ErrorMarker::program_unsupported()))
-			};
-			#[cfg(windows)]
-			let result = adapter.resolve_target(program, arguments, working_directory);
+		Arc::new(
+			move |program, arguments, working_directory, cancellation: CancellationToken| {
+				#[cfg(not(windows))]
+				let result = {
+					let _ = (&adapter, program, arguments, working_directory);
+					if cancellation.is_cancelled() {
+						Err(report!(ErrorMarker::operation_cancelled()))
+					} else {
+						Err(report!(ErrorMarker::program_unsupported()))
+					}
+				};
+				#[cfg(windows)]
+				let result = adapter.resolve_target(program, arguments, working_directory, &cancellation);
 
-			Box::pin(ready(result)) as PortFuture<_>
-		})
+				Box::pin(ready(result)) as PortFuture<_>
+			},
+		)
 	}
 
 	/// Runs the exec use case on one dedicated blocking thread.
@@ -144,5 +150,38 @@ impl ExecutionAdapter {
 				})
 			},
 		)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::ExecutionAdapter;
+	use application::ErrorCode;
+	use domain::EnvironmentRoot;
+	use domain::GameBinding;
+	use domain::GameInstallationPath;
+	use domain::Program;
+	use domain::WorkingDirectory;
+	use std::env::temp_dir;
+	use std::error::Error;
+	use tokio_util::sync::CancellationToken;
+
+	#[tokio::test]
+	async fn cancelled_launch_resolution_reports_cancellation() -> Result<(), Box<dyn Error>> {
+		let root = EnvironmentRoot::new(temp_dir().join("environment")).map_err(|_| "root fixture")?;
+		let game = GameInstallationPath::new(temp_dir().join("game")).map_err(|_| "game fixture")?;
+		let program = Program::new("tool.exe".into()).map_err(|_| "program fixture")?;
+		let working_directory = WorkingDirectory::new(temp_dir()).map_err(|_| "directory fixture")?;
+		let resolve =
+			ExecutionAdapter::new(root, GameBinding::new(game), temp_dir()).resolve_launch_target_port();
+		let cancellation = CancellationToken::new();
+		cancellation.cancel();
+
+		let result = resolve
+			.call((program, Vec::new(), working_directory, cancellation))
+			.await;
+
+		assert!(result.is_err_and(|error| error.current_context().code() == ErrorCode::OperationCancelled));
+		Ok(())
 	}
 }

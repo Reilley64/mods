@@ -1286,7 +1286,7 @@ mod tests {
 			locate_launcher: Arc::new(|| {
 				Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
 			}),
-			resolve_launch_target: Arc::new(|program, _, cwd| {
+			resolve_launch_target: Arc::new(|program, _, cwd, _| {
 				let target = launch_target(cwd.as_path().to_owned(), program.as_os_str().into());
 				Box::pin(async move { Ok(target) }) as PortFuture<_>
 			}),
@@ -2625,7 +2625,7 @@ mod tests {
 					let launcher = launcher.clone();
 					Box::pin(async move { Ok(launcher) })
 				}),
-				resolve_launch_target: Arc::new(move |input, arguments, cwd| {
+				resolve_launch_target: Arc::new(move |input, arguments, cwd, _| {
 					assert_eq!(input.as_os_str(), "tool.exe");
 					assert_eq!(cwd.as_path(), resolved_cwd.as_path());
 					assert_eq!(

@@ -107,7 +107,12 @@ impl ExecutionAdapter {
 		program: Program,
 		arguments: Vec<ProgramArgument>,
 		working_directory: WorkingDirectory,
+		cancellation: &CancellationToken,
 	) -> Result<LaunchTarget, ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
 		let arguments: Vec<_> = arguments
 			.iter()
 			.map(|argument| argument.as_os_str().to_owned())
@@ -124,6 +129,10 @@ impl ExecutionAdapter {
 				};
 				error.context(marker)
 			})?;
+
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
 
 		Ok(LaunchTarget {
 			program: launch.application.clone(),

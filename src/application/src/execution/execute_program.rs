@@ -98,7 +98,7 @@ pub async fn execute_program(
 
 	let target = dependencies
 		.resolve_launch_target
-		.call((program, arguments, working_directory))
+		.call((program, arguments, working_directory, cancellation.clone()))
 		.await
 		.context(ExecuteProgramError)?;
 
@@ -364,7 +364,7 @@ mod tests {
 				record(&progress, format!("progress:{event:?}"));
 				Box::pin(ready(())) as Pin<Box<dyn Future<Output = ()> + Send>>
 			})),
-			resolve_launch_target: Arc::new(move |_, _, _| {
+			resolve_launch_target: Arc::new(move |_, _, _, _| {
 				resolved();
 				complete(Ok(LaunchTarget {
 					program: PathBuf::from("tool.exe"),
@@ -781,7 +781,7 @@ mod tests {
 			let observed = Arc::new(Mutex::new(None));
 			dependencies.resolve_launch_target = Arc::new({
 				let observed = observed.clone();
-				move |_, _, working_directory: WorkingDirectory| {
+				move |_, _, working_directory: WorkingDirectory, _| {
 					if let Ok(mut observed) = observed.lock() {
 						*observed = Some(working_directory.as_path().to_owned());
 					}
@@ -820,10 +820,31 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn cancellation_during_launch_resolution_stops_before_preparation() -> Result<(), ErrorMarker> {
+		let (mut dependencies, steps) = fake_dependencies(default_scenario()?);
+		let resolved = steps.clone();
+		dependencies.resolve_launch_target = Arc::new(move |_, _, _, cancellation: CancellationToken| {
+			record(&resolved, "resolve");
+			cancellation.cancel();
+			complete(Err(report!(ErrorMarker::operation_cancelled())))
+		});
+		let cancellation = CancellationToken::new();
+
+		let Err(error) = run(dependencies, OutputTarget::Overwrite, cancellation.clone()).await else {
+			return Err(report!(ErrorMarker::execution_supervision_failed()));
+		};
+
+		assert!(cancellation.is_cancelled());
+		assert!(has_marker(&error, &ErrorMarker::operation_cancelled()));
+		assert_eq!(recorded(&steps), ["progress:PreparingExecution", "resolve"]);
+		Ok(())
+	}
+
+	#[tokio::test]
 	async fn preserves_launcher_cause_under_fixed_use_case_context() -> Result<(), ErrorMarker> {
 		let (mut dependencies, _steps) = fake_dependencies(default_scenario()?);
 		dependencies.resolve_launch_target =
-			Arc::new(|_, _, _| complete(Err(report!(ErrorMarker::program_not_found()))));
+			Arc::new(|_, _, _, _| complete(Err(report!(ErrorMarker::program_not_found()))));
 
 		let Err(error) = run(dependencies, OutputTarget::Overwrite, CancellationToken::new()).await else {
 			return Err(report!(ErrorMarker::execution_supervision_failed()));

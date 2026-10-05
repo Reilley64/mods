@@ -84,7 +84,7 @@ pub async fn create_shortcut(
 		..
 	} = dependencies
 		.resolve_launch_target
-		.call((program, arguments.clone(), working_directory))
+		.call((program, arguments.clone(), working_directory, cancellation.clone()))
 		.await
 		.context(CreateShortcutError)?;
 
@@ -222,7 +222,7 @@ mod tests {
 		let generated = ModName::new("Generated".into()).context(CreateShortcutError)?;
 		Ok(CreateShortcutDependencies {
 			locate_launcher: Arc::new(|| Box::pin(async { Ok(PathBuf::from("/bin/mods.exe")) })),
-			resolve_launch_target: Arc::new(|_, _, _| {
+			resolve_launch_target: Arc::new(|_, _, _, _| {
 				Box::pin(async { Ok(launch_target("/caller".into())) }) as PortFuture<_>
 			}),
 			prepare_environment_plan: Arc::new(move |_| {
@@ -262,7 +262,7 @@ mod tests {
 				located.store(true, Ordering::SeqCst);
 				Box::pin(async { Err(report!(ErrorMarker::shortcut_launch_invalid())) })
 			});
-			dependencies.resolve_launch_target = Arc::new(move |_, _, _| {
+			dependencies.resolve_launch_target = Arc::new(move |_, _, _, _| {
 				resolved.store(true, Ordering::SeqCst);
 				Box::pin(async { Err(report!(ErrorMarker::program_not_found())) }) as PortFuture<_>
 			});
@@ -304,7 +304,7 @@ mod tests {
 		] {
 			let expected = expected.to_owned();
 			let mut dependencies = dependencies()?;
-			dependencies.resolve_launch_target = Arc::new(move |program, arguments, cwd| {
+			dependencies.resolve_launch_target = Arc::new(move |program, arguments, cwd, _| {
 				assert_eq!(cwd.as_path(), temp_dir().join("game"));
 				assert_eq!(program.as_os_str(), "Tool.exe");
 				assert_eq!(arguments.iter().map(|arg| arg.as_os_str()).collect::<Vec<_>>(), values);
@@ -416,7 +416,7 @@ mod tests {
 		let mut dependencies = dependencies()?;
 		dependencies.locate_launcher =
 			Arc::new(|| Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) }));
-		dependencies.resolve_launch_target = Arc::new(move |_, _, _| {
+		dependencies.resolve_launch_target = Arc::new(move |_, _, _, _| {
 			resolved.store(true, Ordering::SeqCst);
 			Box::pin(async { Err(report!(ErrorMarker::program_unsupported())) }) as PortFuture<_>
 		});
@@ -446,24 +446,31 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn caller_cancellation_reaches_validation_and_never_publishes() -> Result<(), CreateShortcutError> {
+	async fn caller_cancellation_stops_at_launch_resolution_and_never_publishes() -> Result<(), CreateShortcutError>
+	{
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 		let called = Arc::new(AtomicBool::new(false));
-		let observed = called.clone();
+		let prepared = called.clone();
+		let published = called.clone();
 		let mut dependencies = dependencies()?;
-		dependencies.prepare_environment_plan = Arc::new(|token| {
+		dependencies.resolve_launch_target = Arc::new(|_, _, _, token: CancellationToken| {
 			Box::pin(async move {
 				if token.is_cancelled() {
 					return Err(report!(ErrorMarker::operation_cancelled()));
 				}
-				Err(report!(ErrorMarker::environment_invalid(None)))
+				Err(report!(ErrorMarker::program_not_found()))
 			}) as PortFuture<_>
 		});
+		dependencies.prepare_environment_plan = Arc::new(move |_| {
+			prepared.store(true, Ordering::SeqCst);
+			Box::pin(async { Err(report!(ErrorMarker::environment_invalid(None))) }) as PortFuture<_>
+		});
 		dependencies.persist = Arc::new(move |_| {
-			observed.store(true, Ordering::SeqCst);
+			published.store(true, Ordering::SeqCst);
 			Box::pin(async { Ok(()) })
 		});
+
 		let result = create_shortcut(
 			dependencies,
 			settings(None)?,
@@ -477,6 +484,54 @@ mod tests {
 			cancellation,
 		)
 		.await;
+
+		let error = result.err().ok_or_else(|| report!(CreateShortcutError))?;
+		assert!(error
+			.iter_reports()
+			.any(|cause| cause.downcast_current_context::<ErrorMarker>()
+				== Some(&ErrorMarker::operation_cancelled())));
+		assert!(!called.load(Ordering::SeqCst));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn cancellation_after_launch_resolution_reaches_preparation_and_never_publishes()
+	-> Result<(), CreateShortcutError> {
+		let cancellation = CancellationToken::new();
+		let called = Arc::new(AtomicBool::new(false));
+		let observed = called.clone();
+		let mut dependencies = dependencies()?;
+		dependencies.resolve_launch_target = Arc::new(|_, _, cwd, token: CancellationToken| {
+			token.cancel();
+			Box::pin(async move { Ok(launch_target(cwd.as_path().to_owned())) }) as PortFuture<_>
+		});
+		dependencies.prepare_environment_plan = Arc::new(|token| {
+			Box::pin(async move {
+				if token.is_cancelled() {
+					return Err(report!(ErrorMarker::operation_cancelled()));
+				}
+				Err(report!(ErrorMarker::environment_invalid(None)))
+			}) as PortFuture<_>
+		});
+		dependencies.persist = Arc::new(move |_| {
+			observed.store(true, Ordering::SeqCst);
+			Box::pin(async { Ok(()) })
+		});
+
+		let result = create_shortcut(
+			dependencies,
+			settings(None)?,
+			OutputTarget::Overwrite,
+			None,
+			Program::new("Tool.exe".into()).context(CreateShortcutError)?,
+			vec![],
+			None,
+			None,
+			"info".into(),
+			cancellation,
+		)
+		.await;
+
 		let error = result.err().ok_or_else(|| report!(CreateShortcutError))?;
 		assert!(error
 			.iter_reports()

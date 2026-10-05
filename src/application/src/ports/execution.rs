@@ -46,8 +46,11 @@ pub struct ProgramSupervision {
 	pub output: ProgramOutput,
 }
 
-pub type ResolveLaunchTarget =
-	Arc<dyn Fn(Program, Vec<ProgramArgument>, WorkingDirectory) -> PortFuture<LaunchTarget> + Send + Sync>;
+pub type ResolveLaunchTarget = Arc<
+	dyn Fn(Program, Vec<ProgramArgument>, WorkingDirectory, CancellationToken) -> PortFuture<LaunchTarget>
+		+ Send
+		+ Sync,
+>;
 pub type CreateVirtualFileSystem = Arc<
 	dyn Fn(EnvironmentPlan, &StagedProfile, Option<ModName>, CancellationToken) -> PortFuture<VirtualFileSystem>
 		+ Send

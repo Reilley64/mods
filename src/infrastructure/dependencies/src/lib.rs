@@ -1,3 +1,5 @@
+#![cfg_attr(test, feature(fn_traits))]
+
 mod create_shortcut;
 mod environment_preparation;
 mod execute_program;
