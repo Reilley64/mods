@@ -89,6 +89,7 @@ impl fmt::Display for LogLevel {
 
 #[derive(Debug, Args)]
 pub(crate) struct InstallArgs {
+	#[arg(value_name = "ARCHIVE_OR_NEXUS_URL")]
 	pub(crate) archive: PathBuf,
 	#[arg(long, value_name = "ID")]
 	pub(crate) file: Option<u64>,

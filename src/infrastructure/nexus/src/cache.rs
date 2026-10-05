@@ -97,9 +97,10 @@ pub(crate) fn require_kind(path: &Path, directory: bool) -> Result<bool, ErrorMa
 }
 
 pub(crate) fn identity_name(request: &NexusRequest) -> Result<String, ErrorMarker> {
-	let Some(file_id) = request.file_id.filter(|value| *value > 0) else {
-		return Err(report!(ErrorMarker::nexus_source_invalid()));
-	};
+	let file_id = request
+		.file_id
+		.filter(|value| *value > 0)
+		.ok_or_else(|| report!(ErrorMarker::nexus_source_invalid()))?;
 	if request.game_domain != "newvegas" || request.mod_id == 0 {
 		return Err(report!(ErrorMarker::nexus_source_invalid()));
 	}
@@ -131,13 +132,13 @@ pub(crate) fn read(
 
 	let metadata: CompletedMetadata =
 		toml::from_str(&fs::read_to_string(metadata_path).context(ErrorMarker::io_failure())?)
-			.context(ErrorMarker::nexus_response_invalid())?;
+			.context(ErrorMarker::environment_invalid(Some("download_cache")))?;
 	if metadata.game_domain != request.game_domain
 		|| metadata.mod_id != request.mod_id
 		|| Some(metadata.file_id) != request.file_id
 		|| fs::metadata(&archive_path).context(ErrorMarker::io_failure())?.len() != metadata.archive_size
 	{
-		return Err(report!(ErrorMarker::nexus_response_invalid()));
+		return Err(report!(ErrorMarker::environment_invalid(Some("download_cache"))));
 	}
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -229,8 +230,26 @@ mod tests {
 		assert!(read(&root, &request(42, 8), &CancellationToken::new())
 			.expect("other file")
 			.is_none());
+		let assert_corrupt_entry = || {
+			let error = read(&root, &request(42, 7), &CancellationToken::new()).expect_err("corrupt entry");
+			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
+			assert_eq!(error.current_context().phase(), Some("download_cache"));
+		};
 		fs::write(entry.join("archive"), b"shortened").expect("truncate");
-		assert!(read(&root, &request(42, 7), &CancellationToken::new()).is_err());
+		assert_corrupt_entry();
+		fs::write(entry.join("archive"), b"bytes").expect("restore archive");
+		fs::write(entry.join("provenance.toml"), "game_domain = '").expect("malformed metadata");
+		assert_corrupt_entry();
+		let other_identity = NexusProvenance {
+			mod_id: 43,
+			..provenance
+		};
+		fs::write(
+			entry.join("provenance.toml"),
+			toml::to_string(&CompletedMetadata::from_provenance(&other_identity, 5)).expect("metadata"),
+		)
+		.expect("mismatched identity");
+		assert_corrupt_entry();
 		let token = CancellationToken::new();
 		token.cancel();
 		assert_eq!(

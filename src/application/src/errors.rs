@@ -318,14 +318,18 @@ impl ErrorMarker {
 
 	pub fn settings_environment_invalid() -> Self {
 		Self {
-			message_override: Some("environment variables are invalid; only MODS_GAME_DIR is accepted"),
+			message_override: Some(
+				"environment variables are invalid; only MODS_GAME_DIR and MODS_NEXUS_API_KEY are accepted",
+			),
 			..Self::environment_invalid(None)
 		}
 	}
 	pub fn initialization_environment_invalid() -> Self {
 		Self {
 			field: Some("game_dir"),
-			message_override: Some("environment variables are invalid; only MODS_GAME_DIR is accepted"),
+			message_override: Some(
+				"environment variables are invalid; only MODS_GAME_DIR and MODS_NEXUS_API_KEY are accepted",
+			),
 			..Self::game_install_invalid()
 		}
 	}

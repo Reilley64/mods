@@ -41,7 +41,7 @@ The released surface has no `--json`, MCP command, conflict-resolution command, 
 | `game-dir` | Effective Game Installation path |
 | `observed-build-id` | Recorded Steam build |
 
-The optional `nexus_api_key` in `mods.toml` is secret and is not a queryable key. `MODS_NEXUS_API_KEY` overrides it. See the [Nexus installation requirements and distribution limits](installation.md#nexus-url-input).
+The optional `nexus_api_key` in `mods.toml` is secret and is not a queryable key. `MODS_NEXUS_API_KEY` overrides it. See the [Nexus installation requirements](installation.md#nexus-url-input).
 
 Only `game-dir` has a CLI setter. Do not infer setters for the other keys.
 
