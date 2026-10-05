@@ -3,6 +3,14 @@ use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
+	NexusSourceInvalid,
+	NexusPremiumRequired,
+	NexusCredentialsInvalid,
+	NexusAccessDenied,
+	NexusRateLimited,
+	NexusUnavailable,
+	NexusNetworkFailure,
+	NexusResponseInvalid,
 	EnvironmentNotInitialized,
 	EnvironmentAlreadyInitialized,
 	EnvironmentRootNotEmpty,
@@ -43,6 +51,14 @@ pub enum ErrorCode {
 impl ErrorCode {
 	pub const fn as_str(self) -> &'static str {
 		match self {
+			Self::NexusSourceInvalid => "nexus_source_invalid",
+			Self::NexusPremiumRequired => "nexus_premium_required",
+			Self::NexusCredentialsInvalid => "nexus_credentials_invalid",
+			Self::NexusAccessDenied => "nexus_access_denied",
+			Self::NexusRateLimited => "nexus_rate_limited",
+			Self::NexusUnavailable => "nexus_unavailable",
+			Self::NexusNetworkFailure => "nexus_network_failure",
+			Self::NexusResponseInvalid => "nexus_response_invalid",
 			Self::EnvironmentNotInitialized => "environment_not_initialized",
 			Self::EnvironmentAlreadyInitialized => "environment_already_initialized",
 			Self::EnvironmentRootNotEmpty => "environment_root_not_empty",
@@ -117,6 +133,30 @@ impl ErrorMarker {
 		}
 	}
 
+	pub fn nexus_source_invalid() -> Self {
+		Self::simple(ErrorCode::NexusSourceInvalid)
+	}
+	pub fn nexus_premium_required() -> Self {
+		Self::simple(ErrorCode::NexusPremiumRequired)
+	}
+	pub fn nexus_access_denied() -> Self {
+		Self::simple(ErrorCode::NexusAccessDenied)
+	}
+	pub fn nexus_credentials_invalid() -> Self {
+		Self::simple(ErrorCode::NexusCredentialsInvalid)
+	}
+	pub fn nexus_rate_limited() -> Self {
+		Self::simple(ErrorCode::NexusRateLimited)
+	}
+	pub fn nexus_unavailable() -> Self {
+		Self::simple(ErrorCode::NexusUnavailable)
+	}
+	pub fn nexus_network_failure() -> Self {
+		Self::simple(ErrorCode::NexusNetworkFailure)
+	}
+	pub fn nexus_response_invalid() -> Self {
+		Self::simple(ErrorCode::NexusResponseInvalid)
+	}
 	pub fn environment_not_initialized() -> Self {
 		Self::simple(ErrorCode::EnvironmentNotInitialized)
 	}
@@ -278,14 +318,18 @@ impl ErrorMarker {
 
 	pub fn settings_environment_invalid() -> Self {
 		Self {
-			message_override: Some("environment variables are invalid; only MODS_GAME_DIR is accepted"),
+			message_override: Some(
+				"environment variables are invalid; only MODS_GAME_DIR and MODS_NEXUS_API_KEY are accepted",
+			),
 			..Self::environment_invalid(None)
 		}
 	}
 	pub fn initialization_environment_invalid() -> Self {
 		Self {
 			field: Some("game_dir"),
-			message_override: Some("environment variables are invalid; only MODS_GAME_DIR is accepted"),
+			message_override: Some(
+				"environment variables are invalid; only MODS_GAME_DIR and MODS_NEXUS_API_KEY are accepted",
+			),
 			..Self::game_install_invalid()
 		}
 	}
@@ -339,6 +383,16 @@ impl ErrorMarker {
 			return message;
 		}
 		match self.code {
+			ErrorCode::NexusSourceInvalid => "Nexus source or file selection is invalid",
+			ErrorCode::NexusPremiumRequired => {
+				"Automatic installation from Nexus requires a Premium account API key configured in settings. You can instead install a local archive with `mods install <archive>`."
+			}
+			ErrorCode::NexusCredentialsInvalid => "Nexus credentials are invalid",
+			ErrorCode::NexusAccessDenied => "Nexus denied access to this resource",
+			ErrorCode::NexusRateLimited => "Nexus rate limit exceeded",
+			ErrorCode::NexusUnavailable => "Nexus mod or file is unavailable",
+			ErrorCode::NexusNetworkFailure => "Nexus request or transfer failed",
+			ErrorCode::NexusResponseInvalid => "Nexus returned an invalid response",
 			ErrorCode::EnvironmentNotInitialized => "folder uninitialized",
 			ErrorCode::EnvironmentAlreadyInitialized => "environment already initialized",
 			ErrorCode::EnvironmentRootNotEmpty => "environment folder is not empty",

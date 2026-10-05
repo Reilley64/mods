@@ -475,7 +475,7 @@ pub(crate) fn validate_stage(
 		.context(ErrorMarker::environment_invalid(None))?;
 	validate_exact_entries(&mods, &[], cancellation)?;
 	validate_exact_entries(&overwrite, &[], cancellation)?;
-	validate_exact_entries(&cache, &["Fallout - Invalidation.bsa"], cancellation)?;
+	validate_download_cache_entries(&cache, cancellation)?;
 	validate_profile(&profile_dir, cancellation)?;
 	let manifest = validate_manifest_file(directory, cancellation)?;
 	let game = SafeDir::open_absolute(Path::new(&manifest.game_dir))
@@ -489,6 +489,17 @@ pub(crate) fn validate_stage(
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	validate_bsa_file(&cache, cancellation)
+}
+
+fn validate_download_cache_entries(cache: &SafeDir, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+	if cache.exists("downloads")
+		.context(ErrorMarker::environment_invalid(None))?
+	{
+		cache.open_dir("downloads")
+			.context(ErrorMarker::environment_root_unsafe())?;
+		return validate_exact_entries(cache, &["Fallout - Invalidation.bsa", "downloads"], cancellation);
+	}
+	validate_exact_entries(cache, &["Fallout - Invalidation.bsa"], cancellation)
 }
 
 fn validate_bsa_file(cache: &SafeDir, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {

@@ -1,7 +1,19 @@
 use crate::Resources;
 use application::installation::InstallArchiveDependencies;
+use application::installation::InstallModDependencies;
+use infrastructure_nexus::NexusAdapter;
 
 impl Resources {
+	pub fn install_mod_dependencies(&self) -> InstallModDependencies {
+		let settings = self.settings.clone();
+		let adapter = NexusAdapter::new(self.root.clone(), move || settings.load_nexus_api_key());
+
+		InstallModDependencies {
+			install_archive: self.install_archive_dependencies(),
+			download_mod: adapter.download_mod_port(),
+		}
+	}
+
 	pub fn install_archive_dependencies(&self) -> InstallArchiveDependencies {
 		InstallArchiveDependencies {
 			report_progress: None,
