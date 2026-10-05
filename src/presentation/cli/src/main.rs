@@ -8,6 +8,7 @@ mod error;
 mod export_output;
 mod install_warning;
 mod json_conflicts;
+mod json_export;
 mod json_install;
 mod json_output;
 mod json_values;

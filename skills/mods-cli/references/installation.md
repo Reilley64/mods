@@ -55,7 +55,7 @@ mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Tex
 A folder or stray file in `mods` that `modlist.txt` does not list is ignored like a disabled mod. It contributes nothing, and `list` and conflict reports do not show it. mods never adds it to `modlist.txt`.
 
 - Installing over its name (compared case-insensitively) fails with `mod_already_exists`, which names the entry.
-- With `--replace`, the install removes the entry and lists the new mod like a new install, under the entry's spelling: at the top, disabled. The plan shows `plan.projected_state.mode = "unlisted_replacement"`.
+- With `--replace`, the install removes the entry and lists the new mod like a new install, under the entry's spelling: at the top, disabled. The plan shows `plan.projected_state.mode = "unlisted_replacement"` (the same value in JSON).
 - `--replace` is still refused with `mod_already_exists` when several entries that differ only in case match the name.
 - Any replacement is refused with `unsafe_archive` when the archive lies inside the folder it would remove. Move the archive first.
 

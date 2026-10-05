@@ -23,7 +23,7 @@ Without `--json`, successful mutations are quiet except warnings. With `--json`,
 
 ## Common failures and safe next steps
 
-With `--json`, errors are Problem Details on stderr. Use `type` as the machine identifier and read `detail` and optional `details`. Without `--json`, errors begin `error [code]: message`; optional lines contain phase, field, `mod_name`, or choice IDs/sequence. Raw internal cause chains are not public CLI output. See [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
+With `--json`, errors are Problem Details on stderr. Use `type` as the machine identifier and read `detail` and optional `details`: `phase`, `field`, `mod_name`, choice IDs/sequence, `load_order_file`, and the retained paths `retained_execution_inis`, `retained_partial_output`, and `retained_export_stage`. Without `--json`, errors begin `error [code]: message`; optional lines contain phase, field, `mod_name`, or choice IDs/sequence. Raw internal cause chains are not public CLI output. See [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
 
 | Error or symptom | Next step |
 | --- | --- |

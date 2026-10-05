@@ -1,7 +1,7 @@
 use crate::json_values::effective_result;
+use crate::json_values::identity;
 use crate::json_values::path;
 use crate::json_values::provider;
-use crate::json_values::rank;
 use crate::json_values::tombstone;
 use application::conflicts::ExplainPathOutput;
 use application::conflicts::InspectModConflictsOutput;
@@ -13,7 +13,6 @@ use domain::ContentComparison;
 use domain::ContentState;
 use domain::Participation;
 use domain::ProblemScope;
-use domain::ProviderIdentity;
 use domain::ProviderState;
 use domain::ResolutionReason;
 use domain::ResolutionStatus;
@@ -101,17 +100,6 @@ fn row(value: &ConflictRow) -> Value {
 		    "participation": participation(*state), "controlling_tombstone": tombstone(controlling_tombstone),
 		    "suppressed_entries": suppressed_entries.iter().map(provider).collect::<Vec<_>>(),
 		}),
-	}
-}
-
-fn identity(value: &ProviderIdentity) -> Value {
-	let rank = rank(value.rank());
-	match value {
-		ProviderIdentity::SteamData => json!({"kind": "steam_data", "priority": rank}),
-		ProviderIdentity::DataMod { mod_name, .. } => {
-			json!({"kind": "data_mod", "mod_name": mod_name.as_str(), "priority": rank})
-		}
-		ProviderIdentity::Overwrite => json!({"kind": "overwrite", "priority": rank}),
 	}
 }
 

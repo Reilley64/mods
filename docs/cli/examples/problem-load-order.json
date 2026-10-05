@@ -1,0 +1,11 @@
+{
+  "type": "https://github.com/Reilley64/mods/blob/main/docs/cli/problems.md#io_failure",
+  "title": "Io failure",
+  "detail": "input/output operation failed",
+  "exit_code": 125,
+  "code": "io_failure",
+  "details": {
+    "phase": "load_order",
+    "load_order_file": "D:\\SteamLibrary\\steamapps\\common\\Fallout New Vegas\\Data\\FalloutNV.esm"
+  }
+}

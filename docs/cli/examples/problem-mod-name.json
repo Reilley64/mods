@@ -1,0 +1,10 @@
+{
+  "type": "https://github.com/Reilley64/mods/blob/main/docs/cli/problems.md#environment_invalid",
+  "title": "Environment invalid",
+  "detail": "environment is invalid",
+  "exit_code": 1,
+  "code": "environment_invalid",
+  "details": {
+    "mod_name": "Mojave Textures"
+  }
+}

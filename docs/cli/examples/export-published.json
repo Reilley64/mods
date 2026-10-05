@@ -1,0 +1,15 @@
+{
+  "outcome": "published",
+  "output": "D:\\Exports\\Mojave",
+  "total_bytes": 83,
+  "files": [
+    {
+      "path": "Data\\Fallout - Invalidation.bsa",
+      "bytes": 83,
+      "provider": {
+        "kind": "generated_invalidation"
+      }
+    }
+  ],
+  "warnings": []
+}

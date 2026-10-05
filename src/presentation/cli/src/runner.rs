@@ -11,6 +11,7 @@ use crate::diagnostics::SessionStart;
 use crate::error;
 use crate::export_output;
 use crate::json_conflicts;
+use crate::json_export;
 use crate::json_install;
 use crate::json_output;
 use crate::operation;
@@ -63,6 +64,7 @@ use domain::WorkingDirectory;
 use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
+use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 use std::env::current_dir;
@@ -667,26 +669,30 @@ async fn dispatch(
 			)
 			.await
 			{
-				Ok(result) => RunOutcome {
-					presentation: None,
-					execution_failed: false,
-					diagnostic_log: None,
-					status: 0,
-					stdout: if arguments.dry_run {
+				Ok(result) => {
+					let stdout = if arguments.dry_run {
 						export_output::preview(&output_path, &result)
 					} else {
 						String::new()
-					},
-					stderr: result.warnings.iter().map(output::plugin_warning).collect(),
-				},
+					};
+					let stderr = result.warnings.iter().map(output::plugin_warning).collect();
+					let value = json_export::export(&output_path, &result);
+					let warnings = json_export::plugin_warnings(&result.warnings);
+					success(stdout, stderr, json_mode, value, warnings)
+				}
 				Err(report) => {
 					let marker = error::application_marker(&report);
 					let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
-					problem_outcome(
-						status,
-						error::export_error(&report, &output_path),
-						json_mode,
-						marker,
+					let mut details = json_output::report_details(&report, "retained_export_stage");
+					details.insert("output".into(), json!(output_path.display().to_string()));
+					with_problem_details(
+						problem_outcome(
+							status,
+							error::export_error(&report, &output_path),
+							json_mode,
+							marker,
+						),
+						details,
 					)
 				}
 			}
@@ -882,10 +888,27 @@ pub(crate) fn hidden_failure_dialog(outcome: &RunOutcome) -> Option<String> {
 fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bool) -> RunOutcome {
 	let marker = error::application_marker(report);
 	let status = marker.map_or(125, |marker| error::execution_exit_status(marker.code()));
-	RunOutcome {
+	let outcome = RunOutcome {
 		execution_failed: true,
 		..problem_outcome(status, error::execution_error(report), json_mode && !launched, marker)
+	};
+	with_problem_details(outcome, json_output::report_details(report, "retained_execution_inis"))
+}
+
+fn with_problem_details(mut outcome: RunOutcome, details: Map<String, Value>) -> RunOutcome {
+	if details.is_empty() {
+		return outcome;
 	}
+
+	if let Some(JsonPresentation::Problem(problem)) = &mut outcome.presentation {
+		if problem.get("details").is_none() {
+			problem["details"] = json!({});
+		}
+		if let Some(target) = problem["details"].as_object_mut() {
+			target.extend(details);
+		}
+	}
+	outcome
 }
 
 fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarker> {
@@ -1033,6 +1056,7 @@ mod tests {
 	use application::ports::InitializationTargetAssessment;
 	use application::ports::InstallationChange;
 	use application::ports::LaunchTarget;
+	use application::ports::LoadOrderFile;
 	use application::ports::PortFuture;
 	use application::ports::ProfileProjection;
 	use application::ports::ProfileWarning;
@@ -2968,6 +2992,144 @@ mod tests {
 			} else {
 				assert!(outcome.stdout.is_empty());
 				assert!(published.load(Ordering::SeqCst));
+			}
+		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_export_reports_both_outcomes_with_plugin_warnings() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for dry_run in [true, false] {
+			let selection = ExportSelection {
+				include_saves: false,
+				include_game_data: false,
+			};
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.export_environment = export_dependencies(
+				temp.path().join("payload"),
+				selection,
+				Arc::new(AtomicBool::new(false)),
+			);
+			let mut arguments = arguments!["mods", "--json", "--log-level", "off", "export", "payload"];
+			if dry_run {
+				arguments.push(OsString::from("--dry-run"));
+			}
+
+			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+				Ok(dependencies)
+			})
+			.await?;
+
+			assert_eq!(outcome.status, 0);
+			assert!(outcome.stderr.is_empty());
+			let document: Value = from_str(&outcome.stdout)?;
+			assert_eq!(document["outcome"], if dry_run { "preview" } else { "published" });
+			assert_eq!(document["total_bytes"], 17);
+			assert_eq!(
+				document["files"],
+				json!([{"path": "profile\\Fallout.ini", "bytes": 17, "provider": {"kind": "profile"}}])
+			);
+			assert_eq!(
+				document["warnings"],
+				json!([{
+					"code": "stale_plugin_entry",
+					"message": "plugins.txt entry is absent from the analytical Data view",
+					"details": {"plugin": "Missing.esp"},
+				}])
+			);
+		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_export_failure_exposes_only_allowlisted_retained_paths() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let selection = ExportSelection {
+			include_saves: false,
+			include_game_data: false,
+		};
+		dependencies.export_environment =
+			export_dependencies(temp.path().join("payload"), selection, Arc::new(AtomicBool::new(false)));
+		dependencies.export_environment.discard_staged_profile =
+			Arc::new(|_| {
+				Box::pin(async {
+					Err(report!(std::io::Error::other("private cause"))
+						.context(ErrorMarker::io_failure()))
+				})
+			});
+
+		let outcome = run(
+			arguments!["mods", "--json", "--log-level", "off", "export", "payload"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+
+		assert_eq!(outcome.status, 1);
+		assert!(outcome.stdout.is_empty());
+		assert!(!outcome.stderr.contains("private cause"));
+		let problem: Value = from_str(&outcome.stderr)?;
+		assert_eq!(problem["code"], "io_failure");
+		assert_eq!(
+			problem["details"],
+			json!({
+				"retained_export_stage": "stage",
+				"output_complete": true,
+				"output": temp.path().join("payload").display().to_string(),
+			})
+		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_exec_problem_names_the_load_order_file_and_unlisted_mod() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for with_file in [true, false] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.execute_program = Box::new(move |_, _, _, _, _, _| {
+				Box::pin(async move {
+					if !with_file {
+						let missing = ModName::new("Missing Mod".into()).map_err(|_| {
+							report!(ErrorMarker::invalid_mod_name())
+								.context(ExecuteProgramError)
+						})?;
+						return Err(report!(
+							ErrorMarker::environment_invalid(None).with_mod_name(missing)
+						)
+						.context(ExecuteProgramError));
+					}
+
+					let mut failure = report!(ErrorMarker::io_failure().with_phase("load_order"));
+					failure.children_mut().push(report!(LoadOrderFile {
+						path: PathBuf::from("Data/FalloutNV.esm"),
+					})
+					.into_dynamic()
+					.into_cloneable());
+					Err(failure.context(ExecuteProgramError))
+				}) as PortFuture<_, _>
+			});
+
+			let outcome = run(
+				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_| Ok(dependencies),
+			)
+			.await?;
+
+			let problem: Value = from_str(&outcome.stderr)?;
+			if with_file {
+				assert_eq!(problem["code"], "io_failure");
+				assert_eq!(
+					problem["details"],
+					json!({"phase": "load_order", "load_order_file": "Data/FalloutNV.esm"})
+				);
+			} else {
+				assert_eq!(problem["code"], "environment_invalid");
+				assert_eq!(problem["details"], json!({"mod_name": "Missing Mod"}));
 			}
 		}
 		Ok(())
