@@ -47,7 +47,7 @@ impl Resources {
 		{
 			let _ = startup_directory;
 			CreateShortcutDependencies {
-				validate_launch: Arc::new(|_, _, _, _| {
+				validate_launch: Arc::new(|_, _, _, _, _| {
 					Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })
 				}),
 				persist: Arc::new(|_| Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })),
@@ -59,7 +59,7 @@ impl Resources {
 			let caller = CallerSnapshot::new(startup_directory);
 			CreateShortcutDependencies {
 				validate_launch: Arc::new(
-					move |output_target, working_directory, program, arguments| {
+					move |output_target, working_directory, program, arguments, cancellation| {
 						let resources = resources.clone();
 						let caller = caller.clone();
 						Box::pin(async move {
@@ -70,6 +70,7 @@ impl Resources {
 									working_directory,
 									program,
 									arguments,
+									cancellation,
 								)
 								.await
 						})
@@ -94,6 +95,7 @@ impl Resources {
 		working_directory: Option<WorkingDirectory>,
 		program: Program,
 		arguments: Vec<ProgramArgument>,
+		cancellation: CancellationToken,
 	) -> Result<ValidatedShortcutLaunch, ShortcutFailure> {
 		let arguments: Vec<_> = arguments
 			.iter()
@@ -115,7 +117,6 @@ impl Resources {
 				error.context(marker).context(ShortcutFailure::InvalidLaunch)
 			})?;
 
-		let cancellation = CancellationToken::new();
 		let effective_binding = self
 			.settings
 			.load_execution_binding(&cancellation)

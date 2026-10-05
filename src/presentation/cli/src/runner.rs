@@ -463,6 +463,7 @@ async fn dispatch(
 				arguments.name,
 				arguments.destination.map(|path| resolve_path(&path, &startup)),
 				log_level,
+				operation::ctrl_c_token(),
 			)
 			.await
 			{
@@ -874,7 +875,7 @@ mod tests {
 		let install_archive = unavailable_install_archive_dependencies();
 		Dependencies {
 			create_shortcut: CreateShortcutDependencies {
-				validate_launch: Arc::new(|_, _, _, _| {
+				validate_launch: Arc::new(|_, _, _, _, _| {
 					Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })
 				}),
 				persist: Arc::new(|_| Box::pin(async { Err(report!(ShortcutFailure::Unsupported)) })),
@@ -1569,7 +1570,7 @@ mod tests {
 				Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) })
 			});
 			dependencies.create_shortcut = CreateShortcutDependencies {
-				validate_launch: Arc::new(move |target, cwd, input, arguments| {
+				validate_launch: Arc::new(move |target, cwd, input, arguments, _| {
 					assert_eq!(input.as_os_str(), "tool.exe");
 					assert_eq!(
 						cwd.as_ref().map(|value| value.as_path()),
@@ -1646,7 +1647,7 @@ mod tests {
 				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
 			let root = temp.path().to_owned();
 			dependencies.create_shortcut = CreateShortcutDependencies {
-				validate_launch: Arc::new(move |_, _, _, _| {
+				validate_launch: Arc::new(move |_, _, _, _, _| {
 					let launch = ValidatedShortcutLaunch {
 						launcher: root.join("mods.exe"),
 						environment: root.clone(),

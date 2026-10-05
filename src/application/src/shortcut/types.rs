@@ -9,6 +9,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutFailure {
@@ -50,6 +51,7 @@ pub type ValidateShortcutLaunch = Arc<
 			Option<WorkingDirectory>,
 			Program,
 			Vec<ProgramArgument>,
+			CancellationToken,
 		) -> Pin<Box<dyn Future<Output = Result<ValidatedShortcutLaunch, ShortcutFailure>> + Send>>
 		+ Send
 		+ Sync,

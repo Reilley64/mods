@@ -12,6 +12,7 @@ use rootcause::prelude::ResultExt;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct CreateShortcutDependencies {
@@ -44,6 +45,7 @@ pub async fn create_shortcut(
 	name: Option<String>,
 	destination: Option<PathBuf>,
 	log_level: String,
+	cancellation: CancellationToken,
 ) -> Result<CreateShortcutOutput, CreateShortcutError> {
 	let explicit_name = name
 		.as_deref()
@@ -53,7 +55,13 @@ pub async fn create_shortcut(
 
 	let launch = dependencies
 		.validate_launch
-		.call((output_target.clone(), working_directory, program, arguments.clone()))
+		.call((
+			output_target.clone(),
+			working_directory,
+			program,
+			arguments.clone(),
+			cancellation,
+		))
 		.await
 		.context(CreateShortcutError)?;
 
@@ -120,7 +128,7 @@ mod tests {
 			"../tool", "CON", "COM1.txt", "LPT¹", "trail.", "trail ", "", "a:b", "snow?",
 		] {
 			let dependencies = CreateShortcutDependencies {
-				validate_launch: Arc::new(|_, _, _, _| {
+				validate_launch: Arc::new(|_, _, _, _, _| {
 					Box::pin(async { Err(report!(ShortcutFailure::InvalidLaunch)) })
 				}),
 				persist: Arc::new(|_| Box::pin(async { Err(report!(ShortcutFailure::Publication)) })),
@@ -134,6 +142,7 @@ mod tests {
 				Some(name.into()),
 				None,
 				"info".into(),
+				CancellationToken::new(),
 			)
 			.await;
 			let error = result.err().ok_or_else(|| report!(CreateShortcutError))?;
@@ -158,7 +167,7 @@ mod tests {
 			let display = display.map(str::to_owned);
 			let expected = expected.to_owned();
 			let dependencies = CreateShortcutDependencies {
-				validate_launch: Arc::new(move |target, cwd, program, arguments| {
+				validate_launch: Arc::new(move |target, cwd, program, arguments, _| {
 					assert!(
 						matches!(target, OutputTarget::DataMod(name) if name.as_str() == "Generated")
 					);
@@ -223,6 +232,7 @@ mod tests {
 				explicit.map(str::to_owned),
 				Some("/links".into()),
 				"debug".into(),
+				CancellationToken::new(),
 			)
 			.await?;
 		}
@@ -234,7 +244,7 @@ mod tests {
 		let called = Arc::new(AtomicBool::new(false));
 		let observed = called.clone();
 		let dependencies = CreateShortcutDependencies {
-			validate_launch: Arc::new(|_, _, _, _| {
+			validate_launch: Arc::new(|_, _, _, _, _| {
 				Box::pin(async {
 					Err(report!(ErrorMarker::output_target_disabled())
 						.context(ShortcutFailure::InvalidLaunch))
@@ -254,13 +264,56 @@ mod tests {
 			None,
 			None,
 			"info".into(),
+			CancellationToken::new(),
 		)
 		.await;
 		let error = result.err().ok_or_else(|| report!(CreateShortcutError))?;
 		assert!(error
 			.iter_reports()
-			.any(|cause| cause.downcast_current_context::<crate::ErrorMarker>()
+			.any(|cause| cause.downcast_current_context::<ErrorMarker>()
 				== Some(&ErrorMarker::output_target_disabled())));
+		assert!(!called.load(Ordering::SeqCst));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn caller_cancellation_reaches_validation_and_never_publishes() -> Result<(), CreateShortcutError> {
+		let cancellation = CancellationToken::new();
+		cancellation.cancel();
+		let called = Arc::new(AtomicBool::new(false));
+		let observed = called.clone();
+		let dependencies = CreateShortcutDependencies {
+			validate_launch: Arc::new(|_, _, _, _, token| {
+				Box::pin(async move {
+					if token.is_cancelled() {
+						return Err(report!(ErrorMarker::operation_cancelled())
+							.context(ShortcutFailure::InvalidLaunch));
+					}
+					Err(report!(ShortcutFailure::InvalidLaunch))
+				})
+			}),
+			persist: Arc::new(move |_| {
+				observed.store(true, Ordering::SeqCst);
+				Box::pin(async { Ok(()) })
+			}),
+		};
+		let result = create_shortcut(
+			dependencies,
+			OutputTarget::Overwrite,
+			None,
+			Program::new("Tool.exe".into()).context(CreateShortcutError)?,
+			vec![],
+			None,
+			None,
+			"info".into(),
+			cancellation,
+		)
+		.await;
+		let error = result.err().ok_or_else(|| report!(CreateShortcutError))?;
+		assert!(error
+			.iter_reports()
+			.any(|cause| cause.downcast_current_context::<ErrorMarker>()
+				== Some(&ErrorMarker::operation_cancelled())));
 		assert!(!called.load(Ordering::SeqCst));
 		Ok(())
 	}
