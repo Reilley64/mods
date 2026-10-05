@@ -333,13 +333,6 @@ fn validate_provider(
 		&mut budget,
 		MAX_TRAVERSAL_DEPTH,
 	)?;
-	if matches!(kind, ProviderKind::DataMod)
-		&& !provider
-			.exists("meta.toml")
-			.context(ErrorMarker::environment_invalid(None))?
-	{
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
 	if !provider
 		.exists("meta.toml")
 		.context(ErrorMarker::environment_invalid(None))?
@@ -1587,6 +1580,18 @@ mod tests {
 	}
 
 	#[test]
+	fn data_mod_validation_accepts_missing_metadata() -> StdResult<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		fs::write(temp.path().join("ordinary.dds"), b"content")?;
+		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
+			.map_err(|_| "safe provider directory must open")?;
+
+		validate_provider(&directory, ProviderKind::DataMod, &CancellationToken::new())
+			.map_err(|_| "missing metadata must mean empty tombstones")?;
+		Ok(())
+	}
+
+	#[test]
 	fn data_mod_validation_allows_exact_canonical_metadata_name() -> StdResult<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		fs::write(temp.path().join("meta.toml"), b"schema_version = 1\n")?;
@@ -1686,6 +1691,34 @@ mod tests {
 			.expect_err("pre-cancelled provider validation must stop");
 
 		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
+		Ok(())
+	}
+
+	#[test]
+	fn snapshot_accepts_data_mod_without_metadata() -> StdResult<(), Box<dyn Error>> {
+		let fixture = TempDir::new_in(current_dir()?)?;
+		let game = fixture.path().join("game");
+		fs::create_dir_all(game.join("Data"))?;
+		let root = EnvironmentRoot::new(fixture.path().join("environment"))
+			.expect("fixture environment root must be valid");
+		EnvironmentAdapter
+			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.expect("fixture environment must initialize");
+		let mod_dir = root.as_path().join("mods/Plain");
+		fs::create_dir(&mod_dir)?;
+		fs::write(mod_dir.join("ordinary.dds"), b"content")?;
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+Plain\n")?;
+
+		let snapshot = load(
+			root.as_path(),
+			InstallationStateAccess::Preview,
+			&CancellationToken::new(),
+		)
+		.expect("metadata-free Data Mod must load");
+		assert_eq!(
+			snapshot.file_dependencies.get("ordinary.dds").map(|fact| fact.state),
+			Some(FileDependencyState::Active)
+		);
 		Ok(())
 	}
 

@@ -867,6 +867,33 @@ mod tests {
 	}
 
 	#[test]
+	fn installed_mod_without_metadata_is_accepted() -> Result<()> {
+		let (temp, root) = fixture()?;
+		fs::create_dir(temp.path().join("mods/Example Mod"))?;
+		fs::write(temp.path().join("profile/modlist.txt"), "+Example Mod\n")?;
+
+		SettingsAdapter::with_environment(root, Vec::new()).load()?;
+		Ok(())
+	}
+
+	#[test]
+	fn installed_mod_with_invalid_metadata_is_rejected() -> Result<()> {
+		for metadata in ["not = [", "schema_version = 2\n"] {
+			let (temp, root) = fixture()?;
+			fs::create_dir(temp.path().join("mods/Example Mod"))?;
+			fs::write(temp.path().join("mods/Example Mod/meta.toml"), metadata)?;
+			fs::write(temp.path().join("profile/modlist.txt"), "+Example Mod\n")?;
+
+			let error = SettingsAdapter::with_environment(root, Vec::new())
+				.load()
+				.err()
+				.ok_or_else(|| IoError::other("present invalid metadata unexpectedly loaded"))?;
+			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
+		}
+		Ok(())
+	}
+
+	#[test]
 	fn installed_mods_overwrite_saves_and_rebuildable_cache_are_accepted() -> Result<()> {
 		let (temp, root) = fixture()?;
 		fs::create_dir_all(temp.path().join("mods/Example Mod/meshes"))?;
