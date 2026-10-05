@@ -72,6 +72,36 @@ test("complete request changes invalidate independently including distinct diffs
 	expect(requestKey({ model: "a" }, "v1")).not.toBe(requestKey({ model: "a" }, "v2"));
 });
 
+test("caches and validates each file's applicable rule set independently", async () => {
+	const { options, client, directory } = await fixture();
+	const scoped: StyleRule = { ...rule, id: "scoped", appliesTo: ["src/**"] };
+	const inScope = { ...change, path: "src/lib.rs" };
+	const scopedOptions = { ...options, ruleThresholds: { r: 0.7, scoped: 0.7 } };
+	const first = await reviewChanges(client, [change, inScope], [rule, scoped], scopedOptions);
+	expect(first.findings.map((finding) => `${finding.file}:${finding.rule.id}`).sort()).toEqual(["example.rs:r", "src/lib.rs:r", "src/lib.rs:scoped"]);
+	expect(calls).toBe(2);
+	const files = await readdir(directory);
+	expect(files).toHaveLength(2);
+	const records = await Promise.all(files.map(async (file) => JSON.parse(await readFile(join(directory, file), "utf8"))));
+	expect(records.map((record) => record.value.probabilities.length).sort()).toEqual([1, 2]);
+
+	const hit = await reviewChanges(client, [change, inScope], [rule, scoped], scopedOptions);
+	expect(hit).toMatchObject({ cachedFiles: 2, filesReviewed: 2 });
+	expect(hit.findings).toHaveLength(3);
+
+	const twoScores = files[records.findIndex((record) => record.value.probabilities.length === 2)]!;
+	const tampered = records.find((record) => record.value.probabilities.length === 2);
+	await writeFile(join(directory, twoScores), JSON.stringify({ ...tampered, value: { ...tampered.value, probabilities: [0.8] } }));
+	expect((await reviewChanges(client, [change, inScope], [rule, scoped], scopedOptions)).cachedFiles).toBe(1);
+	expect(calls).toBe(3);
+
+	const rescoped = await reviewChanges(client, [change, inScope], [rule, { ...scoped, appliesTo: ["tests/**"] }], scopedOptions);
+	expect(rescoped).toMatchObject({ cachedFiles: 1, filesReviewed: 2 });
+	expect(rescoped.findings.map((finding) => finding.rule.id)).toEqual(["r", "r"]);
+	expect(Object.keys((lastRequest as { questions: Record<string, unknown> }).questions)).toEqual(["r"]);
+	expect(calls).toBe(4);
+});
+
 test("corrupt or invalid persisted records miss and IO failure still returns inference", async () => {
 	const { options, client, directory } = await fixture();
 	await reviewChanges(client, [change], [rule], options);

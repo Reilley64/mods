@@ -9,7 +9,7 @@ export interface GateConfig {
 	mode: GateMode;
 	model: string;
 	ruleThresholds: Record<string, number>;
-	styleFile: string;
+	styleFiles: string[];
 	dispositionsFile: string;
 	tools: string[];
 	timeoutMs: number;
@@ -24,7 +24,7 @@ export const DEFAULT_CONFIG: GateConfig = {
 	mode: "advisory",
 	model: "typesafe/jev-1.13",
 	ruleThresholds: {},
-	styleFile: "CODING_STYLE.md",
+	styleFiles: [],
 	dispositionsFile: ".prime/agent/coding-style-dispositions.json",
 	tools: ["ipython", "edit", "bash"],
 	timeoutMs: 10_000,
@@ -48,6 +48,9 @@ export async function loadConfig(root: string, sessionModel?: string): Promise<G
 	if (Object.hasOwn(value, "threshold")) {
 		throw new Error("coding-style-gate: legacy threshold is unsupported; migrate to explicit ruleThresholds for every style rule");
 	}
+	if (Object.hasOwn(value, "styleFile")) {
+		throw new Error("coding-style-gate: legacy styleFile is unsupported; migrate to styleFiles, the list of project-relative rubric area files");
+	}
 
 	// Legacy provider fields have no routing authority. Override local models before validation.
 	const { provider: _legacyProvider, ...local } = value as Partial<GateConfig> & { provider?: unknown };
@@ -64,18 +67,15 @@ export async function loadConfig(root: string, sessionModel?: string): Promise<G
 	if (!["typesafe/jev-1.13", "typesafe/jev-1.13-20260917"].includes(config.model)) {
 		throw new Error("coding-style-gate: unsupported OpenRouter model; use typesafe/jev-1.13 or typesafe/jev-1.13-20260917");
 	}
-	for (const field of ["styleFile", "dispositionsFile"] as const) {
-		const path: unknown = config[field];
-		const normalized = typeof path === "string" ? normalize(path) : "";
-		if (
-			typeof path !== "string" ||
-			!path ||
-			isAbsolute(path) ||
-			normalized === ".." ||
-			normalized.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
-		) {
-			throw new Error(`coding-style-gate: ${field} must stay within the project`);
-		}
+	if (!projectRelative(config.dispositionsFile)) {
+		throw new Error("coding-style-gate: dispositionsFile must stay within the project");
+	}
+	if (
+		!Array.isArray(config.styleFiles) ||
+		config.styleFiles.some((file) => !projectRelative(file)) ||
+		new Set(config.styleFiles.map((file) => normalize(file))).size !== config.styleFiles.length
+	) {
+		throw new Error("coding-style-gate: styleFiles must list distinct files that stay within the project");
 	}
 	if (!Number.isInteger(config.timeoutMs) || config.timeoutMs <= 0) {
 		throw new Error("coding-style-gate: timeoutMs must be a positive integer");
@@ -101,6 +101,14 @@ export async function loadConfig(root: string, sessionModel?: string): Promise<G
 	}
 
 	return config;
+}
+
+function projectRelative(path: unknown): boolean {
+	if (typeof path !== "string" || !path || isAbsolute(path)) {
+		return false;
+	}
+	const normalized = normalize(path);
+	return normalized !== ".." && !normalized.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`);
 }
 
 export function validateRuleThresholds(

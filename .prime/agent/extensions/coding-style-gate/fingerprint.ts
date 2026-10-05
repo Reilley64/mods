@@ -35,7 +35,7 @@ export function reviewFingerprint(
 		...Object.entries(config.ruleThresholds)
 			.sort(([left], [right]) => left.localeCompare(right))
 			.flatMap(([id, threshold]) => [id, String(threshold)]),
-		...rules.flatMap((rule) => [rule.id, rule.title, rule.text, rule.violation, rule.compliant, ...rule.badExamples, ...rule.goodExamples]),
+		...rules.flatMap((rule) => [rule.id, rule.title, rule.text, rule.violation, rule.compliant, ...rule.badExamples, ...rule.goodExamples, JSON.stringify(rule.appliesTo ?? null)]),
 		...changes.flatMap((change) => [
 			change.path,
 			change.before === undefined ? "added" : change.after === undefined ? "deleted" : "modified",

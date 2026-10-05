@@ -21,7 +21,7 @@ const config = await loadConfig(root);
 if (process.env.CODING_STYLE_GATE_THRESHOLD !== undefined) {
 	throw new Error("CODING_STYLE_GATE_THRESHOLD is unsupported; configure explicit ruleThresholds instead");
 }
-const allRules = await loadStyleRules(root, config.styleFile);
+const allRules = await loadStyleRules(root, config.styleFiles);
 const rules = ruleFilter ? allRules.filter((rule) => rule.id === ruleFilter) : allRules;
 if (rules.length === 0) {
 	throw new Error(`unknown rubric rule ${ruleFilter}`);

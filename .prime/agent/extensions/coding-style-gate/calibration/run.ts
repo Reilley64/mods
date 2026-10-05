@@ -1,15 +1,16 @@
-import { readFile } from "node:fs/promises";
 import { createReviewClient } from "../provider";
-import { calibrationInput } from "./input";
+import { calibrationInput, outOfScopeFixtures } from "./input";
 
 import { loadConfig, validateRuleThresholds } from "../config";
 import { reviewChanges } from "../reviewer";
-import { extractStyleRules } from "../rules";
+import { loadStyleRules } from "../policy";
 import { calibrationCases, type CalibrationCase } from "./cases";
 
 const config = await loadConfig(process.cwd());
-const rules = extractStyleRules(await readFile(config.styleFile, "utf8"));
+const rules = await loadStyleRules(process.cwd(), config.styleFiles);
 validateRuleThresholds(config.ruleThresholds, rules);
+const outOfScope = outOfScopeFixtures(rules, calibrationCases);
+if (outOfScope.length > 0) throw new Error(`Calibration fixtures outside their rule scope: ${outOfScope.join(", ")}`);
 const client = createReviewClient({ ...config, timeoutMs: 20_000 });
 
 async function scoreCase(sample: CalibrationCase) {

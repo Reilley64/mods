@@ -2,7 +2,20 @@
   "enabled": true,
   "mode": "advisory",
   "model": "typesafe/jev-1.13",
-  "styleFile": "CODING_STYLE.md",
+  "styleFiles": [
+    "docs/coding-style/comments-and-documentation.md",
+    "docs/coding-style/formatting-and-imports.md",
+    "docs/coding-style/architecture-and-modules.md",
+    "docs/coding-style/dependencies.md",
+    "docs/coding-style/application-use-cases-and-ports.md",
+    "docs/coding-style/cli-arguments.md",
+    "docs/coding-style/errors.md",
+    "docs/coding-style/runtime-primitives.md",
+    "docs/coding-style/control-flow.md",
+    "docs/coding-style/functions-and-tests.md",
+    "docs/coding-style/unsafe-rust.md",
+    "docs/coding-style/linux-review-principles-retained.md"
+  ],
   "dispositionsFile": ".prime/agent/coding-style-dispositions.json",
   "tools": [
     "ipython",

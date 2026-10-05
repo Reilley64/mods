@@ -151,6 +151,40 @@ describe("Jev coding style review", () => {
 		});
 	});
 
+	test("asks each file only the rules whose Applies to globs match it", async () => {
+		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
+		const scopedRules: StyleRule[] = [
+			{ ...rules[0]!, appliesTo: ["src/application/**"] },
+			{ ...rules[1]!, appliesTo: ["src/infrastructure/**"] },
+		];
+		const scopedChanges: RustChange[] = [
+			changes[0]!,
+			{ ...changes[0]!, path: "src/infrastructure/archive/src/adapter.rs" },
+			{ ...changes[0]!, path: "src/presentation/cli/src/runner.rs" },
+		];
+
+		const report = await reviewChanges(client, scopedChanges, scopedRules, {
+			model: "jev-test",
+			ruleThresholds: Object.fromEntries(rules.map((rule) => [rule.id, 0.05])),
+			maxConcurrency: 1,
+		});
+
+		const asked = (requests as { state: { file: string }; questions: Record<string, unknown> }[]).map((request) => [
+			request.state.file,
+			Object.keys(request.questions),
+		]);
+		expect(asked).toEqual([
+			["src/application/src/example.rs", ["comments-and-documentation-narrative-comments"]],
+			["src/infrastructure/archive/src/adapter.rs", ["control-flow-guard-clauses"]],
+		]);
+		expect(report.filesReviewed).toBe(2);
+		expect(report.inputTokens).toBe(246);
+		expect(report.findings.map((finding) => [finding.file, finding.rule.id])).toEqual([
+			["src/application/src/example.rs", "comments-and-documentation-narrative-comments"],
+			["src/infrastructure/archive/src/adapter.rs", "control-flow-guard-clauses"],
+		]);
+	});
+
 	test("sends more than 32 rubric questions in one request", async () => {
 		const client = new TypeSafeClient({ baseURL: "https://openrouter.ai/api", apiKey: "test-key", retry: { maxRetries: 0 } });
 		const manyRules: StyleRule[] = Array.from({ length: 33 }, (_, index) => ({
