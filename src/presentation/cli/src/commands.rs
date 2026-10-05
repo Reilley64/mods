@@ -1,10 +1,12 @@
 use application::settings::SettingKey;
 use clap::ArgAction;
 use clap::Args;
+use clap::CommandFactory;
 use clap::Error as ClapError;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
+use clap::error::ErrorKind;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
@@ -14,6 +16,8 @@ use std::path::PathBuf;
 pub(crate) struct Cli {
 	#[arg(long, global = true, value_name = "PATH")]
 	pub(crate) environment: Option<PathBuf>,
+	#[arg(long, global = true)]
+	pub(crate) json: bool,
 	#[arg(long, global = true, value_enum, default_value_t = LogLevel::Info)]
 	pub(crate) log_level: LogLevel,
 	#[command(subcommand)]
@@ -37,6 +41,7 @@ pub(crate) enum Command {
 	},
 	Exec(ExecArgs),
 	Export(ExportArgs),
+	Shortcut(ShortcutArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -88,7 +93,10 @@ impl fmt::Display for LogLevel {
 
 #[derive(Debug, Args)]
 pub(crate) struct InstallArgs {
+	#[arg(value_name = "ARCHIVE_OR_NEXUS_URL")]
 	pub(crate) archive: PathBuf,
+	#[arg(long, value_name = "ID")]
+	pub(crate) file: Option<u64>,
 	#[arg(long)]
 	pub(crate) name: Option<String>,
 	#[arg(long)]
@@ -134,12 +142,32 @@ pub(crate) struct ExportArgs {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct ShortcutArgs {
+	#[arg(long)]
+	pub(crate) name: Option<String>,
+	#[arg(long)]
+	pub(crate) destination: Option<PathBuf>,
+	#[arg(long)]
+	pub(crate) output_target: Option<String>,
+	/// Working directory for the program; defaults to the bound game installation directory. Program lookup still uses the caller's directory and PATH.
+	#[arg(long)]
+	pub(crate) cwd: Option<PathBuf>,
+	#[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
+	pub(crate) command: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct ExecArgs {
 	#[arg(long)]
 	pub(crate) output_target: Option<String>,
 	/// Working directory for the program; defaults to the bound game installation directory. Program lookup still uses the caller's directory and PATH.
 	#[arg(long)]
 	pub(crate) cwd: Option<PathBuf>,
+	#[arg(
+		long,
+		help = "Detach the launcher console and show launch failures in dialogs (Windows only)"
+	)]
+	pub(crate) hidden: bool,
 	#[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
 	pub(crate) command: Vec<OsString>,
 }
@@ -159,7 +187,15 @@ where
 	I: IntoIterator<Item = T>,
 	T: Into<OsString> + Clone,
 {
-	Cli::try_parse_from(arguments)
+	let cli = Cli::try_parse_from(arguments)?;
+	if cli.json && matches!(&cli.command, Command::Exec(exec) if exec.hidden) {
+		return Err(Cli::command().error(
+			ErrorKind::ArgumentConflict,
+			"the argument '--hidden' cannot be used with '--json'",
+		));
+	}
+
+	Ok(cli)
 }
 
 #[cfg(test)]
@@ -173,6 +209,61 @@ mod tests {
 	use super::parse_from;
 	use std::error::Error;
 	use std::ffi::OsString;
+	use std::path::Path;
+
+	#[test]
+	fn shortcut_accepts_saved_launch_choices() {
+		assert!(parse_from(["mods", "shortcut", "--cwd", "", "--", "tool.exe"]).is_err());
+		assert!(parse_from([
+			"mods",
+			"--environment",
+			"env",
+			"--log-level",
+			"debug",
+			"shortcut",
+			"--name",
+			"My tool",
+			"--destination",
+			"links",
+			"--cwd",
+			"work",
+			"--output-target",
+			"Generated",
+			"--",
+			"tool.exe",
+			"",
+			"雪",
+			"a\"b",
+			"--"
+		])
+		.is_ok());
+	}
+
+	#[test]
+	fn nexus_file_selection_preserves_existing_install_options() -> Result<(), Box<dyn Error>> {
+		let parsed = parse_from([
+			"mods",
+			"install",
+			"https://www.nexusmods.com/newvegas/mods/42",
+			"--file",
+			"7",
+			"--name",
+			"Chosen",
+			"--replace",
+			"--dry-run",
+			"--choice",
+			"group=option",
+		])?;
+		let Command::Install(arguments) = parsed.command else {
+			return Err("install must parse".into());
+		};
+		assert_eq!(arguments.file, Some(7));
+		assert_eq!(arguments.name.as_deref(), Some("Chosen"));
+		assert!(arguments.replace && arguments.dry_run);
+		assert_eq!(arguments.choice, ["group=option"]);
+		assert!(parse_from(["mods", "config", "get", "nexus-api-key"]).is_err());
+		Ok(())
+	}
 
 	#[test]
 	fn exec_help_describes_the_working_directory_default() {
@@ -213,7 +304,8 @@ mod tests {
 					command: ConfigCommand::Get {
 						key: SettingKeyArgument::GameDir
 					}
-				}
+				},
+				..
 			})
 		));
 	}
@@ -318,8 +410,15 @@ mod tests {
 	}
 
 	#[test]
-	fn rejects_json_and_unknown_setting_keys() {
-		assert!(parse_from(["mods", "--json", "config", "list"]).is_err());
+	fn accepts_global_json_without_consuming_child_arguments() -> Result<(), Box<dyn Error>> {
+		assert!(parse_from(["mods", "--json", "config", "list"]).is_ok());
+		let parsed = parse_from(["mods", "exec", "--", "tool.exe", "--json"])?;
+		assert!(matches!(parsed.command, Command::Exec(args) if args.command[1] == "--json"));
+		Ok(())
+	}
+
+	#[test]
+	fn rejects_unknown_setting_keys() {
 		assert!(parse_from(["mods", "config", "get", "unknown"]).is_err());
 	}
 
@@ -368,6 +467,36 @@ mod tests {
 		assert!(!defaults.include_saves && !defaults.include_game_data && !defaults.dry_run);
 		assert!(parse_from(["mods", "export"]).is_err());
 		assert!(parse_from(["mods", "export", "output", "--apply"]).is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn hidden_exec_preserves_launch_options_and_child_arguments() -> Result<(), Box<dyn Error>> {
+		let cli = parse_from([
+			"mods",
+			"exec",
+			"--output-target",
+			"High",
+			"--cwd",
+			"tools",
+			"--hidden",
+			"--",
+			"tool.exe",
+			"--hidden",
+			"",
+			"雪",
+		])?;
+		let Command::Exec(args) = cli.command else {
+			return Err("expected exec".into());
+		};
+		assert!(args.hidden);
+		assert_eq!(args.output_target.as_deref(), Some("High"));
+		assert_eq!(args.cwd.as_deref(), Some(Path::new("tools")));
+		assert_eq!(args.command, ["tool.exe", "--hidden", "", "雪"].map(OsString::from));
+		let Command::Exec(normal) = parse_from(["mods", "exec", "--", "tool.exe"])?.command else {
+			return Err("expected exec".into());
+		};
+		assert!(!normal.hidden);
 		Ok(())
 	}
 

@@ -46,16 +46,16 @@ A **Mod Environment** is one isolated setup, not a separately selectable profile
 After approval, select a new Environment Root and a real Steam Game Installation:
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
-mods --environment 'D:\Mod Environments\Mojave' config list
-mods --environment 'D:\Mod Environments\Mojave' config get game-dir
+mods --json --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
+mods --json --environment 'D:\Mod Environments\Mojave' config list
+mods --json --environment 'D:\Mod Environments\Mojave' config get game-dir
 ```
 
 A **Game Binding** records the Game Installation's Steam identity, path, and observed build. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.
 
 Initialization creates the manifest and Profile State. Use a nonexistent or empty root; existing `logs` and an empty `temp` are permitted when safe. An existing `mods.toml`, other contents, unsafe paths, or unfinished temporary state can block initialization. It is not a repair/reset command. Initialization writes the layout directly into the root and writes `mods.toml` last. A failed initialization can leave a partial layout, which blocks a retry until it is removed.
 
-`MODS_GAME_DIR` is the only supported `MODS_*` setting override. Use an absolute Game Installation path. Unknown, duplicate, empty, or non-Unicode overrides fail validation; even an explicit `--game-install` does not bypass malformed override validation. Use [configuration](commands.md) to inspect effective versus stored values before changing a binding.
+`MODS_GAME_DIR` overrides the Game Installation, and `MODS_NEXUS_API_KEY` overrides the stored Nexus API key. Use an absolute Game Installation path. Other `MODS_*` variables are ignored, and an empty variable counts as unset. A duplicate or non-Unicode override fails validation; even an explicit `--game-install` does not bypass malformed override validation. Use [configuration](commands.md) to inspect effective versus stored values before changing a binding.
 
 ## Setup failures
 

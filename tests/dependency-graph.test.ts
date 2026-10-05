@@ -12,6 +12,7 @@ const validPackages = [
   { name: "application", dependencies: [{ name: "domain" }] },
   { name: "infrastructure-environment", dependencies: [{ name: "application" }, { name: "domain" }] },
   { name: "infrastructure-settings", dependencies: [{ name: "application" }, { name: "domain" }] },
+  { name: "infrastructure-nexus", dependencies: [{ name: "application" }, { name: "domain" }] },
   { name: "infrastructure-game-platform", dependencies: [{ name: "application" }, { name: "domain" }] },
   { name: "infrastructure-archive", dependencies: [{ name: "application" }, { name: "domain" }] },
   { name: "infrastructure-execution", dependencies: [{ name: "application" }, { name: "domain" }] },
@@ -20,6 +21,7 @@ const validPackages = [
     dependencies: [
       { name: "infrastructure-environment" },
       { name: "infrastructure-settings" },
+      { name: "infrastructure-nexus" },
       { name: "infrastructure-game-platform" },
       { name: "infrastructure-archive" },
       { name: "infrastructure-execution" },

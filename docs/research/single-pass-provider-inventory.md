@@ -2,8 +2,7 @@
 
 ## Scope
 
-The performance branch starts at optional-metadata commit
-`438fb2eed4c5d2a4d9ba58711fcf7e16a1b19403`.
+The performance change builds on the optional-metadata change in #140.
 
 Snapshot loading collects each validated provider once. Winner construction uses
 those inventories in base-game, enabled-mod priority, then Overwrite order.
@@ -90,7 +89,7 @@ performance remain unmeasured here.
 - `cargo test -p infrastructure-environment -- --nocapture` passed all 91 tests.
 - Focused environment Clippy passed.
 - Full `bun run check` passed formatting, workspace Clippy, dependency checks,
-  2 release-version tests, all 423 Rust tests, and all 119 tool tests.
+  release-version tests, all Rust tests, and all tool tests.
 - `git diff --check` passed.
 - Independent spec and standards reviews passed with no blockers. The spec reviewer
   reran all nine execution-preparation tests and confirmed the 4-enumeration,

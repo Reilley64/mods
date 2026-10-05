@@ -5,6 +5,7 @@ use crate::profile::is_activatable_plugin_name;
 use crate::profile::validate_profile_files;
 use crate::profile_activation::ProfileActivation;
 use crate::validate_bsa_file;
+use crate::validate_download_cache_entries;
 use application::ErrorMarker;
 use application::installation::CandidateDecision;
 use application::installation::EffectiveResult;
@@ -124,7 +125,7 @@ async fn load_inner(
 	validate_manifest(root_path, cancellation).await?;
 
 	let cache = root_path.join("cache");
-	validate_exact_entries(&cache, &[INVALIDATION_ARCHIVE], cancellation).await?;
+	validate_download_cache_entries(&cache, cancellation).await?;
 	validate_bsa_file(&cache, cancellation).await?;
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));

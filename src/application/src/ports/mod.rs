@@ -5,6 +5,7 @@ use std::pin::Pin;
 
 mod adapter_state;
 mod archive;
+mod download_mod;
 mod environment;
 mod execution;
 mod game_platform;
@@ -14,6 +15,7 @@ mod settings;
 pub use adapter_state::AdapterState;
 pub use archive::ExtractApprovedFiles;
 pub use archive::IndexArchive;
+pub use download_mod::DownloadMod;
 pub use environment::AssessInitializationTarget;
 pub use environment::AssessInstallation;
 pub use environment::BeginInstallation;

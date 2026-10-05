@@ -9,6 +9,7 @@ use application::ports::PortFuture;
 use application::ports::ProgramExit;
 use application::ports::ProgramOutput;
 use application::ports::ProgramSupervision;
+use application::ports::ReportProgress;
 use application::ports::RunningProgram;
 use application::ports::StagedProfile;
 use application::ports::VirtualFileSystem;
@@ -42,12 +43,6 @@ use std::future::ready;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// Caller-resolved launch inputs and the inherited streams chosen before preparation.
-struct NativeLaunchTarget {
-	launch: ResolvedLaunch,
-	inherited_streams: Option<InheritedStreams>,
-}
-
 struct NativeProgram {
 	process: HookedProcess,
 	private_streams: Option<PrivateStreams>,
@@ -66,18 +61,13 @@ fn completed<T: Send + 'static>(result: Result<T, ErrorMarker>) -> PortFuture<T>
 impl ExecutionAdapter {
 	/// Builds the Windows exec ports. The caller runs the whole use case on one
 	/// thread, so native session calls never overlap.
-	pub(super) fn dependencies(&self) -> ExecuteProgramDependencies {
+	pub(super) fn dependencies(&self, report_progress: Option<ReportProgress>) -> ExecuteProgramDependencies {
 		let adapter = Arc::new(self.clone());
 		let preparation = PreparationPorts::new(self.root.clone(), self.binding.clone());
 
 		ExecuteProgramDependencies {
-			report_progress: None,
-			resolve_launch_target: Arc::new({
-				let adapter = adapter.clone();
-				move |program, arguments, working_directory| {
-					completed(adapter.resolve_target(program, arguments, working_directory))
-				}
-			}),
+			report_progress,
+			resolve_launch_target: self.resolve_launch_target_port(),
 			prepare_environment_plan: preparation.prepare_environment_plan,
 			project_profile: preparation.project_profile,
 			set_load_order_times: preparation.set_load_order_times,
@@ -112,7 +102,7 @@ impl ExecutionAdapter {
 		}
 	}
 
-	fn resolve_target(
+	pub(super) fn resolve_target(
 		&self,
 		program: Program,
 		arguments: Vec<ProgramArgument>,
@@ -135,16 +125,11 @@ impl ExecutionAdapter {
 				error.context(marker)
 			})?;
 
-		let inherited_streams = if self.capture.is_none() {
-			Some(InheritedStreams::capture().context(ErrorMarker::program_launch_failed())?)
-		} else {
-			None
-		};
-
-		Ok(LaunchTarget(AdapterState::new(NativeLaunchTarget {
-			launch,
-			inherited_streams,
-		})))
+		Ok(LaunchTarget {
+			program: launch.application.clone(),
+			working_directory: launch.directory.clone(),
+			state: AdapterState::new(launch),
+		})
 	}
 
 	fn start_program(
@@ -153,10 +138,13 @@ impl ExecutionAdapter {
 		target: LaunchTarget,
 	) -> Result<RunningProgram, ErrorMarker> {
 		let view: VirtualGameView = file_system.0.downcast().ok_or_else(foreign_handle)?;
-		let NativeLaunchTarget {
-			launch,
-			inherited_streams,
-		} = target.0.downcast().ok_or_else(foreign_handle)?;
+		let launch: ResolvedLaunch = target.state.downcast().ok_or_else(foreign_handle)?;
+
+		let inherited_streams = if self.capture.is_none() {
+			Some(InheritedStreams::capture().context(ErrorMarker::program_launch_failed())?)
+		} else {
+			None
+		};
 
 		let mut private_streams = self
 			.capture

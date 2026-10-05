@@ -3,6 +3,14 @@ use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
+	NexusSourceInvalid,
+	NexusPremiumRequired,
+	NexusCredentialsInvalid,
+	NexusAccessDenied,
+	NexusRateLimited,
+	NexusUnavailable,
+	NexusNetworkFailure,
+	NexusResponseInvalid,
 	EnvironmentNotInitialized,
 	EnvironmentAlreadyInitialized,
 	EnvironmentRootNotEmpty,
@@ -36,11 +44,25 @@ pub enum ErrorCode {
 	VfsFailed,
 	ExecutionSupervisionFailed,
 	OperationCancelled,
+	ShortcutUnsupported,
+	ShortcutNameInvalid,
+	ShortcutDestinationInvalid,
+	ShortcutLaunchInvalid,
+	ShortcutArgumentsTooLong,
+	ShortcutFailed,
 }
 
 impl ErrorCode {
 	pub const fn as_str(self) -> &'static str {
 		match self {
+			Self::NexusSourceInvalid => "nexus_source_invalid",
+			Self::NexusPremiumRequired => "nexus_premium_required",
+			Self::NexusCredentialsInvalid => "nexus_credentials_invalid",
+			Self::NexusAccessDenied => "nexus_access_denied",
+			Self::NexusRateLimited => "nexus_rate_limited",
+			Self::NexusUnavailable => "nexus_unavailable",
+			Self::NexusNetworkFailure => "nexus_network_failure",
+			Self::NexusResponseInvalid => "nexus_response_invalid",
 			Self::EnvironmentNotInitialized => "environment_not_initialized",
 			Self::EnvironmentAlreadyInitialized => "environment_already_initialized",
 			Self::EnvironmentRootNotEmpty => "environment_root_not_empty",
@@ -74,6 +96,12 @@ impl ErrorCode {
 			Self::VfsFailed => "vfs_failed",
 			Self::ExecutionSupervisionFailed => "execution_supervision_failed",
 			Self::OperationCancelled => "operation_cancelled",
+			Self::ShortcutUnsupported => "shortcut_unsupported",
+			Self::ShortcutNameInvalid => "shortcut_name_invalid",
+			Self::ShortcutDestinationInvalid => "shortcut_destination_invalid",
+			Self::ShortcutLaunchInvalid => "shortcut_launch_invalid",
+			Self::ShortcutArgumentsTooLong => "shortcut_arguments_too_long",
+			Self::ShortcutFailed => "shortcut_failed",
 		}
 	}
 }
@@ -109,6 +137,30 @@ impl ErrorMarker {
 		}
 	}
 
+	pub fn nexus_source_invalid() -> Self {
+		Self::simple(ErrorCode::NexusSourceInvalid)
+	}
+	pub fn nexus_premium_required() -> Self {
+		Self::simple(ErrorCode::NexusPremiumRequired)
+	}
+	pub fn nexus_access_denied() -> Self {
+		Self::simple(ErrorCode::NexusAccessDenied)
+	}
+	pub fn nexus_credentials_invalid() -> Self {
+		Self::simple(ErrorCode::NexusCredentialsInvalid)
+	}
+	pub fn nexus_rate_limited() -> Self {
+		Self::simple(ErrorCode::NexusRateLimited)
+	}
+	pub fn nexus_unavailable() -> Self {
+		Self::simple(ErrorCode::NexusUnavailable)
+	}
+	pub fn nexus_network_failure() -> Self {
+		Self::simple(ErrorCode::NexusNetworkFailure)
+	}
+	pub fn nexus_response_invalid() -> Self {
+		Self::simple(ErrorCode::NexusResponseInvalid)
+	}
 	pub fn environment_not_initialized() -> Self {
 		Self::simple(ErrorCode::EnvironmentNotInitialized)
 	}
@@ -248,17 +300,39 @@ impl ErrorMarker {
 	pub fn operation_cancelled() -> Self {
 		Self::simple(ErrorCode::OperationCancelled)
 	}
+	pub fn shortcut_unsupported() -> Self {
+		Self::simple(ErrorCode::ShortcutUnsupported)
+	}
+	pub fn shortcut_name_invalid() -> Self {
+		Self::simple(ErrorCode::ShortcutNameInvalid)
+	}
+	pub fn shortcut_destination_invalid() -> Self {
+		Self::simple(ErrorCode::ShortcutDestinationInvalid)
+	}
+	pub fn shortcut_launch_invalid() -> Self {
+		Self::simple(ErrorCode::ShortcutLaunchInvalid)
+	}
+	pub fn shortcut_arguments_too_long() -> Self {
+		Self::simple(ErrorCode::ShortcutArgumentsTooLong)
+	}
+	pub fn shortcut_failed() -> Self {
+		Self::simple(ErrorCode::ShortcutFailed)
+	}
 
 	pub fn settings_environment_invalid() -> Self {
 		Self {
-			message_override: Some("environment variables are invalid; only MODS_GAME_DIR is accepted"),
+			message_override: Some(
+				"the MODS_GAME_DIR or MODS_NEXUS_API_KEY environment variable is invalid",
+			),
 			..Self::environment_invalid(None)
 		}
 	}
 	pub fn initialization_environment_invalid() -> Self {
 		Self {
 			field: Some("game_dir"),
-			message_override: Some("environment variables are invalid; only MODS_GAME_DIR is accepted"),
+			message_override: Some(
+				"the MODS_GAME_DIR or MODS_NEXUS_API_KEY environment variable is invalid",
+			),
 			..Self::game_install_invalid()
 		}
 	}
@@ -306,6 +380,16 @@ impl ErrorMarker {
 			return message;
 		}
 		match self.code {
+			ErrorCode::NexusSourceInvalid => "Nexus source or file selection is invalid",
+			ErrorCode::NexusPremiumRequired => {
+				"Automatic installation from Nexus requires a Premium account API key configured in settings. You can instead install a local archive with `mods install <archive>`."
+			}
+			ErrorCode::NexusCredentialsInvalid => "Nexus credentials are invalid",
+			ErrorCode::NexusAccessDenied => "Nexus denied access to this resource",
+			ErrorCode::NexusRateLimited => "Nexus rate limit exceeded",
+			ErrorCode::NexusUnavailable => "Nexus mod or file is unavailable",
+			ErrorCode::NexusNetworkFailure => "Nexus request or transfer failed",
+			ErrorCode::NexusResponseInvalid => "Nexus returned an invalid response",
 			ErrorCode::EnvironmentNotInitialized => "folder uninitialized",
 			ErrorCode::EnvironmentAlreadyInitialized => "environment already initialized",
 			ErrorCode::EnvironmentRootNotEmpty => "environment folder is not empty",
@@ -339,6 +423,16 @@ impl ErrorMarker {
 			ErrorCode::VfsFailed => "Virtual Game View setup failed",
 			ErrorCode::ExecutionSupervisionFailed => "process supervision failed",
 			ErrorCode::OperationCancelled => "operation cancelled",
+			ErrorCode::ShortcutUnsupported => "Launch Shortcuts are supported only on Windows",
+			ErrorCode::ShortcutNameInvalid => {
+				"shortcut name must be a valid Windows filename without a path"
+			}
+			ErrorCode::ShortcutDestinationInvalid => {
+				"destination must be a directory; only an existing Shell Link may be replaced"
+			}
+			ErrorCode::ShortcutLaunchInvalid => "unable to capture valid absolute launch paths",
+			ErrorCode::ShortcutArgumentsTooLong => "saved arguments exceed the Shell Link storage limit",
+			ErrorCode::ShortcutFailed => "unable to prepare or publish the Launch Shortcut",
 		}
 	}
 }

@@ -1,3 +1,4 @@
+mod create_shortcut;
 mod environment_preparation;
 mod execute_program;
 mod execution_adapter;
@@ -18,6 +19,10 @@ use infrastructure_environment::EnvironmentAdapter;
 pub use infrastructure_execution::CapturedOutput;
 pub use infrastructure_execution::CapturedStream;
 pub use infrastructure_execution::ExecutionCapture;
+#[cfg(windows)]
+pub use infrastructure_execution::detach_console;
+#[cfg(windows)]
+pub use infrastructure_execution::show_error;
 use infrastructure_game_platform::GamePlatformAdapter;
 pub use infrastructure_settings::LoadedSettings;
 use infrastructure_settings::SettingsAdapter;

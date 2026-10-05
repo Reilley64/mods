@@ -1,0 +1,13 @@
+{
+  "outcome": "installed",
+  "warnings": [
+    {
+      "code": "fomod_empty_option_accepted",
+      "message": "an option with no effects was accepted",
+      "details": {
+        "group_id": "look",
+        "option_id": "empty"
+      }
+    }
+  ]
+}

@@ -10,6 +10,7 @@ pub mod installation;
 pub mod ports;
 pub mod preparation;
 pub mod settings;
+pub mod shortcut;
 
 pub use errors::ErrorCode;
 pub use errors::ErrorMarker;

@@ -1,5 +1,7 @@
 use crate::ErrorMarker;
 use crate::execution::ExecutionWarning;
+use crate::execution::child_working_directory;
+use crate::execution::output_mod;
 use crate::ports::CheckProfileState;
 use crate::ports::CreateVirtualFileSystem;
 use crate::ports::FinishProgramOutput;
@@ -23,7 +25,6 @@ use domain::OutputTarget;
 use domain::ProcessStatus;
 use domain::Program;
 use domain::ProgramArgument;
-use domain::ProviderIdentity;
 use domain::WorkingDirectory;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
@@ -92,16 +93,8 @@ pub async fn execute_program(
 		return Err(report!(ErrorMarker::operation_cancelled()).context(ExecuteProgramError));
 	}
 
-	// The game resolves `Data\` and its script-extender loaders relative to its
-	// working directory, so a child without `--cwd` starts in the game directory.
-	let working_directory = working_directory.map_or_else(
-		|| {
-			WorkingDirectory::new(game_binding.game_directory().as_path().to_owned())
-				.context(ErrorMarker::invalid_working_directory())
-				.context(ExecuteProgramError)
-		},
-		Ok,
-	)?;
+	let working_directory =
+		child_working_directory(working_directory, &game_binding).context(ExecuteProgramError)?;
 
 	let target = dependencies
 		.resolve_launch_target
@@ -118,26 +111,7 @@ pub async fn execute_program(
 	.context(ExecuteProgramError)?;
 	let mut warnings: Vec<_> = warnings.into_iter().map(ExecutionWarning::Plugin).collect();
 
-	let output_mod = if let OutputTarget::DataMod(name) = output_target {
-		let provider = plan
-			.providers
-			.iter()
-			.find(
-				|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if *mod_name == name),
-			)
-			.ok_or_else(|| {
-				report!(ErrorMarker::output_target_not_found().with_mod_name(name.clone()))
-					.context(ExecuteProgramError)
-			})?;
-
-		if !provider.enabled {
-			return Err(report!(ErrorMarker::output_target_disabled().with_mod_name(name))
-				.context(ExecuteProgramError));
-		}
-		Some(name)
-	} else {
-		None
-	};
+	let output_mod = output_mod(&plan, output_target).context(ExecuteProgramError)?;
 
 	// The game orders plugins and archives by modification time, and the virtual
 	// file system shows each winning file with its own time. The step runs before
@@ -392,7 +366,11 @@ mod tests {
 			})),
 			resolve_launch_target: Arc::new(move |_, _, _| {
 				resolved();
-				complete(Ok(LaunchTarget(AdapterState::new("target"))))
+				complete(Ok(LaunchTarget {
+					program: PathBuf::from("tool.exe"),
+					working_directory: game_directory(),
+					state: AdapterState::new("target"),
+				}))
 			}),
 			prepare_environment_plan: Arc::new(move |_| {
 				prepared();
@@ -445,7 +423,7 @@ mod tests {
 			),
 			launch_program: Arc::new(move |file_system: VirtualFileSystem, target: LaunchTarget| {
 				assert_eq!(file_system.0.downcast::<&str>(), Some("file system"));
-				assert_eq!(target.0.downcast::<&str>(), Some("target"));
+				assert_eq!(target.state.downcast::<&str>(), Some("target"));
 				launched();
 				complete(Ok(RunningProgram(AdapterState::new("program"))))
 			}),
@@ -807,7 +785,11 @@ mod tests {
 					if let Ok(mut observed) = observed.lock() {
 						*observed = Some(working_directory.as_path().to_owned());
 					}
-					complete(Ok(LaunchTarget(AdapterState::new("target"))))
+					complete(Ok(LaunchTarget {
+						program: PathBuf::from("tool.exe"),
+						working_directory: game_directory(),
+						state: AdapterState::new("target"),
+					}))
 				}
 			});
 			let requested = requested

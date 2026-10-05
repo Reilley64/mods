@@ -8,26 +8,38 @@ Capture `$LASTEXITCODE` immediately after `mods` in PowerShell. Preserve stdout 
 | --- | --- |
 | Successful query/mutation, help/version, incomplete FOMOD Choices, or Install Plan preview | 0 |
 | Ordinary application failure | 1 |
-| Argument parsing failure, invalid FOMOD selection, or Environment Root selection failure | 2 |
+| Argument parsing failure, invalid FOMOD selection, Environment Root selection failure, or a Nexus mod page without exactly one available Main file | 2 |
 | Managed execution: program not found | 127 |
 | Managed execution: unsupported/failed launch or invalid working directory | 126 |
 | Other managed execution failure | 125 |
 | Cancellation | Windows `0xC000013A` (shells may display a signed value) |
 | Child finished under managed execution | Child's actual 32-bit exit status |
 
+A Nexus mod-page input without a file ID selects a file only when exactly one available Main file exists. With zero or several, the command exits with status 2. Stderr starts with `error [nexus_file_selection_required]` and lists one line per available file with `file_id`, `name`, `version`, and `category`. With `--json`, stderr is a `nexus_file_selection_required` Problem whose `details.files` holds the same fields in the same order. Rerun with `--file ID`; do not pick a file without the user's choice.
+
 Failures before execution dispatch can still use general statuses. Output write/flush failure, including a broken pipe, produces status 1. A child can itself return 125–127; distinguish the source using stderr, not the number alone. A nonzero child status does not by itself mean the manager failed to launch it.
 
-Successful mutations are quiet except warnings. [Installation outcomes](installation.md) must be distinguished before claiming completion. Conflict queries may return invalid resolution with status zero; inspect their report.
+Without `--json`, successful mutations are quiet except warnings. With `--json`, they return an object with `warnings`. [Installation outcomes](installation.md) must be distinguished before claiming completion. Conflict queries may return invalid resolution with status zero; inspect their report.
 
 ## Common failures and safe next steps
 
-Errors normally begin `error [code]: message`. Optional details include phase, field, `mod_name`, choice group/option/sequence, or expected/actual build IDs. Preserve those details; a raw internal cause chain is not part of public CLI output.
+With `--json`, errors are Problem Details on stderr. Use `type` as the machine identifier and read `detail` and optional `details`. Without `--json`, errors begin `error [code]: message`; optional lines contain phase, field, `mod_name`, or choice IDs/sequence. Raw internal cause chains are not public CLI output. See [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
 
 | Error or symptom | Next step |
 | --- | --- |
+| `unexpected argument '--json'` with status 2 | The installed release has no JSON output; rerun without `--json` and read the text output |
 | `environment_already_initialized`, `environment_root_not_empty`, `environment_root_unsafe` | Confirm Environment Root and inspect existing contents; do not wipe it |
-| `environment_invalid`, settings/override errors | Inspect manifest and `config list`; only `MODS_GAME_DIR` is a supported `MODS_*` setting variable; malformed/unknown overrides can fail validation |
+| `environment_invalid`, settings/override errors | Inspect manifest and `config list`; the supported `MODS_*` variables are `MODS_GAME_DIR` and `MODS_NEXUS_API_KEY`; other `MODS_*` variables are ignored, empty ones count as unset, and a duplicate or non-Unicode override fails validation |
 | `environment_invalid` with `mod_name` | That `modlist.txt` entry has no folder in `mods` of exactly the same spelling; a folder that differs only in case does not count. Fix the folder name or the entry only with the user's approval |
+| `environment_invalid` with `phase = download_cache` | A completed entry in `cache/downloads/newvegas-MOD_ID-FILE_ID/` has malformed metadata, a different Nexus identity, or an archive of the wrong size; with the user's approval, delete that entry and rerun |
+| `nexus_source_invalid` | Use a New Vegas Nexus mod-page or file URL; do not combine `--file` with a local path or with a different URL `file_id` |
+| `nexus_premium_required` | A new download needs a Premium account API key in `nexus_api_key` or `MODS_NEXUS_API_KEY`; otherwise install a local archive |
+| `nexus_credentials_invalid` | Nexus rejected the API key; ask the user to check it; never print or share the key |
+| `nexus_access_denied` | Nexus refused access to the mod or file; check it on the Nexus page |
+| `nexus_rate_limited` | Wait before retrying; do not loop |
+| `nexus_unavailable` | The mod or selected file is missing, removed, or not downloadable; check the mod page and file ID |
+| `nexus_network_failure` | A request failed, returned an unexpected status, or the transfer was incomplete; partial bytes are removed; retry only with authorization |
+| `nexus_response_invalid` | Nexus returned data that `mods` could not use; retry later or install a local archive |
 | Game Installation not found/invalid | Check Steam installation and effective/stored Game Binding; ask before updating it |
 | `invalid_mod_name`, `mod_already_exists`, `mod_not_found` | Check name and replacement intent; do not silently rename or replace. `mod_already_exists` can name an [unlisted entry](installation.md#unlisted-entries-in-mods) in `mods` |
 | Unsafe/unsupported archive or installer, unmet dependency | Inspect package provenance/layout and error details; do not bypass validation |
@@ -36,6 +48,10 @@ Errors normally begin `error [code]: message`. Optional details include phase, f
 | Invalid Data path or invalid conflict resolution | Use a relative path beneath Data and read scoped problems |
 | Invalid Output Target | Select Overwrite by omission or an existing enabled Data Mod |
 | `program_not_found`, `program_unsupported`, `program_launch_failed`, `invalid_working_directory` | Check actual executable path, PATH lookup, arguments, supported target, and cwd |
+| `shortcut_unsupported` | Launch Shortcuts work only on Windows |
+| `shortcut_name_invalid`, `shortcut_destination_invalid` | Use a valid filename stem without a path, and an existing destination directory; only a same-named Shell Link can be replaced |
+| `shortcut_launch_invalid`, `shortcut_arguments_too_long` | Check that the executable, working directory, and Environment Root have valid absolute paths; shorten the child arguments |
+| `shortcut_failed` | The `.lnk` could not be prepared or published; a preparation failure keeps any previous shortcut; check destination permissions |
 | `vfs_failed`, `execution_supervision_failed` | Check matching native runtime/prerequisites and collect diagnostics; do not retry execution without authorization |
 | Execution failure with `retained_execution_inis` | After all managed processes have stopped, inspect retained INI edits before deciding any manual cleanup; do not discard them blindly |
 | Plugins load in the wrong order | `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. `loadorder.txt` is not used. Reorder `plugins.txt` only with the user's approval |
@@ -51,11 +67,11 @@ Cancellation can leave partial filesystem state. Preserve it for inspection rath
 Each environment-bound CLI command normally creates a **Diagnostic Session** at `<Environment Root>\logs\<UUID>.jsonl`. The session includes nested work and cleanup, not a saved FOMOD workflow. Failure output can include `diagnostic session: UUID` for correlation.
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' --log-level debug config list
-mods --environment 'D:\Mod Environments\Mojave' --log-level off conflicts list
+mods --json --environment 'D:\Mod Environments\Mojave' --log-level debug config list
+mods --json --environment 'D:\Mod Environments\Mojave' --log-level off conflicts list
 ```
 
-Use the first example to gather diagnostics through a query; repeating a mutation or program still requires its authorization. `--log-level off` disables session logging. A logging setup failure warns `warning: diagnostic session logging is unavailable`; the command continues, so it is not by itself the operation's failure. JSONL diagnostic files are distinct from CLI output; they do not imply a `--json` flag.
+Use the first example to gather diagnostics through a query; repeating a mutation or program still requires its authorization. `--log-level off` disables session logging. A logging setup failure warns `warning: diagnostic session logging is unavailable`; the command continues, so it is not by itself the operation's failure. JSONL diagnostic files are distinct from the optional CLI `--json` output.
 
 Report version, exact command with sensitive values redacted, selected Environment Root, status, stderr, and session ID. Inspect logs locally and redact personal paths or other sensitive content before sharing. Do not upload entire archives, saves, or logs automatically.
 

@@ -495,6 +495,24 @@ async fn validate_layout(directory: &Path, cancellation: &CancellationToken) -> 
 	validate_bsa_file(&directory.join("cache"), cancellation).await
 }
 
+/// Requires `cache` to hold the generated archive and, after a Nexus download,
+/// the `downloads` directory.
+pub(crate) async fn validate_download_cache_entries(
+	cache: &Path,
+	cancellation: &CancellationToken,
+) -> Result<(), ErrorMarker> {
+	match metadata(cache.join("downloads")).await {
+		Ok(downloads) if !downloads.is_dir() => Err(report!(ErrorMarker::environment_root_unsafe())),
+		Ok(_) => {
+			validate_exact_entries(cache, &["Fallout - Invalidation.bsa", "downloads"], cancellation).await
+		}
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {
+			validate_exact_entries(cache, &["Fallout - Invalidation.bsa"], cancellation).await
+		}
+		Err(error) => Err(report!(error).context(ErrorMarker::environment_invalid(None))),
+	}
+}
+
 async fn validate_bsa_file(cache: &Path, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));

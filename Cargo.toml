@@ -4,6 +4,7 @@ members = [
   "src/application",
   "src/infrastructure/environment",
   "src/infrastructure/settings",
+  "src/infrastructure/nexus",
   "src/infrastructure/game_platform",
   "src/infrastructure/archive",
   "src/infrastructure/execution",

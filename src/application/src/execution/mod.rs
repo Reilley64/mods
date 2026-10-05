@@ -1,8 +1,11 @@
 mod execute_program;
+mod launch_choices;
 mod types;
 pub use execute_program::ExecuteProgramDependencies;
 pub use execute_program::ExecuteProgramError;
 pub use execute_program::ExecuteProgramOutput;
 pub use execute_program::execute_program;
+pub(crate) use launch_choices::child_working_directory;
+pub(crate) use launch_choices::output_mod;
 pub use types::ExecuteProgram;
 pub use types::ExecutionWarning;

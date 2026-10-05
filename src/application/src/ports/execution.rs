@@ -9,11 +9,17 @@ use domain::Program;
 use domain::ProgramArgument;
 use domain::WorkingDirectory;
 use rootcause::Report;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// A resolved program, its child working directory, and its standard streams.
-pub struct LaunchTarget(pub AdapterState);
+/// A resolved program and its child working directory. The adapter state holds
+/// the launch details only the launching adapter reads.
+pub struct LaunchTarget {
+	pub program: PathBuf,
+	pub working_directory: PathBuf,
+	pub state: AdapterState,
+}
 
 /// A configured virtual file system. Dropping it before launch closes it.
 pub struct VirtualFileSystem(pub AdapterState);

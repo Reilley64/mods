@@ -15,9 +15,11 @@ use tokio_util::sync::CancellationToken;
 use toml::from_str;
 use toml::to_string_pretty;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	nexus_api_key: Option<String>,
 	schema_version: u32,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<String>,
@@ -33,6 +35,7 @@ pub(crate) async fn write_manifest(stage: &Path, plan: &InitializationPlan) -> R
 		.ok_or_else(|| report!(ErrorMarker::game_install_invalid()))?;
 
 	let contents = to_string_pretty(&Manifest {
+		nexus_api_key: None,
 		schema_version: 1,
 		name: None,
 		game_dir: game_dir.to_owned(),
@@ -65,7 +68,8 @@ pub(crate) async fn validate_manifest_file(
 
 pub(crate) fn parse_manifest(contents: &[u8]) -> Result<Manifest, ErrorMarker> {
 	let text = from_utf8(contents).context(ErrorMarker::environment_invalid(None))?;
-	let manifest: Manifest = from_str(text).context(ErrorMarker::environment_invalid(None))?;
+	// TOML parse errors embed source lines, which can contain nexus_api_key.
+	let manifest: Manifest = from_str(text).map_err(|_| report!(ErrorMarker::environment_invalid(None)))?;
 	if manifest.schema_version != 1
 		|| GameInstallationPath::new(manifest.game_dir.clone().into()).is_err()
 		|| manifest

@@ -3,6 +3,8 @@ use application::execution::ExecuteProgram;
 use application::execution::ExecuteProgramError;
 #[cfg(windows)]
 use application::execution::execute_program;
+use application::ports::PortFuture;
+use application::ports::ResolveLaunchTarget;
 use domain::EnvironmentRoot;
 use domain::GameBinding;
 #[cfg(windows)]
@@ -11,6 +13,7 @@ use infrastructure_execution::ExecutionCapture;
 #[cfg(windows)]
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+use std::future::ready;
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(windows)]
@@ -66,6 +69,23 @@ impl ExecutionAdapter {
 		self
 	}
 
+	/// Resolves the program from the caller's directory and PATH. Only Windows can
+	/// launch programs, so other platforms report the program as unsupported.
+	pub fn resolve_launch_target_port(&self) -> ResolveLaunchTarget {
+		let adapter = self.clone();
+		Arc::new(move |program, arguments, working_directory| {
+			#[cfg(not(windows))]
+			let result = {
+				let _ = (&adapter, program, arguments, working_directory);
+				Err(report!(ErrorMarker::program_unsupported()))
+			};
+			#[cfg(windows)]
+			let result = adapter.resolve_target(program, arguments, working_directory);
+
+			Box::pin(ready(result)) as PortFuture<_>
+		})
+	}
+
 	/// Runs the exec use case on one dedicated blocking thread.
 	///
 	/// The upstream session and hooked process must never be used concurrently.
@@ -73,7 +93,7 @@ impl ExecutionAdapter {
 	/// current-thread runtime; only the owned result crosses back to Tokio.
 	pub fn into_execute_program(self) -> ExecuteProgram {
 		Box::new(
-			move |output_target, working_directory, program, arguments, cancellation| {
+			move |report_progress, output_target, working_directory, program, arguments, cancellation| {
 				Box::pin(async move {
 					if cancellation.is_cancelled() {
 						return Err(report!(ErrorMarker::operation_cancelled())
@@ -82,7 +102,14 @@ impl ExecutionAdapter {
 
 					#[cfg(not(windows))]
 					{
-						let _ = (self, output_target, working_directory, program, arguments);
+						let _ = (
+							self,
+							report_progress,
+							output_target,
+							working_directory,
+							program,
+							arguments,
+						);
 						Err(report!(ErrorMarker::program_unsupported())
 							.context(ExecuteProgramError))
 					}
@@ -102,7 +129,7 @@ impl ExecutionAdapter {
 								.context(ExecuteProgramError)?;
 
 								runtime.block_on(execute_program(
-									self.dependencies(),
+									self.dependencies(report_progress),
 									self.binding.clone(),
 									output_target,
 									working_directory,
