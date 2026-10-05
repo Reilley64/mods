@@ -2,13 +2,14 @@ use super::ExecutionAdapter;
 use application::ErrorMarker;
 use application::execution::ExecuteProgramOutput;
 use application::execution::ExecutionWarning;
+use application::ports::PreparedExecution;
 use application::ports::ProgressEvent;
 use application::ports::ReportProgress;
+use application::ports::ResolvedLaunch;
 use domain::OutputTarget;
 use domain::ProcessStatus;
 use domain::Program;
 use domain::ProgramArgument;
-use domain::ProviderIdentity;
 use domain::WorkingDirectory;
 use infrastructure_environment::EnvironmentAdapter;
 use infrastructure_execution::InheritedStreams;
@@ -24,26 +25,19 @@ use infrastructure_execution::VirtualGameView;
 use infrastructure_execution::VisibleProfileFile;
 use infrastructure_execution::build_profile_configuration;
 use infrastructure_execution::supervise;
-use infrastructure_game_platform::GamePlatformAdapter;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 impl ExecutionAdapter {
-	pub(super) async fn execute(
+	pub(super) fn resolve(
 		&self,
-		output_target: OutputTarget,
 		working_directory: Option<WorkingDirectory>,
 		program: Program,
 		arguments: Vec<ProgramArgument>,
-		progress: Option<ReportProgress>,
-		cancellation: CancellationToken,
-	) -> Result<ExecuteProgramOutput, ErrorMarker> {
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
+	) -> Result<ResolvedLaunch, ErrorMarker> {
 		let arguments: Vec<_> = arguments
 			.iter()
 			.map(|argument| argument.as_os_str().to_owned())
@@ -65,39 +59,41 @@ impl ExecutionAdapter {
 				error.context(marker)
 			})?;
 
+		Ok(ResolvedLaunch {
+			program: launch.application.clone(),
+			working_directory: launch.directory.clone(),
+			command_line: launch.command_line.clone(),
+			target_lease: Arc::new(launch),
+		})
+	}
+
+	pub(super) async fn execute(
+		&self,
+		output_target: OutputTarget,
+		launch: ResolvedLaunch,
+		prepared: PreparedExecution,
+		progress: Option<ReportProgress>,
+		cancellation: CancellationToken,
+	) -> Result<ExecuteProgramOutput, ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
 		let inherited_streams = if self.capture.is_none() {
 			Some(InheritedStreams::capture().context(ErrorMarker::program_launch_failed())?)
 		} else {
 			None
 		};
 
-		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
-		let platform = GamePlatformAdapter::system();
-		let validate_game = platform.validate_effective_port(self.root.clone());
-		let binding = validate_game.call((effective_binding, cancellation.clone())).await?;
+		let validate_game = self.platform.validate_effective_port(self.root.clone());
 		let environment = EnvironmentAdapter;
-		let prepared = environment.prepare_execution(&self.root, &binding, &cancellation)?;
 		let selected_output_mod = if let OutputTarget::DataMod(name) = output_target {
-			let provider = prepared
-				.providers
-				.iter()
-				.find(
-					|provider| matches!(&provider.identity, ProviderIdentity::DataMod { mod_name, .. } if *mod_name == name),
-				)
-				.ok_or_else(|| {
-					report!(ErrorMarker::output_target_not_found().with_mod_name(name.clone()))
-				})?;
-			if !provider.enabled {
-				return Err(report!(
-					ErrorMarker::output_target_disabled().with_mod_name(name.clone())
-				));
-			}
 			Some(name)
 		} else {
 			None
 		};
 
-		let (documents, local) = platform.execution_profile_directories()?;
+		let (documents, local) = self.platform.execution_profile_directories()?;
 		let profile_files: Vec<_> = prepared
 			.profile_files
 			.iter()
@@ -172,7 +168,7 @@ impl ExecutionAdapter {
 
 		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
 		let current_binding = validate_game.call((effective_binding, cancellation.clone())).await?;
-		if current_binding != binding {
+		if current_binding != prepared.game_binding {
 			return Err(report!(ErrorMarker::environment_invalid(Some("execution"))));
 		}
 
@@ -204,9 +200,9 @@ impl ExecutionAdapter {
 		let launched = view
 			.launch(LaunchRequest {
 				new_process_group: self.capture.is_some(),
-				application: &launch.application,
+				application: &launch.program,
 				command_line: &launch.command_line,
-				directory: &launch.directory,
+				directory: &launch.working_directory,
 				standard_streams: private_streams
 					.as_ref()
 					.and_then(|streams| streams.borrowed())
@@ -254,7 +250,7 @@ impl ExecutionAdapter {
 		if environment
 			.check_execution_with_spool(
 				&self.root,
-				&binding,
+				&prepared.game_binding,
 				self.capture.as_ref().and_then(|capture| capture.directory()),
 				&CancellationToken::new(),
 			)

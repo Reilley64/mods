@@ -24,7 +24,7 @@ impl Error for LaunchInputError {}
 
 // The upstream API takes an already encoded command line, not an argument vector.
 // Encode UTF-16 directly so unpaired Windows surrogates are never replaced.
-fn encode_command_line(arguments: &[Vec<u16>]) -> Result<Vec<u16>, LaunchInputError> {
+pub(crate) fn encode_command_line(arguments: &[Vec<u16>]) -> Result<Vec<u16>, LaunchInputError> {
 	let mut output = Vec::new();
 	for (index, argument) in arguments.iter().enumerate() {
 		if argument.contains(&0) {

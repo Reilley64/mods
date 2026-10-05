@@ -36,6 +36,7 @@ pub(crate) enum Command {
 		command: ConflictsCommand,
 	},
 	Exec(ExecArgs),
+	Shortcut(ShortcutArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -122,6 +123,20 @@ pub(crate) enum ConflictsCommand {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct ShortcutArgs {
+	#[arg(long)]
+	pub(crate) name: Option<String>,
+	#[arg(long)]
+	pub(crate) destination: Option<PathBuf>,
+	#[arg(long)]
+	pub(crate) output_target: Option<String>,
+	#[arg(long)]
+	pub(crate) cwd: Option<PathBuf>,
+	#[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
+	pub(crate) command: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct ExecArgs {
 	#[arg(long)]
 	pub(crate) output_target: Option<String>,
@@ -168,6 +183,34 @@ mod tests {
 	use std::error::Error;
 	use std::ffi::OsString;
 	use std::path::Path;
+
+	#[test]
+	fn shortcut_accepts_saved_launch_choices() {
+		assert!(parse_from(["mods", "shortcut", "--cwd", "", "--", "tool.exe"]).is_err());
+		assert!(parse_from([
+			"mods",
+			"--environment",
+			"env",
+			"--log-level",
+			"debug",
+			"shortcut",
+			"--name",
+			"My tool",
+			"--destination",
+			"links",
+			"--cwd",
+			"work",
+			"--output-target",
+			"Generated",
+			"--",
+			"tool.exe",
+			"",
+			"雪",
+			"a\"b",
+			"--"
+		])
+		.is_ok());
+	}
 
 	#[test]
 	fn nexus_file_selection_preserves_existing_install_options() -> Result<(), Box<dyn Error>> {
