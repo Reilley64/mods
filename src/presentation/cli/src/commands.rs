@@ -40,6 +40,7 @@ pub(crate) enum Command {
 		command: ConflictsCommand,
 	},
 	Exec(ExecArgs),
+	Export(ExportArgs),
 	Shortcut(ShortcutArgs),
 }
 
@@ -65,9 +66,7 @@ pub(crate) enum SetCommand {
 pub(crate) enum SettingKeyArgument {
 	SchemaVersion,
 	Name,
-	SteamAppId,
 	GameDir,
-	ObservedBuildId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -127,6 +126,22 @@ pub(crate) enum ConflictsCommand {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct ExportArgs {
+	pub(crate) output: PathBuf,
+	#[arg(long)]
+	pub(crate) include_saves: bool,
+	/// Also export the winning files from the game's own Data folder, such as the
+	/// base game and DLC plugins and BSAs, so the output is a complete Data folder.
+	/// Recommended for a full game setup: without it, the destination's base game
+	/// plugins keep their dates and can load after the exported mod plugins.
+	/// Game root files, such as executables and DLLs, are never exported.
+	#[arg(long)]
+	pub(crate) include_game_data: bool,
+	#[arg(long)]
+	pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct ShortcutArgs {
 	#[arg(long)]
 	pub(crate) name: Option<String>,
@@ -134,6 +149,7 @@ pub(crate) struct ShortcutArgs {
 	pub(crate) destination: Option<PathBuf>,
 	#[arg(long)]
 	pub(crate) output_target: Option<String>,
+	/// Working directory for the program; defaults to the bound game installation directory. Program lookup still uses the caller's directory and PATH.
 	#[arg(long)]
 	pub(crate) cwd: Option<PathBuf>,
 	#[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
@@ -144,6 +160,7 @@ pub(crate) struct ShortcutArgs {
 pub(crate) struct ExecArgs {
 	#[arg(long)]
 	pub(crate) output_target: Option<String>,
+	/// Working directory for the program; defaults to the bound game installation directory. Program lookup still uses the caller's directory and PATH.
 	#[arg(long)]
 	pub(crate) cwd: Option<PathBuf>,
 	#[arg(
@@ -160,9 +177,7 @@ impl From<SettingKeyArgument> for SettingKey {
 		match value {
 			SettingKeyArgument::SchemaVersion => Self::SchemaVersion,
 			SettingKeyArgument::Name => Self::Name,
-			SettingKeyArgument::SteamAppId => Self::SteamAppId,
 			SettingKeyArgument::GameDir => Self::GameDir,
-			SettingKeyArgument::ObservedBuildId => Self::ObservedBuildId,
 		}
 	}
 }
@@ -248,6 +263,24 @@ mod tests {
 		assert_eq!(arguments.choice, ["group=option"]);
 		assert!(parse_from(["mods", "config", "get", "nexus-api-key"]).is_err());
 		Ok(())
+	}
+
+	#[test]
+	fn exec_help_describes_the_working_directory_default() {
+		let help = parse_from(["mods", "exec", "--help"])
+			.err()
+			.map(|error| error.to_string())
+			.unwrap_or_default();
+
+		assert!(help.contains("defaults to the bound game installation directory"));
+		assert!(help.contains("Program lookup still uses the caller's directory and PATH"));
+	}
+
+	#[test]
+	fn removed_binding_id_keys_are_not_cli_settings() {
+		for key in ["steam-app-id", "observed-build-id"] {
+			assert!(parse_from(["mods", "config", "get", key]).is_err());
+		}
 	}
 
 	#[test]
@@ -408,6 +441,32 @@ mod tests {
 		};
 		assert_eq!(arguments.command, values.map(OsString::from));
 		assert!(parse_from(["mods", "exec", "--"]).is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn export_accepts_only_the_approved_arguments() -> Result<(), Box<dyn Error>> {
+		let parsed = parse_from([
+			"mods",
+			"--environment",
+			"env",
+			"export",
+			"output",
+			"--include-saves",
+			"--include-game-data",
+			"--dry-run",
+		])?;
+		let Command::Export(arguments) = parsed.command else {
+			return Err("export command must parse".into());
+		};
+		assert_eq!(arguments.output, std::path::PathBuf::from("output"));
+		assert!(arguments.include_saves && arguments.include_game_data && arguments.dry_run);
+		let Command::Export(defaults) = parse_from(["mods", "export", "output"])?.command else {
+			return Err("export command must parse".into());
+		};
+		assert!(!defaults.include_saves && !defaults.include_game_data && !defaults.dry_run);
+		assert!(parse_from(["mods", "export"]).is_err());
+		assert!(parse_from(["mods", "export", "output", "--apply"]).is_err());
 		Ok(())
 	}
 

@@ -17,7 +17,7 @@ case-colliding names before set construction. The directory map still rejects
 case-colliding folders. The ordered modlist retains enabled state and priority.
 
 No public API, dependency, build target, platform test setup, traversal limit,
-settings policy, or hash policy changed. Conflict scanning and
+settings policy, hash policy, or export policy changed. Conflict scanning and
 prospective installation assessment retain their filesystem collection paths.
 There is no persistent cache, environment mutation, or game launch.
 

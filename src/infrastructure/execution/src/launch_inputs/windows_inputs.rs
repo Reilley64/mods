@@ -6,13 +6,10 @@ use rootcause::report;
 use std::env;
 use std::ffi::OsStr;
 use std::ffi::OsString;
-use std::fs::File;
-use std::fs::OpenOptions;
-use std::io::Error as IoError;
+use std::fs;
 use std::io::ErrorKind;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
-use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsHandle;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::BorrowedHandle;
@@ -25,11 +22,6 @@ use std::path::Prefix;
 use windows::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows::Win32::Foundation::DuplicateHandle;
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
-use windows::Win32::Storage::FileSystem::FILE_NAME_NORMALIZED;
-use windows::Win32::Storage::FileSystem::FILE_TYPE_DISK;
-use windows::Win32::Storage::FileSystem::GetFileType;
-use windows::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
 use windows::Win32::System::Console::GetStdHandle;
 use windows::Win32::System::Console::STD_ERROR_HANDLE;
 use windows::Win32::System::Console::STD_INPUT_HANDLE;
@@ -44,13 +36,11 @@ pub struct CallerSnapshot {
 	environment: Vec<(OsString, OsString)>,
 }
 
-/// Final-handle-validated paths retained until hooked creation completes.
+/// Caller-resolved paths; Windows process creation checks access and executable format.
 pub struct ResolvedLaunch {
 	pub application: PathBuf,
 	pub directory: PathBuf,
 	pub command_line: OsString,
-	_application_handle: File,
-	_directory_handle: File,
 }
 
 impl CallerSnapshot {
@@ -116,46 +106,29 @@ impl CallerSnapshot {
 		}
 		let mut resolved = None;
 		for candidate in candidates {
-			let opened = OpenOptions::new()
-				.read(true)
-				.custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
-				.open(&candidate);
-			let file = match opened {
-				Ok(file) => file,
-				Err(error) if error.kind() == ErrorKind::NotFound => continue,
-				Err(error) => return Err(report!(error).context(LaunchInputError::InvalidTarget)),
-			};
-			let application = validated_path(&file, false)?;
-			let extension = application.extension().unwrap_or_default().to_string_lossy();
-			if !extension.is_empty()
-				&& !extension.eq_ignore_ascii_case("exe")
-				&& !extension.eq_ignore_ascii_case("com")
-			{
-				return Err(report!(LaunchInputError::InvalidTarget));
+			if fs::metadata(&candidate).is_err_and(|error| error.kind() == ErrorKind::NotFound) {
+				continue;
 			}
-			resolved = Some((application, file));
+
+			// A lookup access error must not hide this PATH candidate. Windows launch
+			// reports access and format errors; no validation handle is retained.
+			resolved = Some(candidate);
 			break;
 		}
-		let Some((application, application_handle)) = resolved else {
+
+		let Some(application) = resolved else {
 			return Err(report!(LaunchInputError::NotFound));
 		};
-
 		let directory = self.absolute(cwd.unwrap_or(&self.directory))?;
-		let directory_handle = OpenOptions::new()
-			.read(true)
-			.custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
-			.open(directory)
-			.context(LaunchInputError::InvalidDirectory)?;
-		let directory = validated_path(&directory_handle, true)?;
+
 		let mut encoded_arguments = vec![application.as_os_str().encode_wide().collect()];
 		encoded_arguments.extend(arguments.iter().map(|argument| argument.encode_wide().collect()));
 		let command_line = OsString::from_wide(&encode_command_line(&encoded_arguments)?);
+
 		Ok(ResolvedLaunch {
 			application,
 			directory,
 			command_line,
-			_application_handle: application_handle,
-			_directory_handle: directory_handle,
 		})
 	}
 
@@ -188,38 +161,6 @@ impl CallerSnapshot {
 		}
 		Ok(self.directory.join(path))
 	}
-}
-
-fn validated_path(file: &File, directory: bool) -> Result<PathBuf, LaunchInputError> {
-	let context = if directory {
-		LaunchInputError::InvalidDirectory
-	} else {
-		LaunchInputError::InvalidTarget
-	};
-	let metadata = file.metadata().context(context)?;
-	if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
-		return Err(report!(context));
-	}
-	let handle = HANDLE(file.as_raw_handle());
-	// SAFETY: the borrowed file handle remains live throughout both queries.
-	if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
-		return Err(report!(context));
-	}
-	let mut buffer = vec![0u16; 32768];
-	// SAFETY: handle is live and buffer is writable for its advertised slice length.
-	let length = unsafe { GetFinalPathNameByHandleW(handle, &mut buffer, FILE_NAME_NORMALIZED) } as usize;
-	if length == 0 {
-		return Err(report!(IoError::last_os_error()).context(context));
-	}
-	if length >= buffer.len() {
-		return Err(report!(context));
-	}
-	let path = PathBuf::from(OsString::from_wide(&buffer[..length]));
-	let local_or_unc = matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::UNC(_, _) | Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _)));
-	if !local_or_unc {
-		return Err(report!(context));
-	}
-	Ok(path)
 }
 
 /// Inheritable duplicates preserve redirected streams without changing caller flags.

@@ -51,7 +51,7 @@
           "pattern": "^[a-z][a-z0-9_]*$"
         },
         "details": {
-          "type": "object"
+          "$ref": "#/$defs/problem_details"
         },
         "instance": {
           "type": "string"
@@ -1347,7 +1347,8 @@
         "mode": {
           "enum": [
             "new_install",
-            "replacement"
+            "replacement",
+            "unlisted_replacement"
           ]
         },
         "mod_name": {
@@ -1759,6 +1760,134 @@
           }
         }
       ]
+    },
+    "problem_details": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "group_id": {
+          "type": "string"
+        },
+        "option_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mod_name": {
+          "type": "string"
+        },
+        "load_order_file": {
+          "type": "string"
+        },
+        "retained_execution_inis": {
+          "type": "string"
+        },
+        "retained_export_stage": {
+          "type": "string"
+        },
+        "retained_partial_output": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "output_complete": {
+          "const": true
+        }
+      }
+    },
+    "export_provider": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/provider_identity"
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "profile"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "generated_invalidation"
+            }
+          }
+        }
+      ]
+    },
+    "export_file": {
+      "type": "object",
+      "required": [
+        "path",
+        "bytes",
+        "provider"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "provider": {
+          "$ref": "#/$defs/export_provider"
+        }
+      }
+    },
+    "export": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "output",
+        "total_bytes",
+        "files",
+        "warnings"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "preview",
+            "published"
+          ]
+        },
+        "output": {
+          "type": "string"
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/export_file"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          }
+        }
+      }
     }
   },
   "anyOf": [
@@ -1800,6 +1929,9 @@
     },
     {
       "$ref": "#/$defs/install_installed"
+    },
+    {
+      "$ref": "#/$defs/export"
     }
   ]
 }

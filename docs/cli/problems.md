@@ -2,6 +2,20 @@
 
 Each `type` points to a permanent anchor below. The final path fragment is also the convenience `code` field. Read [JSON output](json.md) for the error contract.
 
+## Details
+
+`details` holds only these allowlisted fields. Each appears only when it applies.
+
+- `phase`, `field`, `group_id`, `option_id`, `sequence`: the failing step and FOMOD choice, as described for each problem type.
+- `files`: the available Nexus files of a `nexus_file_selection_required` Problem.
+- `mod_name`: the Data Mod the problem is about, such as a `modlist.txt` entry without its folder, an existing or unlisted entry in `mods`, or an Output Target.
+- `load_order_file`: the plugin or BSA whose modification time could not be read or set. `phase` is then `load_order`.
+- `retained_execution_inis`: the staged profile INIs that `exec` kept when it failed after staging them and before launch, for example `vfs_failed`, `program_launch_failed`, or `operation_cancelled`. After launch, such failures are plain text and the text names the same path.
+- `output`: the `export` output folder that was requested.
+- `retained_partial_output`: the `export` output folder that holds partial files.
+- `retained_export_stage`: the `export` INI stage left in the Environment Root's `temp` folder. Delete it before the next `exec` or `export`.
+- `output_complete`: `true` when the `export` output is complete and only the stage removal failed.
+
 <a id="invalid_arguments"></a>
 ## invalid_arguments
 
@@ -95,12 +109,7 @@ The Environment Manifest uses an unsupported schema.
 <a id="environment_invalid"></a>
 ## environment_invalid
 
-The selected Mod Environment is invalid. `details.phase` can name the invalid part. For example, `download_cache` means the Nexus download cache is invalid.
-
-<a id="environment_publication_failed"></a>
-## environment_publication_failed
-
-Publishing an initialized Mod Environment failed.
+The selected Mod Environment is invalid. `details.phase` can name the invalid part. For example, `download_cache` means the Nexus download cache is invalid. With `mod_name`, a `modlist.txt` entry has no folder in `mods` of exactly the same spelling.
 
 <a id="manual_cleanup_required"></a>
 ## manual_cleanup_required
@@ -116,11 +125,6 @@ The requested Game Installation was not found.
 ## game_install_invalid
 
 The Game Installation cannot be used.
-
-<a id="game_build_mismatch"></a>
-## game_build_mismatch
-
-The observed Game Installation build differs from the recorded build.
 
 <a id="setting_unknown"></a>
 ## setting_unknown
@@ -155,7 +159,7 @@ An installer dependency is not satisfied.
 <a id="unsafe_archive"></a>
 ## unsafe_archive
 
-The supplied archive is unsafe.
+The supplied archive is unsafe. With `mod_name`, the archive lies inside the entry that a replacement would remove.
 
 <a id="ambiguous_install_plan"></a>
 ## ambiguous_install_plan
@@ -175,17 +179,17 @@ The supplied Data-relative path is invalid.
 <a id="mod_already_exists"></a>
 ## mod_already_exists
 
-The target Data Mod exists and replacement was not requested.
+The target Data Mod exists and replacement was not requested. `mod_name` names the existing entry, which can be an unlisted folder or file in `mods`.
 
 <a id="mod_not_found"></a>
 ## mod_not_found
 
-The requested Data Mod does not exist.
+The requested Data Mod does not exist. `mod_name` can name it.
 
 <a id="io_failure"></a>
 ## io_failure
 
-An input or output operation failed.
+An input or output operation failed. With `phase` `load_order`, `load_order_file` names the file whose time could not be read or set.
 
 <a id="transaction_failure"></a>
 ## transaction_failure
@@ -200,12 +204,12 @@ The requested Output Target is invalid.
 <a id="output_target_not_found"></a>
 ## output_target_not_found
 
-The requested Output Target was not found.
+The requested Output Target was not found. `mod_name` names it.
 
 <a id="output_target_disabled"></a>
 ## output_target_disabled
 
-The requested Output Target is disabled.
+The requested Output Target is disabled. `mod_name` names it.
 
 <a id="invalid_working_directory"></a>
 ## invalid_working_directory
@@ -235,7 +239,7 @@ Setting up or cleaning up the Virtual Game View failed. `details.phase` identifi
 <a id="execution_supervision_failed"></a>
 ## execution_supervision_failed
 
-Managing the child process failed. A failure after launch is plain stderr, not this JSON type.
+Managing the child process failed. A failure after launch is plain stderr, not this JSON type. Before launch, `phase` `launch` can come with `retained_execution_inis`, the kept INI stage.
 
 <a id="operation_cancelled"></a>
 ## operation_cancelled

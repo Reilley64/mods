@@ -17,7 +17,6 @@ pub use set_game_directory::SetGameDirectoryOutput;
 pub use set_game_directory::set_game_directory;
 pub use types::EffectiveBinding;
 pub use types::ResolvedSettings;
-pub use types::SetGameDirectoryWarning;
 pub use types::SettingKey;
 pub use types::SettingRecord;
 pub use types::SettingSource;

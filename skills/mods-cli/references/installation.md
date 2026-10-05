@@ -14,7 +14,7 @@ mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Tex
 
 An **Install Plan** describes validated source-to-Data destinations, winner decisions, and overlaps on planned paths. It is neither an installed mod nor a complete File Conflict report. Inspect `plan.archive_identity`, `plan.mod_name`, `plan.replacement`, choices, warnings, candidates, and `plan.projected_state` before proceeding. A later invocation recomputes the plan; a preview does not freeze the archive or environment.
 
-New installs append to the mod list at the next Mod Priority and are **initially disabled**. Installation success does not mean participation in the Virtual Game View. There is no released enable command; do not invent one or silently edit `profile/modlist.txt`.
+New installs go at the top of `modlist.txt`, after any leading `#` comment lines, with the highest Mod Priority, and are **initially disabled**. There is no migration: a list written low-to-high by earlier mods versions now reads reversed, so reverse its mod entries by hand. Installation success does not mean participation in the Virtual Game View. There is no released enable command; do not invent one or silently edit `profile/modlist.txt`.
 
 ## Nexus URL input
 
@@ -48,7 +48,20 @@ mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Tex
 mods --json --environment 'D:\Mod Environments\Mojave' install 'D:\Downloads\Textures-update.7z' --name 'Mojave Textures' --replace
 ```
 
-`--replace` requires an existing Data Mod. It retains the existing canonical Mod Name, Mod Priority, list position, and enabled state. Without `--replace`, a matching name fails with `mod_already_exists`; replacement of a missing name fails with `mod_not_found`. Never add `--replace` automatically to bypass a collision.
+`--replace` on a Data Mod listed in `modlist.txt` retains the existing canonical Mod Name, Mod Priority, list position (counted in mod entries from the top of `modlist.txt`; comment lines are not counted), and enabled state. Without `--replace`, a matching name fails with `mod_already_exists`. `--replace` on a name with no listed mod and no unlisted entry fails with `mod_not_found`. Never add `--replace` automatically to bypass a collision.
+
+## Unlisted entries in `mods`
+
+A folder or stray file in `mods` that `modlist.txt` does not list is ignored like a disabled mod. It contributes nothing, and `list` and conflict reports do not show it. mods never adds it to `modlist.txt`.
+
+- Installing over its name (compared case-insensitively) fails with `mod_already_exists`, which names the entry.
+- With `--replace`, the install removes the entry and lists the new mod like a new install, under the entry's spelling: at the top, disabled. The plan shows `plan.projected_state.mode = "unlisted_replacement"` (the same value in JSON).
+- `--replace` is still refused with `mod_already_exists` when several entries that differ only in case match the name.
+- Any replacement is refused with `unsafe_archive` when the archive lies inside the folder it would remove. Move the archive first.
+
+Installation writes directly into `mods/<Mod Name>` and the Profile State files. There is no staging copy and no rollback. Replacement deletes the old mod folder before it writes the new files. A failure or cancellation during installation can leave a partial mod folder, a mod folder that `modlist.txt` does not list yet, or a partly updated `plugins.txt`. Inspect that state with the user before any retry. An unlisted folder left this way is ignored; with the user's approval, the same install with `--replace` takes it over.
+
+Installing a mod does not activate its plugins. `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Replacing an enabled mod removes plugins that are no longer present from `plugins.txt` and leaves the other lines in place.
 
 ## FOMOD Choices: resubmit complete state
 

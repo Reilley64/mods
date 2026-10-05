@@ -1,9 +1,7 @@
-use crate::active_code_page::decode as decode_active_code_page;
-use crate::profile::MAX_PROFILE_BYTES;
+use crate::active_code_page::decode_plugin_list;
+use crate::files::read_optional;
 use crate::profile::PROFILE_FILES;
 use crate::profile::is_activatable_plugin_name;
-use crate::safe_fs::SafeDir;
-use crate::safe_fs::read_bounded;
 use application::ErrorMarker;
 use domain::DataRelativePath;
 use domain::profile_test_file_slots;
@@ -12,6 +10,8 @@ use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::collections::HashSet;
+use std::path::Path;
+use tokio::fs::read;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct ProfileActivation {
@@ -19,15 +19,16 @@ pub(crate) struct ProfileActivation {
 }
 
 impl ProfileActivation {
-	pub(crate) fn load(profile: &SafeDir, cancellation: &CancellationToken) -> Result<Self, ErrorMarker> {
-		let plugin_bytes = read_bounded(
-			profile,
-			"plugins.txt",
-			MAX_PROFILE_BYTES,
-			ErrorMarker::environment_invalid(None),
-			cancellation,
-		)?;
-		let plugin_text = decode_active_code_page(&plugin_bytes)?;
+	pub(crate) async fn load(profile: &Path, cancellation: &CancellationToken) -> Result<Self, ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
+		let plugin_bytes = read(profile.join("plugins.txt"))
+			.await
+			.context(ErrorMarker::environment_invalid(None))?;
+
+		let plugin_text = decode_plugin_list(&plugin_bytes)?;
 		let mut active_plugins = plugin_text
 			.split_terminator("\r\n")
 			.filter(|line| !line.is_empty() && !line.starts_with('#'))
@@ -41,21 +42,13 @@ impl ProfileActivation {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
-			let exists = profile.exists(name);
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			if !exists.context(ErrorMarker::environment_invalid(None))? {
-				continue;
-			}
 
-			let bytes = read_bounded(
-				profile,
-				name,
-				MAX_PROFILE_BYTES,
-				ErrorMarker::environment_invalid(None),
-				cancellation,
-			)?;
+			let Some(bytes) = read_optional(&profile.join(name))
+				.await
+				.context(ErrorMarker::environment_invalid(None))?
+			else {
+				continue;
+			};
 			let text = decode_ini(&bytes)?;
 
 			active_plugins.extend(profile_test_file_slots(&text)
@@ -108,7 +101,6 @@ fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
 #[cfg(test)]
 mod tests {
 	use super::ProfileActivation;
-	use crate::safe_fs::SafeDir;
 	use domain::DataRelativePath;
 	use rootcause::Result as RootResult;
 	use std::error::Error;
@@ -117,8 +109,8 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn reads_numbered_slots_from_utf16_profile_ini() -> RootResult<()> {
+	#[tokio::test]
+	async fn reads_numbered_slots_from_utf16_profile_ini() -> RootResult<()> {
 		let temp = TempDir::new()?;
 		fs::write(temp.path().join("plugins.txt"), b"")?;
 		let mut bytes = vec![0xff, 0xfe];
@@ -126,16 +118,16 @@ mod tests {
 			.encode_utf16()
 			.flat_map(u16::to_le_bytes));
 		fs::write(temp.path().join("Fallout.ini"), bytes)?;
-		let profile = SafeDir::open_absolute(&temp.path().canonicalize()?)?;
+		let profile = temp.path().canonicalize()?;
 
-		let activation = ProfileActivation::load(&profile, &CancellationToken::new())?;
+		let activation = ProfileActivation::load(&profile, &CancellationToken::new()).await?;
 		let path = DataRelativePath::new("café.esp".to_owned())?;
 		assert!(activation.is_active(&path));
 		Ok(())
 	}
 
-	#[test]
-	fn loads_additive_effective_test_file_slots_from_every_profile_ini() -> StdResult<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn loads_additive_effective_test_file_slots_from_every_profile_ini() -> StdResult<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		fs::write(temp.path().join("plugins.txt"), b"Listed.ESP\r\n")?;
 		fs::write(
@@ -165,10 +157,10 @@ mod tests {
 			temp.path().join("GECKPrefs.ini"),
 			b"[General]\r\nsTestFile1=GeckPrefs.esm\r\n",
 		)?;
-		let profile = SafeDir::open_absolute(&temp.path().canonicalize()?)
-			.map_err(|_| "profile directory must open")?;
+		let profile = temp.path().canonicalize()?;
 
 		let activation = ProfileActivation::load(&profile, &CancellationToken::new())
+			.await
 			.map_err(|_| "activation must load")?;
 		for name in [
 			"listed.esp",

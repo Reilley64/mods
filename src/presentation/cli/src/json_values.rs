@@ -1,5 +1,6 @@
 use domain::EffectiveResult;
 use domain::ParticipationReason;
+use domain::ProviderIdentity;
 use domain::ProviderRank;
 use domain::ProviderReference;
 use domain::Tombstone;
@@ -16,6 +17,17 @@ pub(crate) fn rank(value: ProviderRank) -> Value {
 		ProviderRank::Base => json!({"kind": "base"}),
 		ProviderRank::Regular(value) => json!({"kind": "regular", "priority": value.get()}),
 		ProviderRank::Overwrite => json!({"kind": "overwrite"}),
+	}
+}
+
+pub(crate) fn identity(value: &ProviderIdentity) -> Value {
+	let rank = rank(value.rank());
+	match value {
+		ProviderIdentity::SteamData => json!({"kind": "steam_data", "priority": rank}),
+		ProviderIdentity::DataMod { mod_name, .. } => {
+			json!({"kind": "data_mod", "mod_name": mod_name.as_str(), "priority": rank})
+		}
+		ProviderIdentity::Overwrite => json!({"kind": "overwrite", "priority": rank}),
 	}
 }
 

@@ -37,6 +37,11 @@ harness was added. See [usage](../usage.md).
   prepares inside the run step. After the refactor, macOS `bun run check` passed:
   409 Rust tests, 137 tooling tests and 2 release-version tests. The Windows-only
   paths of this refactor were not compiled on the macOS host; Windows CI covers them.
+- The integration with the shared export and exec preparation replaced those ports.
+  `create_shortcut` now composes `ResolveLaunchTarget`, `PrepareEnvironmentPlan` and
+  `ProjectProfile`, the same ports as `exec`, and receives the command's loaded
+  settings instead of `LoadSettings`. Without `--cwd`, it saves the bound Game
+  Installation directory, the same default as `exec`.
 
 ## Native desktop acceptance
 
@@ -59,7 +64,9 @@ Passed checks:
 - Actual shell activation of `.lnk` files, equivalent to desktop double-click.
 - Exact empty, Unicode (`雪 café`), quote, space, trailing-backslash and literal
   `--`/`--environment` child arguments, checked as UTF-16 Base64 records.
-- Creation-time default cwd and explicit cwd, despite launching from another cwd.
+- The default cwd of that build (the creation-time working directory) and an explicit
+  cwd, despite launching from another cwd. The approved default is now the bound
+  Game Installation directory, as with `exec`; that default was not run on this desktop.
 - The same unchanged link reads `BASE`, then `CURRENT` after enabling a synthetic
   Data Mod: current-state behavior, not a snapshot.
 - Existing-link replacement; failed validation preserves its previous bytes;

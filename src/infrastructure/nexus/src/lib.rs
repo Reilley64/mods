@@ -47,7 +47,8 @@ impl NexusAdapter {
 			}),
 			read_cache: Arc::new(move |request, cancellation| {
 				let root = cache_root.clone();
-				Box::pin(async move { cache::read(&root, &request, &cancellation) }) as PortFuture<_>
+				Box::pin(async move { cache::read(&root, &request, &cancellation).await })
+					as PortFuture<_>
 			}),
 			resolve_mod: Arc::new(|request, key, cancellation| {
 				Box::pin(async move { http::resolve(request, key, cancellation).await })

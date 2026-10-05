@@ -2,25 +2,23 @@ use super::io::read_optional_text;
 use super::libraries::libraries;
 use super::manifest;
 use super::validate;
-use crate::fs_access;
 use application::ErrorCode;
 use application::ErrorMarker;
 use domain::GameBinding;
 use rootcause::Result;
 use rootcause::report;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) fn discover(
+pub(crate) async fn discover(
 	steam_roots: &[PathBuf],
 	cancellation: &CancellationToken,
 ) -> Result<Option<GameBinding>, ErrorMarker> {
-	discover_with_before_libraries(|_| {}, steam_roots, cancellation)
+	discover_with_before_libraries(|_| {}, steam_roots, cancellation).await
 }
 
-fn discover_with_before_libraries(
+async fn discover_with_before_libraries(
 	mut before_libraries: impl FnMut(&Path),
 	steam_roots: &[PathBuf],
 	cancellation: &CancellationToken,
@@ -32,7 +30,7 @@ fn discover_with_before_libraries(
 		}
 
 		before_libraries(steam_root);
-		let libraries = match libraries(steam_root, cancellation) {
+		let libraries = match libraries(steam_root, cancellation).await {
 			Ok(libraries) => libraries,
 			Err(error) if error.current_context().code() == ErrorCode::OperationCancelled => {
 				return Err(error);
@@ -50,18 +48,7 @@ fn discover_with_before_libraries(
 			}
 
 			let steamapps_path = library.join("steamapps");
-			let steamapps = match fs_access::open_ambient_dir(&steamapps_path) {
-				Ok((directory, _)) => directory,
-				Err(error) if error.current_context().kind() == ErrorKind::NotFound => continue,
-				Err(error) => {
-					if first_invalid.is_none() {
-						first_invalid =
-							Some(error.context(ErrorMarker::game_install_invalid()));
-					}
-					continue;
-				}
-			};
-			let text = match read_optional_text(&steamapps, Path::new("appmanifest_22380.acf")) {
+			let text = match read_optional_text(&steamapps_path.join("appmanifest_22380.acf")).await {
 				Ok(Some(text)) => text,
 				Ok(None) => continue,
 				Err(error) => {
@@ -71,7 +58,7 @@ fn discover_with_before_libraries(
 					continue;
 				}
 			};
-			let (_, install_dir, _) = match manifest::fields(&text) {
+			let (_, install_dir) = match manifest::fields(&text) {
 				Ok(fields) => fields,
 				Err(error) => {
 					if first_invalid.is_none() {
@@ -88,7 +75,7 @@ fn discover_with_before_libraries(
 				continue;
 			}
 			let candidate = steamapps_path.join("common").join(install_dir);
-			match validate(&candidate) {
+			match validate(&candidate).await {
 				Ok(binding) => return Ok(Some(binding)),
 				Err(error) if first_invalid.is_none() => first_invalid = Some(error),
 				Err(_) => {}
@@ -111,15 +98,19 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn invalid_root_does_not_mask_later_library_discovery_cancellation() -> Result<()> {
+	#[tokio::test]
+	async fn invalid_root_does_not_mask_later_library_discovery_cancellation() -> Result<()> {
 		let temp = TempDir::new()?;
 		let invalid_root = temp.path().join("invalid-root");
-		fs::write(&invalid_root, b"not a directory")?;
+		fs::create_dir_all(invalid_root.join("steamapps"))?;
+		fs::write(
+			invalid_root.join("steamapps/libraryfolders.vdf"),
+			b"\"libraryfolders\"\n{\n\"0\"\n{\n",
+		)?;
 		let cancelling_root = temp.path().join("cancelling-root");
 		let steam_roots = [invalid_root, cancelling_root.clone()];
 
-		let without_cancellation = discover(&steam_roots, &CancellationToken::new());
+		let without_cancellation = discover(&steam_roots, &CancellationToken::new()).await;
 		assert_eq!(
 			without_cancellation
 				.as_ref()
@@ -137,7 +128,8 @@ mod tests {
 			},
 			&steam_roots,
 			&cancellation,
-		);
+		)
+		.await;
 		assert_eq!(
 			result.as_ref().err().map(|error| error.current_context().code()),
 			Some(ErrorCode::OperationCancelled),

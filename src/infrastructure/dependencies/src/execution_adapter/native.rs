@@ -1,54 +1,125 @@
 use super::ExecutionAdapter;
+use crate::environment_preparation::PreparationPorts;
 use application::ErrorMarker;
-use application::execution::ExecuteProgramOutput;
-use application::execution::ExecutionWarning;
-use application::ports::PreparedExecution;
-use application::ports::ProgressEvent;
+use application::execution::ExecuteProgramDependencies;
+use application::ports::AdapterState;
+use application::ports::EnvironmentPlan;
+use application::ports::LaunchTarget;
+use application::ports::PortFuture;
+use application::ports::ProgramExit;
+use application::ports::ProgramOutput;
+use application::ports::ProgramSupervision;
 use application::ports::ReportProgress;
-use application::ports::ResolvedLaunch;
-use domain::OutputTarget;
+use application::ports::RunningProgram;
+use application::ports::StagedProfile;
+use application::ports::VirtualFileSystem;
+use domain::ModName;
 use domain::ProcessStatus;
 use domain::Program;
 use domain::ProgramArgument;
 use domain::WorkingDirectory;
 use infrastructure_environment::EnvironmentAdapter;
+use infrastructure_environment::PreparedLaunch;
+use infrastructure_environment::StagedProfileInis;
+use infrastructure_execution::HookedProcess;
 use infrastructure_execution::InheritedStreams;
 use infrastructure_execution::LaunchInputError;
 use infrastructure_execution::LaunchRequest;
 use infrastructure_execution::NativeFailure;
-use infrastructure_execution::ProfileConfigurationInput;
-use infrastructure_execution::ProfileText;
-use infrastructure_execution::ProfileWarning;
+use infrastructure_execution::PrivateStreams;
+use infrastructure_execution::ProfileMappingInput;
 use infrastructure_execution::ProviderRoot;
+use infrastructure_execution::ResolvedLaunch;
 use infrastructure_execution::ViewConfiguration;
 use infrastructure_execution::VirtualGameView;
-use infrastructure_execution::VisibleProfileFile;
-use infrastructure_execution::build_profile_configuration;
+use infrastructure_execution::profile_mappings;
 use infrastructure_execution::supervise;
+use infrastructure_game_platform::GamePlatformAdapter;
+use rootcause::Report;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+use std::future::ready;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+struct NativeProgram {
+	process: HookedProcess,
+	private_streams: Option<PrivateStreams>,
+}
+
+// These ports create every handle they consume, so another handle type is a
+// composition defect rather than a user-facing condition.
+fn foreign_handle() -> Report<ErrorMarker> {
+	report!(ErrorMarker::execution_supervision_failed())
+}
+
+fn completed<T: Send + 'static>(result: Result<T, ErrorMarker>) -> PortFuture<T> {
+	Box::pin(ready(result))
+}
+
 impl ExecutionAdapter {
-	pub(super) fn resolve(
+	/// Builds the Windows exec ports. The caller runs the whole use case on one
+	/// thread, so native session calls never overlap.
+	pub(super) fn dependencies(&self, report_progress: Option<ReportProgress>) -> ExecuteProgramDependencies {
+		let adapter = Arc::new(self.clone());
+		let preparation = PreparationPorts::new(self.root.clone(), self.binding.clone());
+
+		ExecuteProgramDependencies {
+			report_progress,
+			resolve_launch_target: self.resolve_launch_target_port(),
+			prepare_environment_plan: preparation.prepare_environment_plan,
+			project_profile: preparation.project_profile,
+			set_load_order_times: preparation.set_load_order_times,
+			stage_profile: preparation.stage_profile,
+			create_virtual_file_system: Arc::new(
+				|plan: EnvironmentPlan,
+				 staged: &StagedProfile,
+				 output_mod: Option<ModName>,
+				 cancellation: CancellationToken| {
+					completed(build_virtual_file_system(plan, staged, output_mod, cancellation))
+				},
+			),
+			launch_program: Arc::new({
+				let adapter = adapter.clone();
+				move |file_system, target| completed(adapter.start_program(file_system, target))
+			}),
+			supervise_program: Arc::new({
+				let adapter = adapter.clone();
+				move |program, cancellation| {
+					let force_cancellation = adapter.force_cancellation.clone();
+					Box::pin(supervise_child(program, cancellation, force_cancellation))
+						as PortFuture<_>
+				}
+			}),
+			preserve_execution_profile: Arc::new(|staged| Box::pin(preserve_inis(staged)) as PortFuture<_>),
+			finish_program_output: Arc::new(|output| completed(finish_streams(output))),
+			check_profile_state: Arc::new(move |cancellation| {
+				let adapter = adapter.clone();
+				Box::pin(async move { adapter.check_retained_state(cancellation).await })
+					as PortFuture<_>
+			}),
+		}
+	}
+
+	pub(super) fn resolve_target(
 		&self,
-		working_directory: Option<WorkingDirectory>,
 		program: Program,
 		arguments: Vec<ProgramArgument>,
-	) -> Result<ResolvedLaunch, ErrorMarker> {
+		working_directory: WorkingDirectory,
+		cancellation: &CancellationToken,
+	) -> Result<LaunchTarget, ErrorMarker> {
+		if cancellation.is_cancelled() {
+			return Err(report!(ErrorMarker::operation_cancelled()));
+		}
+
 		let arguments: Vec<_> = arguments
 			.iter()
 			.map(|argument| argument.as_os_str().to_owned())
 			.collect();
 		let launch = self
 			.caller
-			.resolve(
-				program.as_os_str(),
-				&arguments,
-				working_directory.as_ref().map(WorkingDirectory::as_path),
-			)
+			.resolve(program.as_os_str(), &arguments, Some(working_directory.as_path()))
 			.map_err(|error| {
 				let marker = match error.current_context() {
 					LaunchInputError::NotFound => ErrorMarker::program_not_found(),
@@ -59,137 +130,30 @@ impl ExecutionAdapter {
 				error.context(marker)
 			})?;
 
-		Ok(ResolvedLaunch {
-			program: launch.application.clone(),
-			working_directory: launch.directory.clone(),
-			command_line: launch.command_line.clone(),
-			target_lease: Arc::new(launch),
-		})
-	}
-
-	pub(super) async fn execute(
-		&self,
-		output_target: OutputTarget,
-		launch: ResolvedLaunch,
-		prepared: PreparedExecution,
-		progress: Option<ReportProgress>,
-		cancellation: CancellationToken,
-	) -> Result<ExecuteProgramOutput, ErrorMarker> {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+
+		Ok(LaunchTarget {
+			program: launch.application.clone(),
+			working_directory: launch.directory.clone(),
+			state: AdapterState::new(launch),
+		})
+	}
+
+	fn start_program(
+		&self,
+		file_system: VirtualFileSystem,
+		target: LaunchTarget,
+	) -> Result<RunningProgram, ErrorMarker> {
+		let view: VirtualGameView = file_system.0.downcast().ok_or_else(foreign_handle)?;
+		let launch: ResolvedLaunch = target.state.downcast().ok_or_else(foreign_handle)?;
 
 		let inherited_streams = if self.capture.is_none() {
 			Some(InheritedStreams::capture().context(ErrorMarker::program_launch_failed())?)
 		} else {
 			None
 		};
-
-		let validate_game = self.platform.validate_effective_port(self.root.clone());
-		let environment = EnvironmentAdapter;
-		let selected_output_mod = if let OutputTarget::DataMod(name) = output_target {
-			Some(name)
-		} else {
-			None
-		};
-
-		let (documents, local) = self.platform.execution_profile_directories()?;
-		let profile_files: Vec<_> = prepared
-			.profile_files
-			.iter()
-			.map(|file| ProfileText {
-				name: file.name,
-				text: &file.text,
-			})
-			.collect();
-		let visible_files: Vec<_> = prepared
-			.visible_files
-			.iter()
-			.map(|file| VisibleProfileFile {
-				path: file.path.clone(),
-				modified: file.modified,
-			})
-			.collect();
-		let profile = build_profile_configuration(ProfileConfigurationInput {
-			files: &profile_files,
-			visible_files: &visible_files,
-			profile_directory: &prepared.profile_directory,
-			documents_directory: &documents,
-			local_app_data_directory: &local,
-			data_directory: &prepared.data_directory,
-			cache_directory: &prepared.cache_directory,
-		})
-		.context(ErrorMarker::environment_invalid(Some("execution")))?;
-
-		for (order, plugin) in profile.plugins.iter().enumerate() {
-			tracing::info!(plugin = %plugin.path, basis = "analytical_data", runtime_observed = false, projected_order = order, projected_activation_sources = ?plugin.activation_sources, "advisory plugin projection");
-		}
-
-		let mut warnings: Vec<_> = profile
-			.warnings
-			.into_iter()
-			.map(|warning| match warning {
-				ProfileWarning::LoadOrderNotEnforced => ExecutionWarning::LoadOrderNotEnforced,
-				ProfileWarning::Unavailable { file, plugin }
-					if file.eq_ignore_ascii_case("plugins.txt") =>
-				{
-					ExecutionWarning::StalePluginEntry { name: plugin }
-				}
-				ProfileWarning::Unavailable { plugin, .. } => {
-					ExecutionWarning::StaleLoadOrderEntry { name: plugin }
-				}
-				ProfileWarning::Duplicate { file, plugin } => {
-					ExecutionWarning::DuplicatePluginEntry { file, name: plugin }
-				}
-				ProfileWarning::Unlisted { plugin } => {
-					ExecutionWarning::UnlistedPlugin { name: plugin }
-				}
-			})
-			.collect();
-		let mut mappings = profile.profile_files;
-		mappings.push(profile.invalidation_mapping);
-		let configuration = ViewConfiguration::new(
-			prepared.data_directory.clone(),
-			prepared.providers
-				.iter()
-				.map(|provider| ProviderRoot {
-					identity: provider.identity.clone(),
-					root: provider.root.clone(),
-					enabled: provider.enabled,
-				})
-				.collect(),
-			prepared.winners.clone(),
-			selected_output_mod,
-			profile.profile_directories,
-			mappings,
-			profile.saves,
-		)
-		.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
-
-		let effective_binding = self.settings.load_execution_binding(&cancellation)?;
-		let current_binding = validate_game.call((effective_binding, cancellation.clone())).await?;
-		if current_binding != prepared.game_binding {
-			return Err(report!(ErrorMarker::environment_invalid(Some("execution"))));
-		}
-
-		if cancellation.is_cancelled() {
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
-		let view = VirtualGameView::configure(&configuration)
-			.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
-
-		if let Err(mut failure) = environment.revalidate_execution(&self.root, &prepared, &cancellation) {
-			if let Err(cleanup) = view.close() {
-				failure.children_mut().push(cleanup.into_dynamic().into_cloneable());
-			}
-			return Err(failure);
-		}
-
-		if cancellation.is_cancelled() {
-			view.close().context(ErrorMarker::vfs_failed().with_phase("cleanup"))?;
-			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
 
 		let mut private_streams = self
 			.capture
@@ -200,9 +164,9 @@ impl ExecutionAdapter {
 		let launched = view
 			.launch(LaunchRequest {
 				new_process_group: self.capture.is_some(),
-				application: &launch.program,
+				application: &launch.application,
 				command_line: &launch.command_line,
-				directory: &launch.working_directory,
+				directory: &launch.directory,
 				standard_streams: private_streams
 					.as_ref()
 					.and_then(|streams| streams.borrowed())
@@ -231,40 +195,124 @@ impl ExecutionAdapter {
 			streams.close_child_ends();
 		}
 
-		let mut process = launched?;
+		// Process creation gave the child its own copies of the inherited streams,
+		// so this function's duplicates close when it returns.
+		let process = launched?;
 
-		if let Some(progress) = &progress {
-			progress.call((ProgressEvent::ExecutionPrepared,)).await;
-		}
-
-		let outcome = supervise(&mut process, cancellation, self.force_cancellation.clone())
-			.await
-			.context(ErrorMarker::execution_supervision_failed().with_phase("running"));
-		drop(process);
-		if let Some(streams) = private_streams {
-			streams.finish()?;
-		}
-
-		let outcome = outcome?;
-
-		if environment
-			.check_execution_with_spool(
-				&self.root,
-				&prepared.game_binding,
-				self.capture.as_ref().and_then(|capture| capture.directory()),
-				&CancellationToken::new(),
-			)
-			.is_err()
-		{
-			warnings.push(ExecutionWarning::ProfileStateInvalid);
-		}
-		if outcome.forced {
-			return Err(report!(ErrorMarker::operation_cancelled().with_phase("cleanup")));
-		}
-
-		Ok(ExecuteProgramOutput {
-			status: ProcessStatus::new(outcome.status),
-			warnings,
-		})
+		Ok(RunningProgram(AdapterState::new(NativeProgram {
+			process,
+			private_streams,
+		})))
 	}
+
+	async fn check_retained_state(&self, cancellation: CancellationToken) -> Result<(), ErrorMarker> {
+		EnvironmentAdapter
+			.check_launch_with_spool(
+				&self.root,
+				&self.binding,
+				self.capture.as_ref().and_then(|capture| capture.directory()),
+				&cancellation,
+			)
+			.await
+	}
+}
+
+fn build_virtual_file_system(
+	plan: EnvironmentPlan,
+	staged: &StagedProfile,
+	output_mod: Option<ModName>,
+	cancellation: CancellationToken,
+) -> Result<VirtualFileSystem, ErrorMarker> {
+	let prepared: PreparedLaunch = plan.state.downcast().ok_or_else(foreign_handle)?;
+
+	let (documents, local) = GamePlatformAdapter::system().execution_profile_directories()?;
+
+	let profile = profile_mappings(ProfileMappingInput {
+		profile_directory: &prepared.profile_directory,
+		documents_directory: &documents,
+		local_app_data_directory: &local,
+		data_directory: &prepared.data_directory,
+		cache_directory: &prepared.cache_directory,
+	});
+
+	let mut mappings = profile.profile_files;
+	for mapping in &mut mappings {
+		if let Some(name) = mapping.source.file_name()
+			&& name.to_str().is_some_and(|name| name.ends_with(".ini"))
+		{
+			mapping.source = staged.directory.join(name);
+		}
+	}
+	mappings.push(profile.invalidation_mapping);
+
+	let configuration = ViewConfiguration::new(
+		prepared.data_directory,
+		prepared.providers
+			.into_iter()
+			.map(|provider| ProviderRoot {
+				identity: provider.identity,
+				root: provider.root,
+				enabled: provider.enabled,
+			})
+			.collect(),
+		prepared.winners,
+		output_mod,
+		profile.profile_directories,
+		mappings,
+		profile.saves,
+	)
+	.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
+
+	if cancellation.is_cancelled() {
+		return Err(report!(ErrorMarker::operation_cancelled()));
+	}
+
+	let view = VirtualGameView::configure(&configuration)
+		.context(ErrorMarker::vfs_failed().with_phase("vfs_setup"))?;
+
+	Ok(VirtualFileSystem(AdapterState::new(view)))
+}
+
+async fn supervise_child(
+	program: RunningProgram,
+	cancellation: CancellationToken,
+	force_cancellation: CancellationToken,
+) -> Result<ProgramSupervision, ErrorMarker> {
+	let NativeProgram {
+		mut process,
+		private_streams,
+	} = program.0.downcast().ok_or_else(foreign_handle)?;
+
+	let exit = supervise(&mut process, cancellation, force_cancellation)
+		.await
+		.context(ErrorMarker::execution_supervision_failed().with_phase("running"))
+		.map(|exit| ProgramExit {
+			status: ProcessStatus::new(exit.status),
+			forced: exit.forced,
+		});
+
+	let job_drained = process.job_is_empty().map_err(|error| error.into_dynamic());
+	drop(process);
+
+	Ok(ProgramSupervision {
+		exit,
+		job_drained,
+		output: ProgramOutput(AdapterState::new(private_streams)),
+	})
+}
+
+async fn preserve_inis(staged: StagedProfile) -> Result<(), ErrorMarker> {
+	let inis: StagedProfileInis = staged.state.downcast().ok_or_else(foreign_handle)?;
+
+	inis.preserve().await
+}
+
+fn finish_streams(output: ProgramOutput) -> Result<(), ErrorMarker> {
+	let private_streams: Option<PrivateStreams> = output.0.downcast().ok_or_else(foreign_handle)?;
+
+	if let Some(private_streams) = private_streams {
+		private_streams.finish()?;
+	}
+
+	Ok(())
 }

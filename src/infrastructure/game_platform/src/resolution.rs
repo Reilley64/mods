@@ -1,11 +1,9 @@
 use crate::GamePlatformAdapter;
-use crate::separation::prove_separation;
 use crate::steam;
 use application::ErrorCode;
 use application::ErrorMarker;
 use application::ports::GameInstallationSource;
 use application::ports::ResolvedGameInstallation;
-use domain::EnvironmentRoot;
 use domain::GameBinding;
 use domain::GameInstallationPath;
 use rootcause::Result;
@@ -13,11 +11,10 @@ use rootcause::report;
 use tokio_util::sync::CancellationToken;
 
 impl GamePlatformAdapter {
-	pub(crate) fn resolve(
+	pub(crate) async fn resolve(
 		&self,
 		explicit: Option<GameInstallationPath>,
 		environment: Option<GameInstallationPath>,
-		environment_root: &EnvironmentRoot,
 		cancellation: &CancellationToken,
 	) -> Result<ResolvedGameInstallation, ErrorMarker> {
 		if cancellation.is_cancelled() {
@@ -25,7 +22,7 @@ impl GamePlatformAdapter {
 		}
 
 		if let Some(path) = explicit {
-			let binding = self.validate_with_root(path, environment_root)?;
+			let binding = self.validate(path).await?;
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
@@ -35,7 +32,7 @@ impl GamePlatformAdapter {
 			});
 		}
 		if let Some(path) = environment {
-			let binding = self.validate_with_root(path, environment_root)?;
+			let binding = self.validate(path).await?;
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
@@ -46,9 +43,8 @@ impl GamePlatformAdapter {
 		}
 
 		let mut first_invalid = None;
-		match steam::discover(&self.steam_roots, cancellation) {
+		match steam::discover(&self.steam_roots, cancellation).await {
 			Ok(Some(binding)) => {
-				prove_separation(environment_root, binding.game_directory())?;
 				return Ok(ResolvedGameInstallation {
 					binding,
 					source: GameInstallationSource::Steam,
@@ -65,10 +61,7 @@ impl GamePlatformAdapter {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
 
-			match steam::validate(hint).and_then(|binding| {
-				prove_separation(environment_root, binding.game_directory())?;
-				Ok(binding)
-			}) {
+			match steam::validate(hint).await {
 				Ok(binding) => {
 					return Ok(ResolvedGameInstallation {
 						binding,
@@ -85,29 +78,12 @@ impl GamePlatformAdapter {
 		Err(report!(ErrorMarker::game_install_not_found()))
 	}
 
-	pub(crate) fn validate_with_root(
-		&self,
-		path: GameInstallationPath,
-		root: &EnvironmentRoot,
-	) -> Result<GameBinding, ErrorMarker> {
-		let binding = steam::validate(path.as_path())?;
-		prove_separation(root, binding.game_directory())?;
-		Ok(binding)
+	pub(crate) async fn validate(&self, path: GameInstallationPath) -> Result<GameBinding, ErrorMarker> {
+		steam::validate(path.as_path()).await
 	}
 
-	pub(crate) fn validate_effective(
-		&self,
-		expected: GameBinding,
-		root: &EnvironmentRoot,
-	) -> Result<GameBinding, ErrorMarker> {
-		let actual = self.validate_with_root(expected.game_directory().clone(), root)?;
-		if actual.observed_build_id() != expected.observed_build_id() {
-			return Err(report!(ErrorMarker::game_build_mismatch(
-				expected.observed_build_id().get(),
-				actual.observed_build_id().get(),
-			)));
-		}
-		Ok(actual)
+	pub(crate) async fn validate_effective(&self, expected: GameBinding) -> Result<GameBinding, ErrorMarker> {
+		self.validate(expected.game_directory().clone()).await
 	}
 }
 
@@ -117,10 +93,8 @@ mod tests {
 	use super::GamePlatformAdapter;
 	use crate::adapter::KnownFolderSource;
 	use application::ErrorCode;
-	use domain::EnvironmentRoot;
 	use domain::GameInstallationPath;
 	use rootcause::Result;
-	use std::env;
 	use std::fs;
 	use std::io::Error as IoError;
 	use std::path::Path;
@@ -129,15 +103,14 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn cancelled_resolution_stops_before_validation() -> Result<()> {
-		let (temp, game) = fixture()?;
-		let root = EnvironmentRoot::new(fs::canonicalize(temp.path())?.join("environment"))?;
+	#[tokio::test]
+	async fn cancelled_resolution_stops_before_validation() -> Result<()> {
+		let (_temp, game) = fixture()?;
 		let path = GameInstallationPath::new(game)?;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 
-		let result = adapter_without_sources().resolve(Some(path), None, &root, &cancellation);
+		let result = adapter_without_sources().resolve(Some(path), None, &cancellation).await;
 		assert_eq!(
 			result.as_ref().err().map(|error| error.current_context().code()),
 			Some(ErrorCode::OperationCancelled),
@@ -145,57 +118,44 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn explicit_precedes_environment_and_discovery() -> Result<()> {
-		let (temp, game) = fixture()?;
-		let root = EnvironmentRoot::new(fs::canonicalize(temp.path())?.join("environment"))?;
+	#[tokio::test]
+	async fn explicit_precedes_environment_and_discovery() -> Result<()> {
+		let (_temp, game) = fixture()?;
 		let path = GameInstallationPath::new(game)?;
-		let resolved = adapter_without_sources().resolve(
-			Some(path.clone()),
-			Some(path),
-			&root,
-			&CancellationToken::new(),
-		)?;
+		let resolved = adapter_without_sources()
+			.resolve(Some(path.clone()), Some(path), &CancellationToken::new())
+			.await?;
 		assert_eq!(resolved.source, GameInstallationSource::Explicit);
 		Ok(())
 	}
 
-	#[test]
-	fn automatic_discovery_precedes_bethesda_hint_and_fallback_is_typed() -> Result<()> {
+	#[tokio::test]
+	async fn automatic_discovery_precedes_bethesda_hint_and_fallback_is_typed() -> Result<()> {
 		let (steam_fixture, steam_game) = fixture()?;
 		let (bethesda_fixture, bethesda_game) = fixture()?;
-		let root = EnvironmentRoot::new(
-			fs::canonicalize(env::temp_dir())?.join("game-platform-discovery-environment"),
-		)?;
 		let steam_root = steam_game
 			.parent()
 			.and_then(Path::parent)
 			.and_then(Path::parent)
 			.ok_or_else(|| IoError::other("missing steam root"))?
 			.to_path_buf();
-		let resolved = adapter_with_discovery(vec![steam_root], vec![bethesda_game.clone()]).resolve(
-			None,
-			None,
-			&root,
-			&CancellationToken::new(),
-		)?;
+		let resolved = adapter_with_discovery(vec![steam_root], vec![bethesda_game.clone()])
+			.resolve(None, None, &CancellationToken::new())
+			.await?;
 		assert_eq!(resolved.source, GameInstallationSource::Steam);
-		assert_eq!(resolved.binding.observed_build_id().get(), 88);
+		assert_eq!(resolved.binding.game_directory().as_path(), steam_game);
 		drop(steam_fixture);
 
-		let fallback = adapter_with_discovery(Vec::new(), vec![bethesda_game]).resolve(
-			None,
-			None,
-			&root,
-			&CancellationToken::new(),
-		)?;
+		let fallback = adapter_with_discovery(Vec::new(), vec![bethesda_game])
+			.resolve(None, None, &CancellationToken::new())
+			.await?;
 		assert_eq!(fallback.source, GameInstallationSource::BethesdaRegistryFallback);
 		drop(bethesda_fixture);
 		Ok(())
 	}
 
-	#[test]
-	fn libraryfolders_path_participates_in_discovery() -> Result<()> {
+	#[tokio::test]
+	async fn libraryfolders_path_participates_in_discovery() -> Result<()> {
 		let (library, game) = fixture()?;
 		let primary = TempDir::new()?;
 		let primary_root = fs::canonicalize(primary.path())?;
@@ -210,13 +170,9 @@ mod tests {
 			primary_root.join("steamapps/libraryfolders.vdf"),
 			format!("\"libraryfolders\"\n{{\n\"1\"\n{{\n\"path\" \"{library_path}\"\n}}\n}}"),
 		)?;
-		let root = EnvironmentRoot::new(primary_root.join("environment"))?;
-		let resolved = adapter_with_discovery(vec![primary_root], Vec::new()).resolve(
-			None,
-			None,
-			&root,
-			&CancellationToken::new(),
-		)?;
+		let resolved = adapter_with_discovery(vec![primary_root], Vec::new())
+			.resolve(None, None, &CancellationToken::new())
+			.await?;
 		assert_eq!(resolved.source, GameInstallationSource::Steam);
 		assert_eq!(resolved.binding.game_directory().as_path(), fs::canonicalize(game)?);
 		drop(library);

@@ -110,7 +110,6 @@ mod tests {
 	use domain::InstallCandidateOrigin;
 	use domain::InstallationPhase;
 	use domain::Sha256Digest;
-	use domain::SteamBuildId;
 	use rootcause::report;
 	use std::collections::HashMap;
 	use std::env::temp_dir;
@@ -162,9 +161,9 @@ mod tests {
 										temp_dir().join("game"),
 									)
 									.expect("game"),
-									SteamBuildId::new(1).expect("build"),
 								),
 								installed_mods: Vec::new(),
+								unlisted_mod_names: Vec::new(),
 								current_winners: HashMap::new(),
 								file_dependencies: HashMap::new(),
 							})

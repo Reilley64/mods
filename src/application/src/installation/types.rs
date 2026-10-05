@@ -108,6 +108,11 @@ pub struct FileDependencyFact {
 pub struct InstallationState {
 	pub game_binding: GameBinding,
 	pub installed_mods: Vec<InstalledMod>,
+	/// Names of the `mods` entries that `modlist.txt` does not list.
+	///
+	/// These entries are not installed mods and contribute nothing. An install can take one of
+	/// these names only with `--replace`, because its directory would collide with the entry.
+	pub unlisted_mod_names: Vec<ModName>,
 	pub current_winners: HashMap<DataRelativePath, EffectiveResult>,
 	pub file_dependencies: HashMap<String, FileDependencyFact>,
 }
@@ -302,7 +307,11 @@ pub struct PlannedCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMode {
 	NewInstall,
+	/// Replaces a mod listed in `modlist.txt`, keeping its entry, priority, and enabled state.
 	Replacement,
+	/// Replaces an unlisted `mods` entry of the same name. The entry is removed, and the new mod
+	/// is listed like a new install.
+	UnlistedReplacement,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallOverlap {
@@ -318,6 +327,9 @@ pub struct ProjectedModState {
 	pub mode: InstallMode,
 	pub mod_name: ModName,
 	pub priority: ModPriority,
+	/// Zero-based position among mod entries in `modlist.txt`, counted from the
+	/// top. Comment lines are not counted. MO2 order puts the highest Mod
+	/// Priority first, so a new install is at 0.
 	pub list_position: u64,
 	pub enabled: bool,
 	pub overlaps: Vec<InstallOverlap>,
@@ -341,6 +353,9 @@ pub struct InstallPlan {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovedInstallation {
+	/// Extraction reads this archive after the transaction begins, so a replacement must not
+	/// remove it.
+	pub archive: ArchivePath,
 	pub nexus: Option<NexusProvenance>,
 	pub source_basename: String,
 	pub fomod_schema_version: Option<String>,

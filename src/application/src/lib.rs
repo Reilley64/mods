@@ -5,8 +5,10 @@ pub mod conflicts;
 pub mod environment;
 mod errors;
 pub mod execution;
+pub mod export;
 pub mod installation;
 pub mod ports;
+pub mod preparation;
 pub mod settings;
 pub mod shortcut;
 

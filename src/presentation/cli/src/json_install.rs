@@ -257,7 +257,11 @@ fn origin(value: &InstallCandidateOrigin) -> Value {
 
 fn projected(value: &ProjectedModState) -> Value {
 	json!({
-	    "mode": match value.mode { InstallMode::NewInstall => "new_install", InstallMode::Replacement => "replacement" },
+	    "mode": match value.mode {
+		InstallMode::NewInstall => "new_install",
+		InstallMode::Replacement => "replacement",
+		InstallMode::UnlistedReplacement => "unlisted_replacement",
+	    },
 	    "mod_name": value.mod_name.as_str(), "priority": value.priority.get(), "list_position": value.list_position,
 	    "enabled": value.enabled,
 	    "overlaps": value.overlaps.iter().map(|overlap| json!({

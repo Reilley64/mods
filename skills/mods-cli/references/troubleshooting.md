@@ -23,13 +23,14 @@ Without `--json`, successful mutations are quiet except warnings. With `--json`,
 
 ## Common failures and safe next steps
 
-With `--json`, errors are Problem Details on stderr. Use `type` as the machine identifier and read `detail` and optional `details`. Without `--json`, errors begin `error [code]: message`; optional lines contain phase, field, choice IDs/sequence, or build IDs. Raw internal cause chains are not public CLI output. See [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
+With `--json`, errors are Problem Details on stderr. Use `type` as the machine identifier and read `detail` and optional `details`: `phase`, `field`, `mod_name`, choice IDs/sequence, `load_order_file`, and the retained paths `retained_execution_inis`, `retained_partial_output`, and `retained_export_stage`. Without `--json`, errors begin `error [code]: message`; optional lines contain phase, field, `mod_name`, or choice IDs/sequence. Raw internal cause chains are not public CLI output. See [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
 
 | Error or symptom | Next step |
 | --- | --- |
 | `unexpected argument '--json'` with status 2 | The installed release has no JSON output; rerun without `--json` and read the text output |
 | `environment_already_initialized`, `environment_root_not_empty`, `environment_root_unsafe` | Confirm Environment Root and inspect existing contents; do not wipe it |
 | `environment_invalid`, settings/override errors | Inspect manifest and `config list`; the supported `MODS_*` variables are `MODS_GAME_DIR` and `MODS_NEXUS_API_KEY`; other `MODS_*` variables are ignored, empty ones count as unset, and a duplicate or non-Unicode override fails validation |
+| `environment_invalid` with `mod_name` | That `modlist.txt` entry has no folder in `mods` of exactly the same spelling; a folder that differs only in case does not count. Fix the folder name or the entry only with the user's approval |
 | `environment_invalid` with `phase = download_cache` | A completed entry in `cache/downloads/newvegas-MOD_ID-FILE_ID/` has malformed metadata, a different Nexus identity, or an archive of the wrong size; with the user's approval, delete that entry and rerun |
 | `nexus_source_invalid` | Use a New Vegas Nexus mod-page or file URL; do not combine `--file` with a local path or with a different URL `file_id` |
 | `nexus_premium_required` | A new download needs a Premium account API key in `nexus_api_key` or `MODS_NEXUS_API_KEY`; otherwise install a local archive |
@@ -39,9 +40,10 @@ With `--json`, errors are Problem Details on stderr. Use `type` as the machine i
 | `nexus_unavailable` | The mod or selected file is missing, removed, or not downloadable; check the mod page and file ID |
 | `nexus_network_failure` | A request failed, returned an unexpected status, or the transfer was incomplete; partial bytes are removed; retry only with authorization |
 | `nexus_response_invalid` | Nexus returned data that `mods` could not use; retry later or install a local archive |
-| Game Installation not found/invalid or observed-build mismatch | Check Steam installation and effective/stored Game Binding; ask before updating it |
-| `invalid_mod_name`, `mod_already_exists`, `mod_not_found` | Check name and replacement intent; do not silently rename or replace |
+| Game Installation not found/invalid | Check Steam installation and effective/stored Game Binding; ask before updating it |
+| `invalid_mod_name`, `mod_already_exists`, `mod_not_found` | Check name and replacement intent; do not silently rename or replace. `mod_already_exists` can name an [unlisted entry](installation.md#unlisted-entries-in-mods) in `mods` |
 | Unsafe/unsupported archive or installer, unmet dependency | Inspect package provenance/layout and error details; do not bypass validation |
+| `unsafe_archive` with `mod_name` | The archive lies inside the folder that `--replace` would remove. Move the archive outside that folder, then retry |
 | `invalid_selection` | Use current returned FOMOD IDs, ordered complete choices, and cardinality |
 | Invalid Data path or invalid conflict resolution | Use a relative path beneath Data and read scoped problems |
 | Invalid Output Target | Select Overwrite by omission or an existing enabled Data Mod |
@@ -51,7 +53,12 @@ With `--json`, errors are Problem Details on stderr. Use `type` as the machine i
 | `shortcut_launch_invalid`, `shortcut_arguments_too_long` | Check that the executable, working directory, and Environment Root have valid absolute paths; shorten the child arguments |
 | `shortcut_failed` | The `.lnk` could not be prepared or published; a preparation failure keeps any previous shortcut; check destination permissions |
 | `vfs_failed`, `execution_supervision_failed` | Check matching native runtime/prerequisites and collect diagnostics; do not retry execution without authorization |
-| `manual_cleanup_required` | Stop and inspect retained state with the user; there is no documented automatic cleanup command |
+| Execution failure with `retained_execution_inis` | After all managed processes have stopped, inspect retained INI edits before deciding any manual cleanup; do not discard them blindly |
+| Plugins load in the wrong order | `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. `loadorder.txt` is not used. Reorder `plugins.txt` only with the user's approval |
+| Error with `phase = load_order` | Reading or setting a plugin or BSA modification time failed; `load_order_file` names the file. For `exec`, nothing was launched or retained. For `export`, the output folder is reported as `retained_partial_output`. Check that the files exist and that the user may change their times, for example in a protected game folder. Do not change permissions without the user's approval |
+| Export failure with `retained_partial_output` | Inspect the named destination folder before manual cleanup or retry; it can hold partial files |
+| Export failure with `retained_export_stage` | The named `temp` folder holds only derived profile INIs for export. Delete it before the next `exec` or `export` |
+| `manual_cleanup_required` | The Environment Root `temp` folder is not empty, for example because of retained execution INIs. Stop and inspect it with the user; there is no documented automatic cleanup command |
 
 Cancellation can leave partial filesystem state. Preserve it for inspection rather than automatically cleaning or rolling back. For execution, first Ctrl-C requests cancellation; a second requests force. Managed supervision permits a grace interval (about five seconds) before forced termination. Do not claim immediate rollback or cleanup.
 

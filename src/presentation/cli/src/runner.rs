@@ -9,7 +9,9 @@ use crate::diagnostics::DiagnosticSession;
 use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
 use crate::error;
+use crate::export_output;
 use crate::json_conflicts;
+use crate::json_export;
 use crate::json_install;
 use crate::json_output;
 use crate::operation;
@@ -25,9 +27,10 @@ use application::conflicts::list_effective_conflicts;
 use application::environment::InitializeEnvironmentDependencies;
 use application::environment::InitializeEnvironmentWarning;
 use application::environment::initialize_environment;
-use application::execution::ExecuteProgramDependencies;
+use application::execution::ExecuteProgram;
 use application::execution::ExecutionWarning;
-use application::execution::execute_program;
+use application::export::ExportEnvironmentDependencies;
+use application::export::export_environment;
 use application::installation::InstallArchiveOutput;
 use application::installation::InstallModDependencies;
 use application::installation::InstallModOutput;
@@ -35,8 +38,10 @@ use application::installation::ModSource;
 use application::installation::RemoteModSource;
 use application::installation::install_mod;
 use application::ports::ProgressEvent;
+use application::ports::ReportProgress;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
+use application::settings::ResolvedSettings;
 use application::settings::SetGameDirectoryDependencies;
 use application::settings::get_setting;
 use application::settings::list_settings;
@@ -59,6 +64,7 @@ use domain::WorkingDirectory;
 use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
+use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 use std::env::current_dir;
@@ -73,16 +79,22 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
+pub(crate) enum CommandDependencies {
+	Initialize(InitializeEnvironmentDependencies),
+	Existing(Box<Dependencies>),
+}
+
 pub(crate) struct Dependencies {
+	pub(crate) settings: ResolvedSettings,
 	pub(crate) create_shortcut: CreateShortcutDependencies,
 	pub(crate) execution_force_cancellation: CancellationToken,
-	pub(crate) execute_program: ExecuteProgramDependencies,
+	pub(crate) execute_program: ExecuteProgram,
 	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
 	pub(crate) list_settings: ListSettingsDependencies,
 	pub(crate) get_setting: GetSettingDependencies,
 	pub(crate) set_game_directory: SetGameDirectoryDependencies,
 	pub(crate) install_mod: InstallModDependencies,
+	pub(crate) export_environment: ExportEnvironmentDependencies,
 	pub(crate) list_effective_conflicts: ListEffectiveConflictsDependencies,
 	pub(crate) inspect_mod_conflicts: InspectModConflictsDependencies,
 	pub(crate) explain_path: ExplainPathDependencies,
@@ -188,7 +200,7 @@ pub(crate) async fn execute(
 	cli: Cli,
 	startup_directory: PathBuf,
 	local_app_data: Option<PathBuf>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<Dependencies, ErrorMarker>,
+	dependency_factory: impl AsyncFnOnce(&EnvironmentRoot, &Command) -> RootResult<CommandDependencies, ErrorMarker>,
 ) -> RunOutcome {
 	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
 		Ok(root) => root,
@@ -236,6 +248,7 @@ pub(crate) async fn execute(
 		Command::Conflicts {
 			command: ConflictsCommand::Explain { .. },
 		} => "conflicts.explain",
+		Command::Export(_) => "export",
 		Command::Exec(_) => "exec",
 		Command::Shortcut(_) => "shortcut",
 	};
@@ -248,10 +261,16 @@ pub(crate) async fn execute(
 
 	let session_id = session.as_ref().map(DiagnosticSession::id);
 	let diagnostic_log = session.as_ref().map(DiagnosticSession::path);
-	let dependencies = match dependency_factory(&root) {
+	let dependencies = match dependency_factory(&root, &cli.command).await {
 		Ok(dependencies) => dependencies,
-		Err(marker) => {
-			let mut stderr = error::marker(&marker);
+		Err(report) => {
+			let marker = report.current_context();
+			let status = if matches!(cli.command, Command::Exec(_)) {
+				error::execution_exit_status(marker.code())
+			} else {
+				error::exit_status(marker.code())
+			};
+			let mut stderr = error::application_error(&report);
 			stderr.push_str(&diagnostic_warning);
 			if let Some(id) = session_id {
 				stderr.push_str(&format!("diagnostic session: {id}\n"));
@@ -261,8 +280,9 @@ pub(crate) async fn execute(
 				session.finish("failure");
 			}
 
-			let mut presentation =
-				cli.json.then(|| JsonPresentation::Problem(json_output::marker_problem(&marker, 1)));
+			let mut presentation = cli
+				.json
+				.then(|| JsonPresentation::Problem(json_output::marker_problem(marker, status)));
 			if let Some(JsonPresentation::Problem(problem)) = &mut presentation {
 				if !diagnostic_warning.is_empty() {
 					problem["warnings"] = json!([json_output::diagnostic_warning()]);
@@ -275,7 +295,7 @@ pub(crate) async fn execute(
 				presentation,
 				execution_failed: true,
 				diagnostic_log,
-				status: 1,
+				status,
 				stdout: String::new(),
 				stderr,
 			}
@@ -285,14 +305,35 @@ pub(crate) async fn execute(
 
 	let json_mode = cli.json;
 	let quiet_success = matches!(&cli.command, Command::Shortcut(_));
-	let work = dispatch(
-		cli.command,
-		dependencies,
-		root,
-		startup_directory,
-		cli.log_level.to_string(),
-		json_mode,
-	);
+	let log_level = cli.log_level.to_string();
+	let work = async move {
+		match dependencies {
+			CommandDependencies::Initialize(dependencies) => match cli.command {
+				Command::Init { game_install } => {
+					dispatch_initialization(
+						dependencies,
+						root,
+						game_install,
+						&startup_directory,
+						json_mode,
+					)
+					.await
+				}
+				_ => marker_outcome(ErrorMarker::environment_invalid(None), json_mode),
+			},
+			CommandDependencies::Existing(dependencies) => {
+				dispatch(
+					cli.command,
+					*dependencies,
+					root,
+					startup_directory,
+					log_level,
+					json_mode,
+				)
+				.await
+			}
+		}
+	};
 	let mut result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
@@ -343,6 +384,42 @@ pub(crate) async fn execute(
 	result.publish_json()
 }
 
+async fn dispatch_initialization(
+	dependencies: InitializeEnvironmentDependencies,
+	root: EnvironmentRoot,
+	game_install: Option<PathBuf>,
+	startup: &Path,
+	json_mode: bool,
+) -> RunOutcome {
+	let Ok(game_install) = game_install
+		.map(|path| resolve_path(&path, startup))
+		.map(GameInstallationPath::new)
+		.transpose()
+	else {
+		return marker_outcome(ErrorMarker::game_install_invalid(), json_mode);
+	};
+	match initialize_environment(dependencies, root, game_install, operation::ctrl_c_token()).await {
+		Ok(output) => {
+			let (stdout, stderr) = output::initialization(&output);
+			let warnings = output
+				.warnings
+				.iter()
+				.map(|warning| match warning {
+					InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => {
+						json_output::warning(
+							"bethesda_registry_fallback_used",
+							"Bethesda registry fallback was used",
+							json!({}),
+						)
+					}
+				})
+				.collect();
+			success(stdout, stderr, json_mode, json!({}), warnings)
+		}
+		Err(report) => report_outcome(&report, json_mode),
+	}
+}
+
 async fn dispatch(
 	command: Command,
 	dependencies: Dependencies,
@@ -353,62 +430,42 @@ async fn dispatch(
 ) -> RunOutcome {
 	match command {
 		Command::Init { game_install } => {
-			let Ok(game_install) = game_install
-				.map(|path| resolve_path(&path, &startup))
-				.map(GameInstallationPath::new)
-				.transpose()
-			else {
-				return marker_outcome(ErrorMarker::game_install_invalid(), json_mode);
-			};
-			match initialize_environment(
+			dispatch_initialization(
 				dependencies.initialize_environment,
 				root,
 				game_install,
-				operation::ctrl_c_token(),
+				&startup,
+				json_mode,
 			)
 			.await
-			{
-				Ok(output) => {
-					let (stdout, stderr) = output::initialization(&output);
-					let warnings = output
-						.warnings
-						.iter()
-						.map(|warning| match warning {
-							InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => {
-								json_output::warning(
-									"bethesda_registry_fallback_used",
-									"Bethesda registry fallback was used",
-									json!({}),
-								)
-							}
-						})
-						.collect();
-					success(stdout, stderr, json_mode, json!({}), warnings)
-				}
-				Err(report) => report_outcome(&report, json_mode),
-			}
 		}
 		Command::Config { command } => match command {
-			ConfigCommand::List => match list_settings(dependencies.list_settings).await {
-				Ok(output) => success(
-					output::settings(&output.settings),
-					String::new(),
-					json_mode,
-					json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
-					vec![],
-				),
-				Err(report) => report_outcome(&report, json_mode),
-			},
-			ConfigCommand::Get { key } => match get_setting(dependencies.get_setting, key.into()).await {
-				Ok(output) => success(
-					output::setting(&output.setting),
-					String::new(),
-					json_mode,
-					json!({"setting": json_output::setting(&output.setting)}),
-					vec![],
-				),
-				Err(report) => report_outcome(&report, json_mode),
-			},
+			ConfigCommand::List => {
+				match list_settings(dependencies.list_settings, dependencies.settings.settings).await {
+					Ok(output) => success(
+						output::settings(&output.settings),
+						String::new(),
+						json_mode,
+						json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
+						vec![],
+					),
+					Err(report) => report_outcome(&report, json_mode),
+				}
+			}
+			ConfigCommand::Get { key } => {
+				match get_setting(dependencies.get_setting, dependencies.settings.settings, key.into())
+					.await
+				{
+					Ok(output) => success(
+						output::setting(&output.setting),
+						String::new(),
+						json_mode,
+						json!({"setting": json_output::setting(&output.setting)}),
+						vec![],
+					),
+					Err(report) => report_outcome(&report, json_mode),
+				}
+			}
 			ConfigCommand::Set {
 				command: SetCommand::GameDir { value },
 			} => {
@@ -424,8 +481,7 @@ async fn dispatch(
 				{
 					Ok(output) => {
 						let (stdout, stderr) = output::set_game_directory(&output);
-						let warnings = json_output::game_directory_warnings(&output.warnings);
-						success(stdout, stderr, json_mode, json!({}), warnings)
+						success(stdout, stderr, json_mode, json!({}), vec![])
 					}
 					Err(report) => report_outcome(&report, json_mode),
 				}
@@ -600,6 +656,49 @@ async fn dispatch(
 				}
 			}
 		},
+		Command::Export(arguments) => {
+			let output_path = resolve_path(&arguments.output, &startup);
+
+			match export_environment(
+				dependencies.export_environment,
+				output_path.clone(),
+				arguments.include_saves,
+				arguments.include_game_data,
+				arguments.dry_run,
+				operation::ctrl_c_token(),
+			)
+			.await
+			{
+				Ok(result) => {
+					let stdout = if arguments.dry_run {
+						export_output::preview(&output_path, &result)
+					} else {
+						String::new()
+					};
+					let stderr = result.warnings.iter().map(output::plugin_warning).collect();
+					let value = json_export::export(&output_path, &result);
+					let warnings = json_export::plugin_warnings(&result.warnings);
+					success(stdout, stderr, json_mode, value, warnings)
+				}
+				Err(report) => {
+					let marker = error::application_marker(&report);
+					let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
+
+					let mut details = json_output::report_details(&report, "retained_export_stage");
+					details.insert("output".into(), json!(output_path.display().to_string()));
+
+					with_problem_details(
+						problem_outcome(
+							status,
+							error::export_error(&report, &output_path),
+							json_mode,
+							marker,
+						),
+						details,
+					)
+				}
+			}
+		}
 		Command::Shortcut(arguments) => {
 			let output_target = if let Some(name) = arguments.output_target {
 				let Ok(name) = ModName::new(name) else {
@@ -609,10 +708,11 @@ async fn dispatch(
 			} else {
 				OutputTarget::Overwrite
 			};
-			let Ok(working_directory) = WorkingDirectory::new(resolve_path(
-				arguments.cwd.as_deref().unwrap_or(&startup),
-				&startup,
-			)) else {
+			let Ok(working_directory) = arguments
+				.cwd
+				.map(|path| WorkingDirectory::new(resolve_path(&path, &startup)))
+				.transpose()
+			else {
 				return marker_outcome(ErrorMarker::invalid_working_directory(), json_mode);
 			};
 			let mut command = arguments.command.into_iter();
@@ -629,8 +729,9 @@ async fn dispatch(
 
 			match create_shortcut(
 				dependencies.create_shortcut,
+				dependencies.settings,
 				output_target,
-				Some(working_directory),
+				working_directory,
 				program,
 				program_arguments,
 				arguments.name,
@@ -712,20 +813,14 @@ async fn dispatch(
 
 			let launched = Arc::new(AtomicBool::new(false));
 			let launch_state = launched.clone();
-			let mut execution = dependencies.execute_program;
-			let previous_reporter = execution.report_progress.take();
-			execution.report_progress = Some(Arc::new(move |event| {
+			let report_progress: ReportProgress = Arc::new(move |event| {
 				let launch_state = launch_state.clone();
-				let previous_reporter = previous_reporter.clone();
 				Box::pin(async move {
 					if event == ProgressEvent::ExecutionPrepared {
 						launch_state.store(true, Ordering::Release);
 					}
-					if let Some(reporter) = previous_reporter {
-						reporter.call((event,)).await;
-					}
 				})
-			}));
+			});
 
 			let signals = if arguments.hidden {
 				None
@@ -738,28 +833,29 @@ async fn dispatch(
 				.as_ref()
 				.map_or_else(CancellationToken::new, |signals| signals.cancellation.clone());
 
-			match execute_program(
-				execution,
-				output_target,
-				working_directory,
-				program,
-				program_arguments,
-				cancellation,
-			)
-			.await
+			match dependencies
+				.execute_program
+				.call_once((
+					Some(report_progress),
+					output_target,
+					working_directory,
+					program,
+					program_arguments,
+					cancellation,
+				))
+				.await
 			{
 				Ok(output) => {
 					let mut stderr = String::new();
 					for warning in output.warnings {
-						let message = match warning {
-                            ExecutionWarning::LoadOrderNotEnforced => "warning [load_order_not_enforced]: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.\n".to_owned(),
-                            ExecutionWarning::StalePluginEntry { name } => format!("warning [stale_plugin_entry]: analysis projection: plugins.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", output::quote(&name)),
-                            ExecutionWarning::StaleLoadOrderEntry { name } => format!("warning [stale_load_order_entry]: analysis projection: loadorder.txt entry {} is absent from the analytical Data view; runtime availability is not established.\n", output::quote(&name)),
-                            ExecutionWarning::DuplicatePluginEntry { file, name } => format!("warning [duplicate_plugin_entry]: duplicate entry {} in {}; analysis projection uses the first occurrence; canonical file is unchanged.\n", output::quote(&name), output::quote(&file)),
-                            ExecutionWarning::UnlistedPlugin { name } => format!("warning [unlisted_plugin]: analysis projection: {} is absent from loadorder.txt; projected order uses backing-file modification time.\n", output::quote(&name)),
-                            ExecutionWarning::ProfileStateInvalid => "warning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n".to_owned(),
-                        };
-						stderr.push_str(&message);
+						match warning {
+							ExecutionWarning::Plugin(warning) => {
+								stderr.push_str(&output::plugin_warning(&warning))
+							}
+							ExecutionWarning::ProfileStateInvalid => stderr.push_str(
+								"warning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n",
+							),
+						}
 					}
 					RunOutcome {
 						presentation: None,
@@ -794,10 +890,27 @@ pub(crate) fn hidden_failure_dialog(outcome: &RunOutcome) -> Option<String> {
 fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bool) -> RunOutcome {
 	let marker = error::application_marker(report);
 	let status = marker.map_or(125, |marker| error::execution_exit_status(marker.code()));
-	RunOutcome {
+	let outcome = RunOutcome {
 		execution_failed: true,
-		..problem_outcome(status, error::application_error(report), json_mode && !launched, marker)
+		..problem_outcome(status, error::execution_error(report), json_mode && !launched, marker)
+	};
+	with_problem_details(outcome, json_output::report_details(report, "retained_execution_inis"))
+}
+
+fn with_problem_details(mut outcome: RunOutcome, details: Map<String, Value>) -> RunOutcome {
+	let Some(JsonPresentation::Problem(Value::Object(problem))) = &mut outcome.presentation else {
+		return outcome;
+	};
+	if details.is_empty() {
+		return outcome;
 	}
+
+	match problem.entry("details").or_insert_with(|| json!({})) {
+		Value::Object(existing) => existing.extend(details),
+		other => *other = Value::Object(details),
+	}
+
+	outcome
 }
 
 fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarker> {
@@ -856,6 +969,7 @@ fn problem_outcome(status: u32, stderr: String, json_mode: bool, marker: Option<
 	}
 }
 
+#[cfg(test)]
 pub(crate) async fn run(
 	arguments: impl IntoIterator<Item = OsString>,
 	startup_directory: PathBuf,
@@ -863,25 +977,39 @@ pub(crate) async fn run(
 	dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<Dependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let cli = parse_from(arguments)?;
-	Ok(execute(cli, startup_directory, local_app_data, dependency_factory).await)
+	Ok(execute(cli, startup_directory, local_app_data, async move |root, _| {
+		dependency_factory(root)
+			.map(|dependencies| CommandDependencies::Existing(Box::new(dependencies)))
+			.map_err(|marker| report!(marker))
+	})
+	.await)
 }
 
 pub(crate) async fn run_current_process(
 	arguments: impl IntoIterator<Item = OsString>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot, &Path) -> Result<Dependencies, ErrorMarker>,
+	dependency_factory: impl AsyncFnOnce(
+		&EnvironmentRoot,
+		&Path,
+		&Command,
+	) -> RootResult<CommandDependencies, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
 	let factory_startup = startup_directory.clone();
-	run(arguments, startup_directory, local_app_data, |root| {
-		dependency_factory(root, &factory_startup)
-	})
-	.await
+	let cli = parse_from(arguments)?;
+	Ok(
+		execute(cli, startup_directory, local_app_data, async move |root, command| {
+			dependency_factory(root, &factory_startup, command).await
+		})
+		.await,
+	)
 }
 
 #[cfg(test)]
 mod tests {
 	use super::Cli;
+	use super::Command;
+	use super::CommandDependencies;
 	use super::Dependencies;
 	use super::RunOutcome;
 	use super::hidden_failure_dialog;
@@ -900,9 +1028,15 @@ mod tests {
 	use application::conflicts::ListEffectiveConflictsDependencies;
 	use application::conflicts::ScannedConflictProvider;
 	use application::environment::InitializeEnvironmentDependencies;
-	use application::execution::ExecuteProgramDependencies;
+	use application::execution::ExecuteProgramError;
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
+	use application::export::ExportEnvironmentDependencies;
+	use application::export::ExportFile;
+	use application::export::ExportListing;
+	use application::export::ExportProvider;
+	use application::export::ExportSelection;
+	use application::export::ExportSources;
 	use application::installation::ArchiveIndex;
 	use application::installation::DownloadModFile;
 	use application::installation::DownloadModOutput;
@@ -916,18 +1050,24 @@ mod tests {
 	use application::installation::InstallationAssessment;
 	use application::installation::InstallationState;
 	use application::installation::NexusProvenance;
+	use application::ports::AdapterState;
+	use application::ports::EnvironmentPlan;
+	use application::ports::EnvironmentProvider;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
 	use application::ports::InitializationTargetAssessment;
 	use application::ports::InstallationChange;
+	use application::ports::LaunchTarget;
+	use application::ports::LoadOrderFile;
 	use application::ports::PortFuture;
-	use application::ports::PrepareExecutionEnvironment;
-	use application::ports::PreparedExecution;
+	use application::ports::ProfileProjection;
+	use application::ports::ProfileWarning;
 	use application::ports::ProgressEvent;
-	use application::ports::ResolveLaunchInputs;
 	use application::ports::ResolvedGameInstallation;
-	use application::ports::ResolvedLaunch;
+	use application::ports::RetainedProfile;
+	use application::ports::StagedProfile;
 	use application::ports::StoredAndEffectiveBinding;
+	use application::preparation::PluginWarning;
 	use application::settings::GetSettingDependencies;
 	use application::settings::ListSettingsDependencies;
 	use application::settings::ResolvedSettings;
@@ -958,10 +1098,11 @@ mod tests {
 	use domain::ProviderReference;
 	use domain::ResolvedOptionType;
 	use domain::Sha256Digest;
-	use domain::SteamBuildId;
 	#[cfg(windows)]
 	use domain::WorkingDirectory;
 	use infrastructure_dependencies::Resources;
+	use infrastructure_dependencies::SettingsLoadMode;
+	use rootcause::Result as RootResult;
 	use rootcause::compat::boxed_error::IntoBoxedError;
 	use rootcause::report;
 	use serde_json::Value;
@@ -1123,72 +1264,57 @@ mod tests {
 		}
 	}
 
-	fn resolved_launch(working_directory: PathBuf, program: PathBuf) -> ResolvedLaunch {
-		ResolvedLaunch {
-			command_line: program.as_os_str().to_owned(),
+	fn launch_target(working_directory: PathBuf, program: PathBuf) -> LaunchTarget {
+		LaunchTarget {
 			program,
 			working_directory,
-			target_lease: Arc::new(()),
+			state: AdapterState::new(()),
 		}
 	}
 
-	fn prepared_execution(binding: GameBinding) -> PreparedExecution {
-		PreparedExecution {
-			game_binding: binding.clone(),
-			providers: Vec::new(),
-			winners: Vec::new(),
-			visible_files: Vec::new(),
-			profile_files: Vec::new(),
-			profile_directory: PathBuf::new(),
-			data_directory: binding.game_directory().as_path().join("Data"),
-			cache_directory: PathBuf::new(),
-			revalidation_basis: Arc::new(()),
+	fn empty_plan() -> PortFuture<EnvironmentPlan> {
+		Box::pin(async {
+			Ok(EnvironmentPlan {
+				providers: Vec::new(),
+				state: AdapterState::new(()),
+			})
+		})
+	}
+
+	fn shortcut_dependencies() -> CreateShortcutDependencies {
+		CreateShortcutDependencies {
+			locate_launcher: Arc::new(|| {
+				Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
+			}),
+			resolve_launch_target: Arc::new(|program, _, cwd, _| {
+				let target = launch_target(cwd.as_path().to_owned(), program.as_os_str().into());
+				Box::pin(async move { Ok(target) }) as PortFuture<_>
+			}),
+			prepare_environment_plan: Arc::new(|_| empty_plan()),
+			project_profile: Arc::new(|_: &EnvironmentPlan| {
+				Box::pin(async { Ok(ProfileProjection { warnings: Vec::new() }) }) as PortFuture<_>
+			}),
+			locate_environment_root: Arc::new(|| {
+				Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
+			}),
+			persist: Arc::new(|_| Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })),
 		}
 	}
 
 	fn dependencies_with_list(binding: GameBinding, list_settings: ListSettingsDependencies) -> Dependencies {
-		let resolved = ResolvedSettings {
-			settings: Vec::new(),
-			effective_binding: binding.clone(),
-			manifest_binding: binding.clone(),
-		};
 		let install_archive = unavailable_install_archive_dependencies();
-		let prepared = prepared_execution(binding.clone());
-		let prepare_execution_environment: PrepareExecutionEnvironment = Arc::new(move |_, _| {
-			let prepared = prepared.clone();
-			Box::pin(async move { Ok(prepared) }) as PortFuture<_>
-		});
-		let resolve_launch_inputs: ResolveLaunchInputs = Arc::new(|cwd, program, _, _| {
-			let launch = resolved_launch(
-				cwd.map(|cwd| cwd.as_path().to_owned()).unwrap_or_default(),
-				program.as_os_str().into(),
-			);
-			Box::pin(async move { Ok(launch) }) as PortFuture<_>
-		});
 		Dependencies {
-			create_shortcut: CreateShortcutDependencies {
-				locate_launcher: Arc::new(|| {
-					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
-				}),
-				resolve_launch_inputs: resolve_launch_inputs.clone(),
-				prepare_execution_environment: prepare_execution_environment.clone(),
-				load_settings: list_settings.load_settings.clone(),
-				locate_environment_root: Arc::new(|| {
-					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
-				}),
-				persist: Arc::new(|_| {
-					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
-				}),
+			settings: ResolvedSettings {
+				settings: Vec::new(),
+				effective_binding: binding.clone(),
+				manifest_binding: binding.clone(),
 			},
+			create_shortcut: shortcut_dependencies(),
 			execution_force_cancellation: CancellationToken::new(),
-			execute_program: ExecuteProgramDependencies {
-				report_progress: None,
-				resolve_launch_inputs,
-				prepare_execution_environment,
-				run_managed_program: Arc::new(|_, _, _, _, _| {
-					Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
-				}),
-			},
+			execute_program: Box::new(|_, _, _, _, _, _| {
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
+					as PortFuture<_, _>
+			}),
 			initialize_environment: InitializeEnvironmentDependencies {
 				assess_target: Arc::new(|_, _| {
 					Box::pin(async { Ok(InitializationTargetAssessment::Available) })
@@ -1220,13 +1346,7 @@ mod tests {
 				}),
 			},
 			list_settings,
-			get_setting: GetSettingDependencies {
-				report_progress: None,
-				load_settings: Arc::new(move || {
-					let resolved = resolved.clone();
-					Box::pin(async move { Ok(resolved) }) as PortFuture<_>
-				}),
-			},
+			get_setting: GetSettingDependencies { report_progress: None },
 			set_game_directory: SetGameDirectoryDependencies {
 				report_progress: None,
 				check_settings_readiness: Arc::new(|_| Box::pin(async { Ok(()) }) as PortFuture<_>),
@@ -1273,17 +1393,100 @@ mod tests {
 						as PortFuture<_>
 				}),
 			},
+			export_environment: unavailable_export_dependencies(),
 			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
 			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
 			explain_path: unavailable_explain_path_dependencies(),
 		}
 	}
 
+	fn failed<T: Send + 'static>() -> PortFuture<T> {
+		Box::pin(async { Err(report!(ErrorMarker::io_failure())) })
+	}
+
+	fn unavailable_export_dependencies() -> ExportEnvironmentDependencies {
+		ExportEnvironmentDependencies {
+			validate_export_destination: Arc::new(|_| failed()),
+			prepare_environment_plan: Arc::new(|_| failed()),
+			project_profile: Arc::new(|_: &EnvironmentPlan| failed()),
+			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
+			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _| failed()),
+			write_export: Arc::new(|_, _, _, _| failed()),
+			set_load_order_times: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
+			discard_staged_profile: Arc::new(|_| failed()),
+		}
+	}
+
+	/// Export ports that list one profile file and record whether it was written.
+	fn export_dependencies(
+		expected_output: PathBuf,
+		expected_selection: ExportSelection,
+		written: Arc<AtomicBool>,
+	) -> ExportEnvironmentDependencies {
+		ExportEnvironmentDependencies {
+			validate_export_destination: Arc::new(move |output| {
+				assert_eq!(output, expected_output);
+				Box::pin(async { Ok(()) })
+			}),
+			prepare_environment_plan: Arc::new(|_| {
+				Box::pin(async {
+					Ok(EnvironmentPlan {
+						providers: Vec::new(),
+						state: AdapterState::new(()),
+					})
+				})
+			}),
+			project_profile: Arc::new(|_: &EnvironmentPlan| {
+				Box::pin(async {
+					Ok(ProfileProjection {
+						warnings: vec![ProfileWarning::Unavailable {
+							plugin: "Missing.esp".into(),
+						}],
+					})
+				})
+			}),
+			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| {
+				Box::pin(async {
+					Ok(StagedProfile {
+						directory: PathBuf::from("stage"),
+						state: AdapterState::new(()),
+					})
+				})
+			}),
+			list_export_files: Arc::new(
+				move |_: &EnvironmentPlan, _: &StagedProfile, selection: ExportSelection, _| {
+					assert_eq!(selection, expected_selection);
+					Box::pin(async {
+						Ok(ExportListing {
+							files: vec![ExportFile {
+								source_id: 0,
+								path: DataRelativePath::new(
+									"profile/Fallout.ini".to_owned(),
+								)
+								.map_err(|_| {
+									report!(ErrorMarker::invalid_data_path())
+								})?,
+								provider: ExportProvider::Profile,
+								bytes: 17,
+							}],
+							sources: ExportSources(AdapterState::new(())),
+						})
+					})
+				},
+			),
+			write_export: Arc::new(move |_, _, _, _| {
+				written.store(true, Ordering::SeqCst);
+				Box::pin(async { Ok(()) })
+			}),
+			set_load_order_times: Arc::new(|_: &EnvironmentPlan, _, _| Box::pin(async { Ok(()) })),
+			discard_staged_profile: Arc::new(|_| Box::pin(async { Ok(()) })),
+		}
+	}
+
 	fn test_binding(root: &Path) -> Result<GameBinding, ErrorMarker> {
 		let game = GameInstallationPath::new(root.join("game"))
 			.map_err(|_| ErrorMarker::environment_invalid(None))?;
-		let build = SteamBuildId::new(1).map_err(|_| ErrorMarker::environment_invalid(None))?;
-		Ok(GameBinding::new(game, build))
+		Ok(GameBinding::new(game))
 	}
 
 	fn named_settings(binding: GameBinding, name: &str) -> ResolvedSettings {
@@ -1304,22 +1507,9 @@ mod tests {
 
 	fn successful_dependencies(root: &Path) -> Result<Dependencies, ErrorMarker> {
 		let binding = test_binding(root)?;
-		let listed_binding = binding.clone();
 		Ok(dependencies_with_list(
 			binding,
-			ListSettingsDependencies {
-				report_progress: None,
-				load_settings: Arc::new(move || {
-					let binding = listed_binding.clone();
-					Box::pin(async move {
-						Ok(ResolvedSettings {
-							settings: Vec::new(),
-							effective_binding: binding.clone(),
-							manifest_binding: binding,
-						})
-					}) as PortFuture<_>
-				}),
-			},
+			ListSettingsDependencies { report_progress: None },
 		))
 	}
 
@@ -1345,10 +1535,8 @@ mod tests {
 			mod_name: "Page".into(),
 			file_name: "Selected file".into(),
 		};
-		let game_binding = GameBinding::new(
-			GameInstallationPath::new(temp.path().join("game")).expect("game fixture"),
-			SteamBuildId::new(1).expect("build fixture"),
-		);
+		let game_binding =
+			GameBinding::new(GameInstallationPath::new(temp.path().join("game")).expect("game fixture"));
 		let candidate = InstallCandidate {
 			candidate_id: 1,
 			origin: InstallCandidateOrigin::Required,
@@ -1425,6 +1613,7 @@ mod tests {
 						Ok(InstallationState {
 							game_binding,
 							installed_mods: Vec::new(),
+							unlisted_mod_names: Vec::new(),
 							current_winners: HashMap::new(),
 							file_dependencies: HashMap::new(),
 						})
@@ -1537,24 +1726,20 @@ mod tests {
 		let temp = TempDir::new()?;
 		for status in [0, 1, 125, 126, 127, 256, 259, 0xC000_0005] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program.resolve_launch_inputs = Arc::new(|cwd, program, arguments, _| {
+			dependencies.execute_program = Box::new(move |_, target, cwd, program, arguments, _| {
+				assert_eq!(target, OutputTarget::Overwrite);
 				assert!(cwd.is_none());
 				assert_eq!(program.as_os_str(), "tool.exe");
 				assert_eq!(
 					arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
 					["", "--", "雪"]
 				);
-				let launch = resolved_launch(PathBuf::new(), program.as_os_str().into());
-				Box::pin(async move { Ok(launch) }) as PortFuture<_>
-			});
-			dependencies.execute_program.run_managed_program = Arc::new(move |target, _, _, _, _| {
-				assert_eq!(target, OutputTarget::Overwrite);
 				Box::pin(async move {
 					Ok(ExecuteProgramOutput {
 						status: ProcessStatus::new(status),
 						warnings: Vec::new(),
 					})
-				}) as PortFuture<_>
+				}) as PortFuture<_, _>
 			});
 			let outcome = run(
 				arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe", "", "--", "雪"],
@@ -1598,8 +1783,12 @@ mod tests {
 			let called = Arc::new(AtomicBool::new(false));
 			let observed = called.clone();
 			let expected_cwd = temp.path().join("tools");
-			dependencies.execute_program.resolve_launch_inputs =
-				Arc::new(move |cwd, program, arguments, cancellation| {
+			dependencies.execute_program =
+				Box::new(move |_, target, cwd, program, arguments, cancellation| {
+					observed.store(true, Ordering::SeqCst);
+					assert!(
+						matches!(target, OutputTarget::DataMod(name) if name.as_str() == "Tool Output")
+					);
 					assert_eq!(
 						cwd.as_ref().map(WorkingDirectory::as_path),
 						Some(expected_cwd.as_path())
@@ -1610,28 +1799,19 @@ mod tests {
 						["", "--hidden", "雪"]
 					);
 					assert!(!cancellation.is_cancelled());
-					let launch = resolved_launch(expected_cwd.clone(), program.as_os_str().into());
-					Box::pin(async move { Ok(launch) }) as PortFuture<_>
-				});
-			dependencies.execute_program.run_managed_program =
-				Arc::new(move |target, _, _, _, cancellation| {
-					observed.store(true, Ordering::SeqCst);
-					assert!(
-						matches!(target, OutputTarget::DataMod(name) if name.as_str() == "Tool Output")
-					);
-					assert!(!cancellation.is_cancelled());
 					Box::pin(async move {
 						if failed {
 							return Err(report!(
 								ErrorMarker::execution_supervision_failed()
-							));
+							)
+							.context(ExecuteProgramError));
 						}
 
 						Ok(ExecuteProgramOutput {
 							status: ProcessStatus::new(125),
 							warnings: Vec::new(),
 						})
-					}) as PortFuture<_>
+					}) as PortFuture<_, _>
 				});
 
 			let outcome = run(
@@ -1691,29 +1871,21 @@ mod tests {
 	async fn exec_qualifies_projection_warnings_without_changing_child_output() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-		dependencies.execute_program.run_managed_program = Arc::new(|_, _, _, _, _| {
+		dependencies.execute_program = Box::new(|_, _, _, _, _, _| {
 			Box::pin(async {
 				Ok(ExecuteProgramOutput {
 					status: ProcessStatus::new(259),
 					warnings: vec![
-						ExecutionWarning::LoadOrderNotEnforced,
-						ExecutionWarning::StalePluginEntry {
+						ExecutionWarning::Plugin(PluginWarning::StalePluginEntry {
 							name: "Missing.esp".into(),
-						},
-						ExecutionWarning::StaleLoadOrderEntry {
-							name: "Ordered.esp".into(),
-						},
-						ExecutionWarning::DuplicatePluginEntry {
-							file: "plugins.txt".into(),
+						}),
+						ExecutionWarning::Plugin(PluginWarning::DuplicatePluginEntry {
 							name: "Duplicate.esp".into(),
-						},
-						ExecutionWarning::UnlistedPlugin {
-							name: "Unlisted.esp".into(),
-						},
+						}),
 						ExecutionWarning::ProfileStateInvalid,
 					],
 				})
-			}) as PortFuture<_>
+			}) as PortFuture<_, _>
 		});
 
 		let outcome = run(
@@ -1728,7 +1900,7 @@ mod tests {
 		assert!(outcome.stdout.is_empty());
 		assert_eq!(
 			outcome.stderr,
-			"warning [load_order_not_enforced]: Plugin diagnostics use the analytical Data projection, not an observed runtime view. Mappings use canonical Profile State; this computed list does not change those files. Projected plugin order is advisory and is not enforced through virtual timestamps.\nwarning [stale_plugin_entry]: analysis projection: plugins.txt entry \"Missing.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [stale_load_order_entry]: analysis projection: loadorder.txt entry \"Ordered.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [duplicate_plugin_entry]: duplicate entry \"Duplicate.esp\" in \"plugins.txt\"; analysis projection uses the first occurrence; canonical file is unchanged.\nwarning [unlisted_plugin]: analysis projection: \"Unlisted.esp\" is absent from loadorder.txt; projected order uses backing-file modification time.\nwarning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n"
+			"warning [stale_plugin_entry]: analysis projection: plugins.txt entry \"Missing.esp\" is absent from the analytical Data view; runtime availability is not established.\nwarning [duplicate_plugin_entry]: duplicate entry \"Duplicate.esp\" in \"plugins.txt\"; analysis projection uses the first occurrence; canonical file is unchanged.\nwarning [profile_state_invalid]: retained Profile State is invalid; correct it before the next execution\n"
 		);
 		Ok(())
 	}
@@ -1739,14 +1911,10 @@ mod tests {
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let called = Arc::new(AtomicBool::new(false));
 		let observed = called.clone();
-		let resolved = called.clone();
-		dependencies.execute_program.resolve_launch_inputs = Arc::new(move |_, _, _, _| {
-			resolved.store(true, Ordering::SeqCst);
-			Box::pin(async { Err(report!(ErrorMarker::program_not_found())) }) as PortFuture<_>
-		});
-		dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _| {
+		dependencies.execute_program = Box::new(move |_, _, _, _, _, _| {
 			observed.store(true, Ordering::SeqCst);
-			Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
+			Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
+				as PortFuture<_, _>
 		});
 		let outcome = run(
 			arguments![
@@ -2140,13 +2308,14 @@ mod tests {
 		let temp = TempDir::new()?;
 		for launched in [false, true] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, reporter, _| {
+			dependencies.execute_program = Box::new(move |reporter, _, _, _, _, _| {
 				Box::pin(async move {
 					if launched && let Some(reporter) = reporter {
 						reporter.call((ProgressEvent::ExecutionPrepared,)).await;
 					}
-					Err(report!(ErrorMarker::execution_supervision_failed()))
-				}) as PortFuture<_>
+					Err(report!(ErrorMarker::execution_supervision_failed())
+						.context(ExecuteProgramError))
+				}) as PortFuture<_, _>
 			});
 			let outcome = run(
 				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
@@ -2253,7 +2422,6 @@ mod tests {
 		];
 		let game_binding = GameBinding::new(
 			GameInstallationPath::new(temp.path().join("game")).map_err(|_| "game fixture")?,
-			SteamBuildId::new(1).map_err(|_| "build fixture")?,
 		);
 		let mut outcomes = Vec::new();
 		for json_flag in [true, false] {
@@ -2266,6 +2434,7 @@ mod tests {
 						Ok(InstallationState {
 							game_binding,
 							installed_mods: Vec::new(),
+							unlisted_mod_names: Vec::new(),
 							current_winners: HashMap::new(),
 							file_dependencies: HashMap::new(),
 						})
@@ -2317,23 +2486,40 @@ mod tests {
 		Ok(())
 	}
 
-	fn system_dependencies(root: &EnvironmentRoot, startup: &Path) -> Dependencies {
+	async fn system_dependencies(
+		root: &EnvironmentRoot,
+		startup: &Path,
+		command: &Command,
+	) -> RootResult<CommandDependencies, ErrorMarker> {
 		let resources = Resources::system(root.clone());
+		let mode = if matches!(command, Command::Install(_)) {
+			SettingsLoadMode::Inspection
+		} else {
+			SettingsLoadMode::ReadOnly
+		};
+		let loaded = resources.load_settings(mode, &CancellationToken::new()).await?;
+		let binding = loaded.resolved.effective_binding.clone();
 		let execution_force_cancellation = CancellationToken::new();
-		Dependencies {
-			create_shortcut: resources.create_shortcut_dependencies(startup.to_owned()),
-			execute_program: resources
-				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
+
+		Ok(CommandDependencies::Existing(Box::new(Dependencies {
+			settings: loaded.resolved.clone(),
+			create_shortcut: resources.create_shortcut_dependencies(binding.clone(), startup.to_owned()),
+			execute_program: resources.execute_program(
+				binding.clone(),
+				startup.to_owned(),
+				execution_force_cancellation.clone(),
+			),
 			execution_force_cancellation,
 			initialize_environment: resources.initialize_environment_dependencies(),
 			list_settings: resources.list_settings_dependencies(),
 			get_setting: resources.get_setting_dependencies(),
-			set_game_directory: resources.set_game_directory_dependencies(),
-			install_mod: resources.install_mod_dependencies(),
-			list_effective_conflicts: resources.list_effective_conflicts_dependencies(),
-			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(),
-			explain_path: resources.explain_path_dependencies(),
-		}
+			set_game_directory: resources.set_game_directory_dependencies(loaded.clone()),
+			install_mod: resources.install_mod_dependencies(&loaded),
+			export_environment: resources.export_environment_dependencies(binding.clone()),
+			list_effective_conflicts: resources.list_effective_conflicts_dependencies(binding.clone()),
+			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(binding.clone()),
+			explain_path: resources.explain_path_dependencies(binding),
+		})))
 	}
 
 	#[tokio::test]
@@ -2345,13 +2531,13 @@ mod tests {
 		for directory in ["mods", "profile", "profile/saves", "overwrite", "cache", "temp"] {
 			create_dir_all(root.join(directory))?;
 		}
-		for file in ["plugins.txt", "loadorder.txt", "modlist.txt"] {
+		for file in ["plugins.txt", "modlist.txt"] {
 			write(root.join("profile").join(file), b"")?;
 		}
 		write(
 			root.join("profile/Fallout.ini"),
 			concat!(
-				"[General]\nbUseMyGamesDirectory=1\nSLocalSavePath=__mods_saves\\\n",
+				"[General]\nbUseMyGamesDirectory=1\nSLocalSavePath=Saves\\\n",
 				"[Archive]\nbInvalidateOlderFiles=1\nSInvalidationFile=\n",
 				"sArchiveList=Fallout - Invalidation.bsa\n",
 			),
@@ -2362,7 +2548,7 @@ mod tests {
 		}
 		write(root.join("cache/Fallout - Invalidation.bsa"), empty_bsa)?;
 		let manifest = format!(
-			"schema_version = 1\nsteam_app_id = 22380\ngame_dir = '{}'\nobserved_build_id = 1\nnexus_api_key = '{secret}'\n",
+			"schema_version = 1\ngame_dir = '{}'\nnexus_api_key = '{secret}'\n",
 			game.path().display()
 		);
 		let missing_archive = root.join("missing.zip");
@@ -2388,10 +2574,15 @@ mod tests {
 						arguments.push(OsString::from("--json"));
 					}
 					arguments.extend(command.clone());
-					let outcome = run(arguments, root.clone(), None, |environment_root| {
-						Ok(system_dependencies(environment_root, &root))
-					})
-					.await?;
+					let outcome = super::execute(
+						Cli::try_parse_from(arguments)?,
+						root.clone(),
+						None,
+						async |environment_root, command| {
+							system_dependencies(environment_root, &root, command).await
+						},
+					)
+					.await;
 					assert_eq!(outcome.status == 0, succeeds, "{}", outcome.stderr);
 					assert!(!outcome.stdout.contains(secret));
 					assert!(!outcome.stderr.contains(secret));
@@ -2411,7 +2602,7 @@ mod tests {
 			let expected_cwd = if custom {
 				temp.path().join("work")
 			} else {
-				temp.path().to_owned()
+				temp.path().join("game")
 			};
 			let expected_destination = custom.then(|| temp.path().join("links"));
 			let launcher = temp.path().join("mods.exe");
@@ -2420,48 +2611,49 @@ mod tests {
 			let observed = published.clone();
 			let executed = Arc::new(AtomicBool::new(false));
 			let observed_execution = executed.clone();
-			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _| {
+			dependencies.execute_program = Box::new(move |_, _, _, _, _, _| {
 				observed_execution.store(true, Ordering::SeqCst);
-				Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) })
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
 			});
 			let resolved_cwd = expected_cwd.clone();
 			let resolved_program = program.clone();
 			let binding = test_binding(temp.path())
 				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
-			let prepared = prepared_execution(binding.clone());
-			let settings = named_settings(binding, "Vanilla Plus");
+			dependencies.settings = named_settings(binding, "Vanilla Plus");
 			dependencies.create_shortcut = CreateShortcutDependencies {
 				locate_launcher: Arc::new(move || {
 					let launcher = launcher.clone();
 					Box::pin(async move { Ok(launcher) })
 				}),
-				resolve_launch_inputs: Arc::new(move |cwd, input, arguments, _| {
+				resolve_launch_target: Arc::new(move |input, arguments, cwd, _| {
 					assert_eq!(input.as_os_str(), "tool.exe");
-					assert_eq!(
-						cwd.as_ref().map(|value| value.as_path()),
-						Some(resolved_cwd.as_path())
-					);
+					assert_eq!(cwd.as_path(), resolved_cwd.as_path());
 					assert_eq!(
 						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
 						["", "a\"b", "雪", "--"]
 					);
-					let launch = resolved_launch(resolved_cwd.clone(), resolved_program.clone());
-					Box::pin(async move { Ok(launch) }) as PortFuture<_>
+					let target = launch_target(resolved_cwd.clone(), resolved_program.clone());
+					Box::pin(async move { Ok(target) }) as PortFuture<_>
 				}),
-				prepare_execution_environment: Arc::new(move |target, _| {
-					if custom {
-						assert!(
-							matches!(&target, OutputTarget::DataMod(name) if name.as_str() == "--Generated")
-						);
-					} else {
-						assert_eq!(target, OutputTarget::Overwrite);
-					}
-					let prepared = prepared.clone();
-					Box::pin(async move { Ok(prepared) }) as PortFuture<_>
+				prepare_environment_plan: Arc::new(move |_| {
+					Box::pin(async move {
+						let generated = ModName::new("--Generated".into())
+							.map_err(|_| report!(ErrorMarker::invalid_mod_name()))?;
+						Ok(EnvironmentPlan {
+							providers: vec![EnvironmentProvider {
+								identity: ProviderIdentity::DataMod {
+									mod_name: generated,
+									priority: ModPriority::new(0),
+								},
+								enabled: true,
+							}],
+							state: AdapterState::new(()),
+						})
+					}) as PortFuture<_>
 				}),
-				load_settings: Arc::new(move || {
-					let settings = settings.clone();
-					Box::pin(async move { Ok(settings) }) as PortFuture<_>
+				project_profile: Arc::new(|_: &EnvironmentPlan| {
+					Box::pin(async { Ok(ProfileProjection { warnings: Vec::new() }) })
+						as PortFuture<_>
 				}),
 				locate_environment_root: Arc::new(move || {
 					let root = expected_root.clone();
@@ -2578,7 +2770,10 @@ mod tests {
 			Some(temp.path().to_owned()),
 			|root| {
 				dependencies.create_shortcut = Resources::system(root.clone())
-					.create_shortcut_dependencies(temp.path().to_owned());
+					.create_shortcut_dependencies(
+						dependencies.settings.effective_binding.clone(),
+						temp.path().to_owned(),
+					);
 				Ok(dependencies)
 			},
 		)
@@ -2656,6 +2851,289 @@ mod tests {
 		);
 		assert_eq!(documents[3]["code"], "invalid_output_target");
 		assert_eq!(documents[3]["exit_code"], 1);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn help_and_version_never_construct_or_load_command_resources() {
+		for argument in ["--help", "--version"] {
+			let called = AtomicBool::new(false);
+			let result = super::run_current_process(arguments!["mods", argument], async |_, _, _| {
+				called.store(true, Ordering::SeqCst);
+				Err(report!(ErrorMarker::environment_invalid(None)))
+			})
+			.await;
+			assert!(result.is_err());
+			assert!(!called.load(Ordering::SeqCst));
+		}
+	}
+
+	#[tokio::test]
+	async fn initialization_composition_does_not_need_an_existing_manifest() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let cli = Cli::try_parse_from(arguments!["mods", "--log-level", "off", "init"])?;
+		let result = super::execute(
+			cli,
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			async move |_, command| {
+				assert!(matches!(command, super::Command::Init { .. }));
+				Ok(super::CommandDependencies::Initialize(
+					dependencies.initialize_environment,
+				))
+			},
+		)
+		.await;
+		assert_eq!(result.status, 0);
+		assert!(!temp.path().join("mods.toml").exists());
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn command_load_errors_keep_safe_output_and_execution_status() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for (code, expected) in [
+			(ErrorMarker::environment_invalid(None), 125),
+			(ErrorMarker::operation_cancelled(), 0xC000_013A),
+		] {
+			let cli = Cli::try_parse_from(arguments![
+				"mods",
+				"--log-level",
+				"off",
+				"exec",
+				"--",
+				"tool.exe"
+			])?;
+			let result = super::execute(
+				cli,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				async |_, _| Err(report!(std::io::Error::other("private source path")).context(code)),
+			)
+			.await;
+			assert_eq!(result.status, expected);
+			assert!(!result.stderr.contains("private source path"));
+		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn exec_failure_keeps_status_and_reports_retained_ini_path_without_raw_report()
+	-> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		dependencies.execute_program = Box::new(|_, _, _, _, _, _| {
+			let mut failure =
+				report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"));
+			failure.children_mut().push(report!(RetainedProfile {
+				path: PathBuf::from("C:\\private\\inis")
+			})
+			.into_dynamic()
+			.into_cloneable());
+			Box::pin(async move { Err(failure.context(ExecuteProgramError)) }) as PortFuture<_, _>
+		});
+
+		let outcome = run(
+			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+		assert_eq!(outcome.status, 125);
+		assert!(outcome.stdout.is_empty());
+		assert!(outcome
+			.stderr
+			.contains("retained_execution_inis = \"C:\\\\private\\\\inis\""));
+		assert!(outcome.stderr.contains("after all managed processes have stopped"));
+		assert!(!outcome.stderr.contains("ExecuteProgramError"));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn export_dispatch_previews_without_publication_and_publishes_quietly() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let published = Arc::new(AtomicBool::new(false));
+		for dry_run in [true, false] {
+			// The preview selects both optional kinds of content; the publication selects neither.
+			let selection = ExportSelection {
+				include_saves: dry_run,
+				include_game_data: dry_run,
+			};
+
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.export_environment =
+				export_dependencies(temp.path().join("payload"), selection, published.clone());
+
+			let arguments = if dry_run {
+				arguments![
+					"mods",
+					"--log-level",
+					"off",
+					"export",
+					"payload",
+					"--include-saves",
+					"--include-game-data",
+					"--dry-run"
+				]
+			} else {
+				arguments!["mods", "--log-level", "off", "export", "payload"]
+			};
+			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+				Ok(dependencies)
+			})
+			.await?;
+			assert_eq!(outcome.status, 0);
+			assert!(outcome.stderr.starts_with("warning [stale_plugin_entry]"));
+			if dry_run {
+				assert!(outcome.stdout.contains("files.count = 1"));
+				assert!(outcome.stdout.contains("total_bytes = 17"));
+				assert!(!published.load(Ordering::SeqCst));
+				assert!(!temp.path().join("payload").exists());
+			} else {
+				assert!(outcome.stdout.is_empty());
+				assert!(published.load(Ordering::SeqCst));
+			}
+		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_export_reports_both_outcomes_with_plugin_warnings() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for dry_run in [true, false] {
+			let selection = ExportSelection {
+				include_saves: false,
+				include_game_data: false,
+			};
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.export_environment = export_dependencies(
+				temp.path().join("payload"),
+				selection,
+				Arc::new(AtomicBool::new(false)),
+			);
+			let mut arguments = arguments!["mods", "--json", "--log-level", "off", "export", "payload"];
+			if dry_run {
+				arguments.push(OsString::from("--dry-run"));
+			}
+
+			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+				Ok(dependencies)
+			})
+			.await?;
+
+			assert_eq!(outcome.status, 0);
+			assert!(outcome.stderr.is_empty());
+			let document: Value = from_str(&outcome.stdout)?;
+			assert_eq!(document["outcome"], if dry_run { "preview" } else { "published" });
+			assert_eq!(document["total_bytes"], 17);
+			assert_eq!(
+				document["files"],
+				json!([{"path": "profile\\Fallout.ini", "bytes": 17, "provider": {"kind": "profile"}}])
+			);
+			assert_eq!(
+				document["warnings"],
+				json!([{
+					"code": "stale_plugin_entry",
+					"message": "plugins.txt entry is absent from the analytical Data view",
+					"details": {"plugin": "Missing.esp"},
+				}])
+			);
+		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_export_failure_exposes_only_allowlisted_retained_paths() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let selection = ExportSelection {
+			include_saves: false,
+			include_game_data: false,
+		};
+		dependencies.export_environment =
+			export_dependencies(temp.path().join("payload"), selection, Arc::new(AtomicBool::new(false)));
+		dependencies.export_environment.discard_staged_profile =
+			Arc::new(|_| {
+				Box::pin(async {
+					Err(report!(std::io::Error::other("private cause"))
+						.context(ErrorMarker::io_failure()))
+				})
+			});
+
+		let outcome = run(
+			arguments!["mods", "--json", "--log-level", "off", "export", "payload"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+
+		assert_eq!(outcome.status, 1);
+		assert!(outcome.stdout.is_empty());
+		assert!(!outcome.stderr.contains("private cause"));
+		let problem: Value = from_str(&outcome.stderr)?;
+		assert_eq!(problem["code"], "io_failure");
+		assert_eq!(
+			problem["details"],
+			json!({
+				"retained_export_stage": "stage",
+				"output_complete": true,
+				"output": temp.path().join("payload").display().to_string(),
+			})
+		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_exec_problem_names_the_load_order_file_and_unlisted_mod() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for with_file in [true, false] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			dependencies.execute_program = Box::new(move |_, _, _, _, _, _| {
+				Box::pin(async move {
+					if !with_file {
+						let missing = ModName::new("Missing Mod".into()).map_err(|_| {
+							report!(ErrorMarker::invalid_mod_name())
+								.context(ExecuteProgramError)
+						})?;
+						return Err(report!(
+							ErrorMarker::environment_invalid(None).with_mod_name(missing)
+						)
+						.context(ExecuteProgramError));
+					}
+
+					let mut failure = report!(ErrorMarker::io_failure().with_phase("load_order"));
+					failure.children_mut().push(report!(LoadOrderFile {
+						path: PathBuf::from("Data/FalloutNV.esm"),
+					})
+					.into_dynamic()
+					.into_cloneable());
+					Err(failure.context(ExecuteProgramError))
+				}) as PortFuture<_, _>
+			});
+
+			let outcome = run(
+				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_| Ok(dependencies),
+			)
+			.await?;
+
+			let problem: Value = from_str(&outcome.stderr)?;
+			if with_file {
+				assert_eq!(problem["code"], "io_failure");
+				assert_eq!(
+					problem["details"],
+					json!({"phase": "load_order", "load_order_file": "Data/FalloutNV.esm"})
+				);
+			} else {
+				assert_eq!(problem["code"], "environment_invalid");
+				assert_eq!(problem["details"], json!({"mod_name": "Missing Mod"}));
+			}
+		}
 		Ok(())
 	}
 }

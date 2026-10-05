@@ -1,45 +1,41 @@
 use crate::Resources;
 use crate::execution_adapter::ExecutionAdapter;
-use application::execution::ExecuteProgramDependencies;
+use application::execution::ExecuteProgram;
+use domain::GameBinding;
 use infrastructure_execution::ExecutionCapture;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 impl Resources {
-	pub fn captured_execution_dependencies(
+	/// Composes exec with private output capture. The use case runs on its own
+	/// execution thread when the returned entry point is called.
+	pub fn captured_execute_program(
 		&self,
+		binding: GameBinding,
 		startup_directory: PathBuf,
 		force_cancellation: CancellationToken,
-	) -> (ExecuteProgramDependencies, Arc<ExecutionCapture>) {
+	) -> (ExecuteProgram, Arc<ExecutionCapture>) {
 		let capture = Arc::new(ExecutionCapture::new(&self.root.as_path().join("temp")));
-		let adapter = ExecutionAdapter::new(self.root.clone(), self.game_platform.clone(), startup_directory)
+
+		let execute_program = ExecutionAdapter::new(self.root.clone(), binding, startup_directory)
 			.with_force_cancellation(force_cancellation)
-			.with_capture(capture.clone());
+			.with_capture(capture.clone())
+			.into_execute_program();
 
-		let dependencies = ExecuteProgramDependencies {
-			report_progress: None,
-			resolve_launch_inputs: adapter.resolve_port(),
-			prepare_execution_environment: adapter.prepare_port(),
-			run_managed_program: adapter.run_port(),
-		};
-
-		(dependencies, capture)
+		(execute_program, capture)
 	}
 
-	pub fn execute_program_dependencies(
+	/// Composes exec with inherited standard streams. The use case runs on its
+	/// own execution thread when the returned entry point is called.
+	pub fn execute_program(
 		&self,
+		binding: GameBinding,
 		startup_directory: PathBuf,
 		force_cancellation: CancellationToken,
-	) -> ExecuteProgramDependencies {
-		let adapter = ExecutionAdapter::new(self.root.clone(), self.game_platform.clone(), startup_directory)
-			.with_force_cancellation(force_cancellation);
-
-		ExecuteProgramDependencies {
-			report_progress: None,
-			resolve_launch_inputs: adapter.resolve_port(),
-			prepare_execution_environment: adapter.prepare_port(),
-			run_managed_program: adapter.run_port(),
-		}
+	) -> ExecuteProgram {
+		ExecutionAdapter::new(self.root.clone(), binding, startup_directory)
+			.with_force_cancellation(force_cancellation)
+			.into_execute_program()
 	}
 }

@@ -1,87 +1,66 @@
-use crate::execution::ExecuteProgramOutput;
+use crate::errors::ErrorMarker;
+use crate::ports::AdapterState;
+use crate::ports::EnvironmentPlan;
 use crate::ports::PortFuture;
-use crate::ports::ReportProgress;
-use domain::DataRelativePath;
-use domain::GameBinding;
-use domain::OutputTarget;
+use crate::ports::StagedProfile;
+use domain::ModName;
+use domain::ProcessStatus;
 use domain::Program;
 use domain::ProgramArgument;
-use domain::ProviderIdentity;
-use domain::ProviderReference;
 use domain::WorkingDirectory;
-use std::any::Any;
-use std::ffi::OsString;
+use rootcause::Report;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
-pub struct ResolvedLaunch {
+/// Only the launching adapter reads `state`.
+pub struct LaunchTarget {
 	pub program: PathBuf,
 	pub working_directory: PathBuf,
-	pub command_line: OsString,
-	pub target_lease: Arc<dyn Send + Sync>,
+	pub state: AdapterState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionProvider {
-	pub identity: ProviderIdentity,
-	pub root: PathBuf,
-	pub enabled: bool,
+/// A configured virtual file system. Dropping it before launch closes it.
+pub struct VirtualFileSystem(pub AdapterState);
+
+/// A launched program that has not been resumed yet.
+pub struct RunningProgram(pub AdapterState);
+
+/// Private output streams that must be finished after profile preservation.
+pub struct ProgramOutput(pub AdapterState);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramExit {
+	pub status: ProcessStatus,
+	/// Supervision terminated the Job after cancellation.
+	pub forced: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionVisibleFile {
-	pub path: DataRelativePath,
-	pub physical_path: PathBuf,
-	pub modified: SystemTime,
+/// Supervision results after the program handle is released.
+///
+/// `job_drained` is `Ok(true)` only when every managed process is known to have
+/// stopped. The staged profile may be preserved only in that case.
+pub struct ProgramSupervision {
+	pub exit: Result<ProgramExit, Report<ErrorMarker>>,
+	pub job_drained: Result<bool, Report>,
+	pub output: ProgramOutput,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionProfileText {
-	pub name: &'static str,
-	pub text: String,
-}
-
-/// Validated, read-only inputs for managed execution.
-/// Winners and visible files describe the analytical Data projection, not observed
-/// runtime visibility. Profile texts come from canonical Profile State.
-/// This is not a coherent concurrent filesystem snapshot. Revalidation must make a
-/// fresh preparation immediately before process creation.
-#[derive(Debug, Clone)]
-pub struct PreparedExecution {
-	pub game_binding: GameBinding,
-	pub providers: Vec<ExecutionProvider>,
-	pub winners: Vec<ProviderReference>,
-	pub visible_files: Vec<ExecutionVisibleFile>,
-	pub profile_files: Vec<ExecutionProfileText>,
-	pub profile_directory: PathBuf,
-	pub data_directory: PathBuf,
-	pub cache_directory: PathBuf,
-	pub revalidation_basis: Arc<dyn Any + Send + Sync>,
-}
-
-pub type ResolveLaunchInputs = Arc<
-	dyn Fn(
-			Option<WorkingDirectory>,
-			Program,
-			Vec<ProgramArgument>,
-			CancellationToken,
-		) -> PortFuture<ResolvedLaunch>
+pub type ResolveLaunchTarget = Arc<
+	dyn Fn(Program, Vec<ProgramArgument>, WorkingDirectory, CancellationToken) -> PortFuture<LaunchTarget>
 		+ Send
 		+ Sync,
 >;
-pub type PrepareExecutionEnvironment =
-	Arc<dyn Fn(OutputTarget, CancellationToken) -> PortFuture<PreparedExecution> + Send + Sync>;
-pub type RunManagedProgram = Arc<
-	dyn Fn(
-			OutputTarget,
-			ResolvedLaunch,
-			PreparedExecution,
-			Option<ReportProgress>,
-			CancellationToken,
-		) -> PortFuture<ExecuteProgramOutput>
+pub type CreateVirtualFileSystem = Arc<
+	dyn Fn(EnvironmentPlan, &StagedProfile, Option<ModName>, CancellationToken) -> PortFuture<VirtualFileSystem>
 		+ Send
 		+ Sync,
 >;
+pub type LaunchProgram = Arc<dyn Fn(VirtualFileSystem, LaunchTarget) -> PortFuture<RunningProgram> + Send + Sync>;
+/// Fails only for a handle from another adapter. Supervision and drain failures
+/// are reported inside [`ProgramSupervision`] after the program handle is released.
+pub type SuperviseProgram =
+	Arc<dyn Fn(RunningProgram, CancellationToken) -> PortFuture<ProgramSupervision> + Send + Sync>;
+pub type PreserveExecutionProfile = Arc<dyn Fn(StagedProfile) -> PortFuture<()> + Send + Sync>;
+pub type FinishProgramOutput = Arc<dyn Fn(ProgramOutput) -> PortFuture<()> + Send + Sync>;
+pub type CheckProfileState = Arc<dyn Fn(CancellationToken) -> PortFuture<()> + Send + Sync>;

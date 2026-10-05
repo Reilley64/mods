@@ -17,11 +17,9 @@ pub enum ErrorCode {
 	EnvironmentRootUnsafe,
 	EnvironmentSchemaUnsupported,
 	EnvironmentInvalid,
-	EnvironmentPublicationFailed,
 	ManualCleanupRequired,
 	GameInstallNotFound,
 	GameInstallInvalid,
-	GameBuildMismatch,
 	SettingUnknown,
 	SettingReadOnly,
 	SettingValueInvalid,
@@ -71,11 +69,9 @@ impl ErrorCode {
 			Self::EnvironmentRootUnsafe => "environment_root_unsafe",
 			Self::EnvironmentSchemaUnsupported => "environment_schema_unsupported",
 			Self::EnvironmentInvalid => "environment_invalid",
-			Self::EnvironmentPublicationFailed => "environment_publication_failed",
 			Self::ManualCleanupRequired => "manual_cleanup_required",
 			Self::GameInstallNotFound => "game_install_not_found",
 			Self::GameInstallInvalid => "game_install_invalid",
-			Self::GameBuildMismatch => "game_build_mismatch",
 			Self::SettingUnknown => "setting_unknown",
 			Self::SettingReadOnly => "setting_read_only",
 			Self::SettingValueInvalid => "setting_value_invalid",
@@ -124,8 +120,6 @@ pub struct ErrorMarker {
 	phase: Option<&'static str>,
 	field: Option<&'static str>,
 	setting_key: Option<&'static str>,
-	expected_build_id: Option<u64>,
-	actual_build_id: Option<u64>,
 	message_override: Option<&'static str>,
 	selection: Option<Box<SelectionDetails>>,
 }
@@ -138,8 +132,6 @@ impl ErrorMarker {
 			phase: None,
 			field: None,
 			setting_key: None,
-			expected_build_id: None,
-			actual_build_id: None,
 			message_override: None,
 			selection: None,
 		}
@@ -190,12 +182,6 @@ impl ErrorMarker {
 			..Self::simple(ErrorCode::EnvironmentInvalid)
 		}
 	}
-	pub fn environment_publication_failed(phase: Option<&'static str>) -> Self {
-		Self {
-			phase,
-			..Self::simple(ErrorCode::EnvironmentPublicationFailed)
-		}
-	}
 	pub fn manual_cleanup_required() -> Self {
 		Self::simple(ErrorCode::ManualCleanupRequired)
 	}
@@ -209,19 +195,6 @@ impl ErrorMarker {
 		Self {
 			field: Some("game_dir"),
 			..Self::simple(ErrorCode::GameInstallInvalid)
-		}
-	}
-	pub fn game_build_mismatch(expected: u64, actual: u64) -> Self {
-		Self {
-			code: ErrorCode::GameBuildMismatch,
-			mod_name: None,
-			phase: None,
-			field: None,
-			setting_key: None,
-			expected_build_id: Some(expected),
-			actual_build_id: Some(actual),
-			message_override: None,
-			selection: None,
 		}
 	}
 	pub fn setting_unknown() -> Self {
@@ -401,12 +374,6 @@ impl ErrorMarker {
 	pub fn supplied_sequence(&self) -> Option<u64> {
 		self.selection.as_ref()?.supplied_sequence
 	}
-	pub fn build_ids(&self) -> Option<(u64, u64)> {
-		let (Some(expected), Some(actual)) = (self.expected_build_id, self.actual_build_id) else {
-			return None;
-		};
-		Some((expected, actual))
-	}
 
 	pub fn message(&self) -> &'static str {
 		if let Some(message) = self.message_override {
@@ -429,11 +396,9 @@ impl ErrorMarker {
 			ErrorCode::EnvironmentRootUnsafe => "environment folder is unsafe",
 			ErrorCode::EnvironmentSchemaUnsupported => "environment schema is unsupported",
 			ErrorCode::EnvironmentInvalid => "environment is invalid",
-			ErrorCode::EnvironmentPublicationFailed => "environment publication failed",
 			ErrorCode::ManualCleanupRequired => "unfinished operation requires manual cleanup",
 			ErrorCode::GameInstallNotFound => "game installation was not found",
 			ErrorCode::GameInstallInvalid => "game installation is invalid",
-			ErrorCode::GameBuildMismatch => "game build does not match the recorded build",
 			ErrorCode::SettingUnknown => "setting is unknown",
 			ErrorCode::SettingReadOnly => "setting is read-only",
 			ErrorCode::SettingValueInvalid => "setting value is invalid",

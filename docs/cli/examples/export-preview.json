@@ -1,0 +1,42 @@
+{
+  "outcome": "preview",
+  "output": "D:\\Exports\\Mojave",
+  "total_bytes": 1048659,
+  "files": [
+    {
+      "path": "Data\\Fallout - Invalidation.bsa",
+      "bytes": 83,
+      "provider": {
+        "kind": "generated_invalidation"
+      }
+    },
+    {
+      "path": "Data\\Textures\\rifle.dds",
+      "bytes": 1048576,
+      "provider": {
+        "kind": "data_mod",
+        "mod_name": "Mojave Textures",
+        "priority": {
+          "kind": "regular",
+          "priority": 0
+        }
+      }
+    },
+    {
+      "path": "profile\\plugins.txt",
+      "bytes": 0,
+      "provider": {
+        "kind": "profile"
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "code": "stale_plugin_entry",
+      "message": "plugins.txt entry is absent from the analytical Data view",
+      "details": {
+        "plugin": "Missing.esp"
+      }
+    }
+  ]
+}

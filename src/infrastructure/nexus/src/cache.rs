@@ -9,13 +9,16 @@ use rootcause::prelude::ResultExt;
 use rootcause::report;
 use serde::Deserialize;
 use serde::Serialize;
-use std::fs;
 use std::io::ErrorKind;
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio::fs::create_dir;
+use tokio::fs::metadata;
+use tokio::fs::read_to_string;
+use tokio::fs::symlink_metadata;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Serialize, Deserialize)]
@@ -55,7 +58,7 @@ impl CompletedMetadata {
 	}
 }
 
-pub(crate) fn directory(root: &EnvironmentRoot, create: bool) -> Result<Option<PathBuf>, ErrorMarker> {
+pub(crate) async fn directory(root: &EnvironmentRoot, create: bool) -> Result<Option<PathBuf>, ErrorMarker> {
 	let mut path = PathBuf::new();
 	for component in root.as_path().components() {
 		path.push(component);
@@ -63,25 +66,25 @@ pub(crate) fn directory(root: &EnvironmentRoot, create: bool) -> Result<Option<P
 		if matches!(component, Component::Prefix(_)) {
 			continue;
 		}
-		require_kind(&path, true)?;
+		require_kind(&path, true).await?;
 	}
 	for name in ["cache", "downloads"] {
 		path.push(name);
 		if create
-			&& let Err(error) = fs::create_dir(&path)
+			&& let Err(error) = create_dir(&path).await
 			&& error.kind() != ErrorKind::AlreadyExists
 		{
 			return Err(report!(error).context(ErrorMarker::io_failure()));
 		}
-		if !require_kind(&path, true)? {
+		if !require_kind(&path, true).await? {
 			return Ok(None);
 		}
 	}
 	Ok(Some(path))
 }
 
-pub(crate) fn require_kind(path: &Path, directory: bool) -> Result<bool, ErrorMarker> {
-	let metadata = match fs::symlink_metadata(path) {
+pub(crate) async fn require_kind(path: &Path, directory: bool) -> Result<bool, ErrorMarker> {
+	let metadata = match symlink_metadata(path).await {
 		Ok(metadata) => metadata,
 		Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
 		Err(error) => return Err(report!(error).context(ErrorMarker::io_failure())),
@@ -107,7 +110,7 @@ pub(crate) fn identity_name(request: &NexusRequest) -> Result<String, ErrorMarke
 	Ok(format!("newvegas-{}-{file_id}", request.mod_id))
 }
 
-pub(crate) fn read(
+pub(crate) async fn read(
 	root: &EnvironmentRoot,
 	request: &NexusRequest,
 	cancellation: &CancellationToken,
@@ -116,27 +119,28 @@ pub(crate) fn read(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 	let name = identity_name(request)?;
-	let Some(directory) = directory(root, false)? else {
+	let Some(directory) = directory(root, false).await? else {
 		return Ok(None);
 	};
 	let entry = directory.join(name);
-	if !require_kind(&entry, true)? {
+	if !require_kind(&entry, true).await? {
 		return Ok(None);
 	}
 
 	let metadata_path = entry.join("provenance.toml");
 	let archive_path = entry.join("archive");
-	if !require_kind(&metadata_path, false)? || !require_kind(&archive_path, false)? {
+	if !require_kind(&metadata_path, false).await? || !require_kind(&archive_path, false).await? {
 		return Ok(None);
 	}
 
-	let metadata: CompletedMetadata =
-		toml::from_str(&fs::read_to_string(metadata_path).context(ErrorMarker::io_failure())?)
-			.context(ErrorMarker::environment_invalid(Some("download_cache")))?;
-	if metadata.game_domain != request.game_domain
-		|| metadata.mod_id != request.mod_id
-		|| Some(metadata.file_id) != request.file_id
-		|| fs::metadata(&archive_path).context(ErrorMarker::io_failure())?.len() != metadata.archive_size
+	let text = read_to_string(metadata_path).await.context(ErrorMarker::io_failure())?;
+	let completed: CompletedMetadata =
+		toml::from_str(&text).context(ErrorMarker::environment_invalid(Some("download_cache")))?;
+	let archive_size = metadata(&archive_path).await.context(ErrorMarker::io_failure())?.len();
+	if completed.game_domain != request.game_domain
+		|| completed.mod_id != request.mod_id
+		|| Some(completed.file_id) != request.file_id
+		|| archive_size != completed.archive_size
 	{
 		return Err(report!(ErrorMarker::environment_invalid(Some("download_cache"))));
 	}
@@ -144,7 +148,7 @@ pub(crate) fn read(
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
 
-	let provenance = metadata.provenance();
+	let provenance = completed.provenance();
 	let suggested_name = if provenance.file_name.is_empty() {
 		provenance.mod_name.clone()
 	} else {
@@ -162,6 +166,7 @@ pub(crate) fn read(
 mod tests {
 	use super::*;
 	use application::ErrorCode;
+	use std::fs;
 	#[cfg(unix)]
 	use std::os::unix::fs::symlink;
 	use tempfile::TempDir;
@@ -174,37 +179,41 @@ mod tests {
 		}
 	}
 	#[cfg(windows)]
-	#[test]
-	fn canonical_windows_root_keeps_verbatim_prefix_until_root_is_complete() {
+	#[tokio::test]
+	async fn canonical_windows_root_keeps_verbatim_prefix_until_root_is_complete() {
 		let temp = TempDir::new().expect("temporary environment");
 		let canonical = temp.path().canonicalize().expect("canonical Windows path");
 		assert!(matches!(canonical.components().next(), Some(Component::Prefix(_))));
 		let root = EnvironmentRoot::new(canonical).expect("environment root");
 
 		let downloads = directory(&root, true)
+			.await
 			.expect("canonical cache directory")
 			.expect("downloads");
 
 		assert_eq!(downloads, root.as_path().join("cache/downloads"));
 		assert!(downloads.is_dir());
 		assert!(read(&root, &request(42, 7), &CancellationToken::new())
+			.await
 			.expect("empty cache")
 			.is_none());
 	}
 
-	#[test]
-	fn cache_requires_exact_identity_and_complete_bytes_and_ignores_partial_directories() {
+	#[tokio::test]
+	async fn cache_requires_exact_identity_and_complete_bytes_and_ignores_partial_directories() {
 		let temp = TempDir::new().expect("root");
 		let root = EnvironmentRoot::new(temp.path().canonicalize().expect("canonical")).expect("root");
-		let downloads = directory(&root, true).expect("downloads").expect("path");
+		let downloads = directory(&root, true).await.expect("downloads").expect("path");
 		fs::create_dir(downloads.join(".partial-unfinished")).expect("partial");
 		assert!(read(&root, &request(42, 7), &CancellationToken::new())
+			.await
 			.expect("read")
 			.is_none());
 		let entry = downloads.join("newvegas-42-7");
 		fs::create_dir(&entry).expect("entry");
 		fs::write(entry.join("archive"), b"bytes").expect("archive");
 		assert!(read(&root, &request(42, 7), &CancellationToken::new())
+			.await
 			.expect("incomplete")
 			.is_none());
 		let provenance = NexusProvenance {
@@ -222,24 +231,29 @@ mod tests {
 		)
 		.expect("write");
 		assert!(read(&root, &request(42, 7), &CancellationToken::new())
+			.await
 			.expect("complete")
 			.is_some());
 		assert!(read(&root, &request(43, 7), &CancellationToken::new())
+			.await
 			.expect("other mod")
 			.is_none());
 		assert!(read(&root, &request(42, 8), &CancellationToken::new())
+			.await
 			.expect("other file")
 			.is_none());
-		let assert_corrupt_entry = || {
-			let error = read(&root, &request(42, 7), &CancellationToken::new()).expect_err("corrupt entry");
+		let assert_corrupt_entry = async || {
+			let error = read(&root, &request(42, 7), &CancellationToken::new())
+				.await
+				.expect_err("corrupt entry");
 			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
 			assert_eq!(error.current_context().phase(), Some("download_cache"));
 		};
 		fs::write(entry.join("archive"), b"shortened").expect("truncate");
-		assert_corrupt_entry();
+		assert_corrupt_entry().await;
 		fs::write(entry.join("archive"), b"bytes").expect("restore archive");
 		fs::write(entry.join("provenance.toml"), "game_domain = '").expect("malformed metadata");
-		assert_corrupt_entry();
+		assert_corrupt_entry().await;
 		let other_identity = NexusProvenance {
 			mod_id: 43,
 			..provenance
@@ -249,11 +263,12 @@ mod tests {
 			toml::to_string(&CompletedMetadata::from_provenance(&other_identity, 5)).expect("metadata"),
 		)
 		.expect("mismatched identity");
-		assert_corrupt_entry();
+		assert_corrupt_entry().await;
 		let token = CancellationToken::new();
 		token.cancel();
 		assert_eq!(
 			read(&root, &request(42, 7), &token)
+				.await
 				.expect_err("cancelled")
 				.current_context()
 				.code(),
@@ -261,15 +276,15 @@ mod tests {
 		);
 	}
 	#[cfg(unix)]
-	#[test]
-	fn cache_rejects_redirected_download_directory() {
+	#[tokio::test]
+	async fn cache_rejects_redirected_download_directory() {
 		let temp = TempDir::new().expect("root");
 		let outside = TempDir::new().expect("outside");
 		let root = EnvironmentRoot::new(temp.path().canonicalize().expect("canonical")).expect("root");
 		fs::create_dir(root.as_path().join("cache")).expect("cache");
 		symlink(outside.path(), root.as_path().join("cache/downloads")).expect("link");
-		assert!(directory(&root, true).is_err());
-		assert!(read(&root, &request(42, 7), &CancellationToken::new()).is_err());
+		assert!(directory(&root, true).await.is_err());
+		assert!(read(&root, &request(42, 7), &CancellationToken::new()).await.is_err());
 		assert_eq!(fs::read_dir(outside.path()).expect("outside entries").count(), 0);
 	}
 }

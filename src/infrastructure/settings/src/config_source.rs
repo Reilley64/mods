@@ -15,9 +15,7 @@ pub(crate) struct RawManifest {
 	pub nexus_api_key: Option<String>,
 	pub schema_version: u32,
 	pub name: Option<String>,
-	pub steam_app_id: u32,
 	pub game_dir: String,
-	pub observed_build_id: u64,
 }
 
 pub(crate) fn read_sources(
@@ -95,7 +93,7 @@ mod tests {
 
 	#[test]
 	fn nexus_override_is_secret_and_does_not_shadow_game_directory() {
-		let manifest = "schema_version=1\nsteam_app_id=22380\ngame_dir='game'\nobserved_build_id=1\nnexus_api_key='synthetic-stored-key'";
+		let manifest = "schema_version=1\ngame_dir='game'\nnexus_api_key='synthetic-stored-key'";
 		let environment = vec![(
 			OsString::from("MODS_NEXUS_API_KEY"),
 			OsString::from("synthetic-override-key"),
@@ -163,7 +161,7 @@ mod tests {
 			initialization_override(&empty_and_set).ok(),
 			Some(Some("game".to_owned()))
 		);
-		let manifest = "schema_version=1\nsteam_app_id=22380\ngame_dir='game'\nobserved_build_id=1\nnexus_api_key='synthetic-stored-key'";
+		let manifest = "schema_version=1\ngame_dir='game'\nnexus_api_key='synthetic-stored-key'";
 		let environment = vec![
 			(OsString::from("MODS_GAME_DIR"), OsString::from("")),
 			(OsString::from("MODS_NEXUS_API_KEY"), OsString::from("")),

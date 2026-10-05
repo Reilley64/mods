@@ -1,5 +1,8 @@
+#[cfg(any(windows, test))]
 use crate::PathMapping;
+use application::ports::ProfileWarning;
 use domain::DataRelativePath;
+use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
 use domain::profile_test_file_slots;
 use rootcause::Result;
@@ -8,40 +11,44 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
+#[cfg(any(windows, test))]
 use std::path::Path;
-use std::time::SystemTime;
 
-const PROFILE_FILES: [&str; 8] = [
+const PROFILE_FILES: [&str; 7] = [
 	"Fallout.ini",
 	"FalloutPrefs.ini",
 	"FalloutCustom.ini",
 	"GECKCustom.ini",
 	"GECKPrefs.ini",
 	"plugins.txt",
-	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
+#[cfg(any(windows, test))]
 const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
 
 /// Decoded canonical text. The caller must reject decoding failures and use the
-/// Windows active code page for plugins.txt and UTF-8 for loadorder.txt.
+/// Windows active code page for plugins.txt.
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileText<'a> {
 	pub name: &'a str,
 	pub text: &'a str,
 }
 
-/// An analytical Data winner with backing-file modification time, not observed runtime visibility.
+/// An analytical Data winner not observed runtime visibility.
 #[derive(Debug, Clone)]
 pub struct VisibleProfileFile {
 	pub path: DataRelativePath,
-	pub modified: SystemTime,
 }
 
-/// Resolved Fallout-specific directories and decoded state; no save contents.
-pub struct ProfileConfigurationInput<'a> {
+/// Decoded canonical profile state and the analytical Data winners; no save contents.
+pub struct ProfileProjectionInput<'a> {
 	pub files: &'a [ProfileText<'a>],
 	pub visible_files: &'a [VisibleProfileFile],
+}
+
+/// Resolved Fallout-specific directories for the virtual file system.
+#[cfg(any(windows, test))]
+pub struct ProfileMappingInput<'a> {
 	pub profile_directory: &'a Path,
 	pub documents_directory: &'a Path,
 	pub local_app_data_directory: &'a Path,
@@ -63,67 +70,54 @@ pub struct EffectivePlugin {
 	pub activation_sources: Vec<ActivationSource>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProfileWarning {
-	Unavailable {
-		file: String,
-		plugin: String,
-	},
-	Duplicate {
-		file: String,
-		plugin: String,
-	},
-	Unlisted {
-		plugin: String,
-	},
-	/// The analytical projection is advisory; virtual timestamps do not enforce its order.
-	LoadOrderNotEnforced,
-}
-
+/// The advisory analytical plugin projection.
 #[derive(Debug)]
-pub struct ProfileConfiguration {
-	pub profile_directories: Vec<PathMapping>,
-	pub profile_files: Vec<PathMapping>,
-	pub saves: PathMapping,
-	pub invalidation_mapping: PathMapping,
+pub struct ProjectedProfile {
 	pub plugins: Vec<EffectivePlugin>,
 	pub warnings: Vec<ProfileWarning>,
 }
 
+/// Named profile mappings, the save route, and the reserved archive mapping.
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+pub struct ProfileMappings {
+	pub profile_directories: Vec<PathMapping>,
+	pub profile_files: Vec<PathMapping>,
+	pub saves: PathMapping,
+	pub invalidation_mapping: PathMapping,
+}
+
 /// A canonical file diagnostic. Line zero identifies a missing key or input.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileConfigurationError {
+pub struct ProfileProjectionError {
 	pub file: String,
 	pub line: usize,
 	pub value: String,
 	pub expected: &'static str,
 }
 
-impl fmt::Display for ProfileConfigurationError {
+impl fmt::Display for ProfileProjectionError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "{}:{}: expected {}", self.file, self.line, self.expected)
 	}
 }
-impl Error for ProfileConfigurationError {}
+impl Error for ProfileProjectionError {}
 
-/// Builds canonical profile mappings and an advisory analytical plugin projection.
-/// The projection does not establish runtime visibility, activation, or order and
-/// does not edit canonical state or select the files used by profile mappings.
+/// Validates canonical profile state and builds an advisory analytical plugin
+/// projection. The projection does not establish runtime visibility,
+/// activation, or order, and it does not edit canonical state.
 ///
 /// # Errors
 ///
-/// Rejects malformed plugin lists, invalid routing/invalidation keys, duplicate
-/// inputs, and a visible provider occupying the reserved invalidation path.
-pub fn build_profile_configuration(
-	input: ProfileConfigurationInput<'_>,
-) -> Result<ProfileConfiguration, ProfileConfigurationError> {
+/// Rejects malformed plugin lists, invalid routing keys, and duplicate inputs.
+pub fn build_profile_projection(input: ProfileProjectionInput<'_>) -> Result<ProjectedProfile, ProfileProjectionError> {
 	let mut profile_texts = HashMap::new();
 	for file in input.files {
 		let key = case_fold_key(file.name);
 		if !PROFILE_FILES.iter().any(|name| name.eq_ignore_ascii_case(file.name))
 			|| profile_texts.insert(key, file.text).is_some()
 		{
-			return Err(report!(ProfileConfigurationError {
+			return Err(report!(ProfileProjectionError {
 				file: file.name.into(),
 				line: 0,
 				value: file.name.into(),
@@ -132,78 +126,17 @@ pub fn build_profile_configuration(
 		}
 	}
 
-	let required = [
-		("Archive", "bInvalidateOlderFiles", Some("1")),
-		("Archive", "SInvalidationFile", Some("")),
-		("Archive", "sArchiveList", None),
-		("General", "bUseMyGamesDirectory", Some("1")),
-		("General", "SLocalSavePath", Some("__mods_saves\\")),
-	];
 	let mut test_files = Vec::new();
 	for name in PROFILE_FILES.iter().take(5) {
 		let text = profile_texts.get(&case_fold_key(name)).copied().unwrap_or_default();
-		let mut section = "";
-		let mut occurrences = [0; 5];
-		for (index, line) in text.lines().enumerate() {
-			let line = line.trim();
-			if line.starts_with([';', '#']) {
-				continue;
-			}
-			if let Some(header) = line.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
-				section = header.trim();
-				continue;
-			}
-			let Some((key, value)) = line.split_once('=') else {
-				continue;
-			};
-			let (key, value) = (key.trim(), value.trim());
-			for (setting, (expected_section, expected_key, fixed)) in required.iter().enumerate() {
-				if !key.eq_ignore_ascii_case(expected_key) {
-					continue;
-				}
-				let controlled = *name == "Fallout.ini"
-					|| *name == "FalloutCustom.ini" || (*name == "FalloutPrefs.ini"
-					&& setting >= 3);
-				if !controlled {
-					continue;
-				}
-				occurrences[setting] += 1;
-				let archives: Vec<_> = value
-					.split(',')
-					.map(str::trim)
-					.filter(|value| !value.is_empty())
-					.collect();
-				let value_valid = if let Some(expected) = fixed {
-					value == *expected
-				} else {
-					archives.first()
-						.is_some_and(|first| first.eq_ignore_ascii_case(INVALIDATION_ARCHIVE))
-						&& archives
-							.iter()
-							.filter(|archive| {
-								archive.eq_ignore_ascii_case(INVALIDATION_ARCHIVE)
-							})
-							.count() == 1
-				};
-				if *name != "Fallout.ini"
-					|| !section.eq_ignore_ascii_case(expected_section)
-					|| occurrences[setting] != 1 || !value_valid
-				{
-					return Err(report!(ProfileConfigurationError {
-						file: (*name).into(),
-						line: index + 1,
-						value: value.into(),
-						expected: "unique approved routing/archive key in its Fallout.ini section; no overriding key"
-					}));
-				}
-			}
-		}
-		if *name == "Fallout.ini" && occurrences != [1; 5] {
-			return Err(report!(ProfileConfigurationError {
+		if ["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"].contains(name)
+			&& !canonical_profile_routing_valid(name, text)
+		{
+			return Err(report!(ProfileProjectionError {
 				file: (*name).into(),
 				line: 0,
 				value: String::new(),
-				expected: "all five required archive and save routing keys"
+				expected: "canonical normal Saves routing without conflicting overrides"
 			}));
 		}
 		for (slot, value) in profile_test_file_slots(text).into_iter().enumerate() {
@@ -221,14 +154,12 @@ pub fn build_profile_configuration(
 
 	let mut visible = HashMap::new();
 	for file in input.visible_files {
-		if file.path.comparison_key() == case_fold_key(INVALIDATION_ARCHIVE)
-			|| visible.insert(file.path.comparison_key(), file).is_some()
-		{
-			return Err(report!(ProfileConfigurationError {
+		if visible.insert(file.path.comparison_key(), file).is_some() {
+			return Err(report!(ProfileProjectionError {
 				file: "Data".into(),
 				line: 0,
 				value: file.path.to_string(),
-				expected: "unique effective Data file outside reserved invalidation path"
+				expected: "unique effective Data file"
 			}));
 		}
 	}
@@ -236,74 +167,60 @@ pub fn build_profile_configuration(
 	let mut warnings = Vec::new();
 	let mut explicitly_enabled_plugins = HashSet::new();
 	let mut ordered_plugins = Vec::new();
-	for name in ["plugins.txt", "loadorder.txt"] {
-		let text = profile_texts.get(name).copied().unwrap_or_default();
-		if text.replace("\r\n", "").contains(['\r', '\n']) {
-			return Err(report!(ProfileConfigurationError {
-				file: name.into(),
-				line: 0,
-				value: String::new(),
-				expected: "CRLF line endings"
-			}));
-		}
-		let mut seen = HashSet::new();
-		let mut duplicate_warnings = HashSet::new();
-		for (index, line) in text.split("\r\n").enumerate() {
-			if line.is_empty() || line.starts_with('#') {
-				continue;
-			}
-			let Some(path) = plugin_path(line) else {
-				return Err(report!(ProfileConfigurationError {
-					file: name.into(),
-					line: index + 1,
-					value: line.into(),
-					expected: "bare .esm or .esp filename"
-				}));
-			};
-			let key = path.comparison_key().to_owned();
-			if !seen.insert(key.clone()) {
-				if duplicate_warnings.insert(key) {
-					warnings.push(ProfileWarning::Duplicate {
-						file: name.into(),
-						plugin: line.into(),
-					});
-				}
-				continue;
-			}
-			let Some(file) = visible.get(key.as_str()) else {
-				warnings.push(ProfileWarning::Unavailable {
-					file: name.into(),
-					plugin: line.into(),
-				});
-				continue;
-			};
-			if name == "plugins.txt" {
-				explicitly_enabled_plugins.insert(key);
-			} else {
-				ordered_plugins.push(*file);
-			}
-		}
+	let name = "plugins.txt";
+	let text = profile_texts.get(name).copied().unwrap_or_default();
+	let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+
+	if text.replace("\r\n", "").contains(['\r', '\n']) {
+		return Err(report!(ProfileProjectionError {
+			file: name.into(),
+			line: 0,
+			value: String::new(),
+			expected: "CRLF line endings"
+		}));
 	}
 
+	let mut seen = HashSet::new();
+	let mut duplicate_warnings = HashSet::new();
+	for (index, line) in text.split("\r\n").enumerate() {
+		if line.is_empty() || line.starts_with('#') {
+			continue;
+		}
+		let path = plugin_path(line).ok_or_else(|| {
+			report!(ProfileProjectionError {
+				file: name.into(),
+				line: index + 1,
+				value: line.into(),
+				expected: "bare .esm or .esp filename"
+			})
+		})?;
+		let key = path.comparison_key().to_owned();
+		if !seen.insert(key.clone()) {
+			if duplicate_warnings.insert(key) {
+				warnings.push(ProfileWarning::Duplicate { plugin: line.into() });
+			}
+			continue;
+		}
+		let Some(file) = visible.get(key.as_str()) else {
+			warnings.push(ProfileWarning::Unavailable { plugin: line.into() });
+			continue;
+		};
+		explicitly_enabled_plugins.insert(key);
+		ordered_plugins.push(*file);
+	}
+
+	// `plugins.txt` order is the load order. Other present plugins are inactive
+	// unless another source activates them, and they come after the listed ones.
 	let listed: HashSet<_> = ordered_plugins.iter().map(|file| file.path.comparison_key()).collect();
-	let mut unlisted: Vec<_> = input
+	let unlisted: Vec<_> = input
 		.visible_files
 		.iter()
 		.filter(|file| {
 			plugin_path(file.path.as_str()).is_some() && !listed.contains(file.path.comparison_key())
 		})
 		.collect();
-	unlisted.sort_by(|a, b| {
-		a.modified
-			.cmp(&b.modified)
-			.then_with(|| a.path.comparison_key().cmp(b.path.comparison_key()))
-	});
-	for file in &unlisted {
-		warnings.push(ProfileWarning::Unlisted {
-			plugin: file.path.to_string(),
-		});
-	}
 	ordered_plugins.extend(unlisted);
+
 	if let Some(index) = ordered_plugins
 		.iter()
 		.position(|file| file.path.comparison_key() == "falloutnv.esm")
@@ -336,8 +253,14 @@ pub fn build_profile_configuration(
 			activation_sources,
 		});
 	}
-	warnings.push(ProfileWarning::LoadOrderNotEnforced);
 
+	Ok(ProjectedProfile { plugins, warnings })
+}
+
+/// Maps named profile files, saves, and the reserved invalidation archive into
+/// the game's Documents, LocalAppData, and Data directories.
+#[cfg(any(windows, test))]
+pub fn profile_mappings(input: ProfileMappingInput<'_>) -> ProfileMappings {
 	let profile_files = PROFILE_FILES
 		.iter()
 		.enumerate()
@@ -367,7 +290,7 @@ pub fn build_profile_configuration(
 		});
 	}
 
-	Ok(ProfileConfiguration {
+	ProfileMappings {
 		profile_directories,
 		profile_files,
 		saves: PathMapping {
@@ -378,9 +301,7 @@ pub fn build_profile_configuration(
 			source: input.cache_directory.join(INVALIDATION_ARCHIVE),
 			destination: input.data_directory.join(INVALIDATION_ARCHIVE),
 		},
-		plugins,
-		warnings,
-	})
+	}
 }
 
 fn plugin_path(name: &str) -> Option<DataRelativePath> {
@@ -398,33 +319,25 @@ fn plugin_path(name: &str) -> Option<DataRelativePath> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::time::Duration;
-	const VALID: &str = "[Archive]\r\nbInvalidateOlderFiles=1\r\nSInvalidationFile=\r\nsArchiveList=Fallout - Invalidation.bsa, DLC.bsa\r\n[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=__mods_saves\\\r\n";
+	const VALID: &str = "[Archive]\r\nbInvalidateOlderFiles=1\r\nSInvalidationFile=\r\nsArchiveList=Fallout - Invalidation.bsa, DLC.bsa\r\n[General]\r\nbUseMyGamesDirectory=1\r\nSLocalSavePath=Saves\\\r\n";
 
 	fn build(
 		files: &[ProfileText<'_>],
 		visible: &[VisibleProfileFile],
-	) -> Result<ProfileConfiguration, ProfileConfigurationError> {
-		build_profile_configuration(ProfileConfigurationInput {
+	) -> Result<ProjectedProfile, ProfileProjectionError> {
+		build_profile_projection(ProfileProjectionInput {
 			files,
 			visible_files: visible,
-			profile_directory: Path::new("/environment/profile"),
-			documents_directory: Path::new("/documents/FalloutNV"),
-			local_app_data_directory: Path::new("/local/FalloutNV"),
-			data_directory: Path::new("/game/Data"),
-			cache_directory: Path::new("/environment/cache"),
 		})
 	}
-	fn visible(name: &str, seconds: u64) -> VisibleProfileFile {
+	fn visible(name: &str) -> VisibleProfileFile {
 		VisibleProfileFile {
 			path: DataRelativePath::new(name.to_owned()).unwrap_or_else(|error| unreachable!("{error}")),
-			modified: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
 		}
 	}
 
 	#[test]
-	fn derives_lenient_order_and_all_activation_sources_without_rewriting() -> Result<(), ProfileConfigurationError>
-	{
+	fn derives_lenient_order_and_all_activation_sources_without_rewriting() -> Result<(), ProfileProjectionError> {
 		let files = [
 			ProfileText {
 				name: "Fallout.ini",
@@ -435,10 +348,6 @@ mod tests {
 				text: "Absent.esp\r\nB.esp\r\nb.ESP\r\n",
 			},
 			ProfileText {
-				name: "loadorder.txt",
-				text: "B.esp\r\nAbsent.esp\r\nb.esp\r\n",
-			},
-			ProfileText {
 				name: "GECKCustom.ini",
 				text: "[General]\nsTestFile1=A.esp\nsTestFile1=B.esp\n",
 			},
@@ -446,10 +355,10 @@ mod tests {
 		let output = build(
 			&files,
 			&[
-				visible("A.esp", 1),
-				visible("B.esp", 2),
-				visible("FalloutNV.esm", 3),
-				visible("A.nam", 4),
+				visible("A.esp"),
+				visible("B.esp"),
+				visible("FalloutNV.esm"),
+				visible("A.nam"),
 			],
 		)?;
 		assert_eq!(
@@ -468,20 +377,21 @@ mod tests {
 			]
 		);
 		assert_eq!(output.plugins[2].activation_sources, [ActivationSource::NamFile]);
-		assert_eq!(output.warnings.len(), 7);
+		assert_eq!(output.warnings.len(), 2);
 		assert_eq!(files[1].text, "Absent.esp\r\nB.esp\r\nb.ESP\r\n");
 		Ok(())
 	}
 
 	#[test]
-	fn emits_named_mappings_save_route_and_reserved_archive_mapping() -> Result<(), ProfileConfigurationError> {
-		let output = build(
-			&[ProfileText {
-				name: "Fallout.ini",
-				text: VALID,
-			}],
-			&[],
-		)?;
+	fn emits_named_mappings_save_route_and_reserved_archive_mapping() {
+		let output = profile_mappings(ProfileMappingInput {
+			profile_directory: Path::new("/environment/profile"),
+			documents_directory: Path::new("/documents/FalloutNV"),
+			local_app_data_directory: Path::new("/local/FalloutNV"),
+			data_directory: Path::new("/game/Data"),
+			cache_directory: Path::new("/environment/cache"),
+		});
+
 		assert_eq!(
 			output.profile_directories
 				.iter()
@@ -497,7 +407,11 @@ mod tests {
 			.profile_directories
 			.iter()
 			.all(|mapping| mapping.source == mapping.destination));
-		assert_eq!(output.profile_files.len(), 8);
+		assert_eq!(output.profile_files.len(), 7);
+		assert!(!output
+			.profile_files
+			.iter()
+			.any(|mapping| mapping.source.ends_with("loadorder.txt")));
 		assert_eq!(output.saves.source, Path::new("/environment/profile/saves"));
 		assert_eq!(output.saves.destination, Path::new("/documents/FalloutNV/__mods_saves"));
 		assert_eq!(
@@ -508,17 +422,11 @@ mod tests {
 			output.invalidation_mapping.destination,
 			Path::new("/game/Data/Fallout - Invalidation.bsa")
 		);
-		Ok(())
 	}
 
 	#[test]
 	fn rejects_invalid_keys_overrides_and_reserved_data_path() {
-		for text in [
-			VALID.replace("=1", "=0"),
-			VALID.replace("[Archive]", "[Wrong]"),
-			VALID.replace("DLC.bsa", INVALIDATION_ARCHIVE),
-			format!("{VALID}SLocalSavePath=__mods_saves\\\n"),
-		] {
+		for text in [VALID.replace("=1", "=0"), format!("{VALID}SLocalSavePath=Saves\\\n")] {
 			assert!(build(
 				&[ProfileText {
 					name: "Fallout.ini",
@@ -547,26 +455,26 @@ mod tests {
 				name: "Fallout.ini",
 				text: VALID
 			}],
-			&[visible("fallout - INVALIDATION.BSA", 0)]
+			&[visible("fallout - INVALIDATION.BSA")]
 		)
-		.is_err());
+		.is_ok());
 	}
 
 	#[test]
-	fn fallback_order_uses_time_then_case_insensitive_name() -> Result<(), ProfileConfigurationError> {
+	fn unlisted_plugins_keep_input_collection_order() -> Result<(), ProfileProjectionError> {
 		let output = build(
 			&[ProfileText {
 				name: "Fallout.ini",
 				text: VALID,
 			}],
-			&[visible("z.esp", 1), visible("B.esp", 2), visible("a.esp", 2)],
+			&[visible("z.esp"), visible("B.esp"), visible("a.esp")],
 		)?;
 		assert_eq!(
 			output.plugins
 				.iter()
 				.map(|plugin| plugin.path.as_str())
 				.collect::<Vec<_>>(),
-			["z.esp", "a.esp", "B.esp"]
+			["z.esp", "B.esp", "a.esp"]
 		);
 		assert!(output.plugins.iter().all(|plugin| plugin.activation_sources.is_empty()));
 		Ok(())
@@ -574,7 +482,7 @@ mod tests {
 
 	#[test]
 	fn unavailable_duplicate_warnings_are_distinct_and_include_canonical_line_errors()
-	-> Result<(), ProfileConfigurationError> {
+	-> Result<(), ProfileProjectionError> {
 		let output = build(
 			&[
 				ProfileText {
@@ -588,7 +496,7 @@ mod tests {
 			],
 			&[],
 		)?;
-		assert_eq!(output.warnings.len(), 3);
+		assert_eq!(output.warnings.len(), 2);
 		let result = build(
 			&[
 				ProfileText {
@@ -612,7 +520,7 @@ mod tests {
 
 	#[test]
 	fn test_file_assignments_settle_independently_before_execution_eligibility()
-	-> Result<(), ProfileConfigurationError> {
+	-> Result<(), ProfileProjectionError> {
 		let fallout = format!("{VALID}sTestFile1=First.esp\nsTestFile2=First.esp\nsTestFile2=Light.esl\n");
 		let output = build(
 			&[
@@ -625,11 +533,7 @@ mod tests {
 					text: "[general]\nsTESTfile1=Second.ESP\nsTestFile01=First.esp\n",
 				},
 			],
-			&[
-				visible("First.esp", 1),
-				visible("Second.esp", 2),
-				visible("Light.esl", 3),
-			],
+			&[visible("First.esp"), visible("Second.esp"), visible("Light.esl")],
 		)?;
 		assert_eq!(output.plugins.len(), 2);
 		assert_eq!(
@@ -667,5 +571,26 @@ mod tests {
 			)
 			.is_err());
 		}
+	}
+
+	#[test]
+	fn a_byte_order_mark_does_not_hide_the_first_listed_plugin() -> Result<(), ProfileProjectionError> {
+		let output = build(
+			&[
+				ProfileText {
+					name: "Fallout.ini",
+					text: VALID,
+				},
+				ProfileText {
+					name: "plugins.txt",
+					text: "\u{feff}A.esp\r\n",
+				},
+			],
+			&[visible("A.esp")],
+		)?;
+
+		assert!(output.warnings.is_empty());
+		assert_eq!(output.plugins[0].activation_sources, [ActivationSource::PluginsFile]);
+		Ok(())
 	}
 }

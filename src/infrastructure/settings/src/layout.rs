@@ -1,16 +1,18 @@
-use crate::fs_access;
 use application::ErrorMarker;
-use cap_std::fs::Dir;
+use domain::IGNORED_PROFILE_FILES;
+use domain::ModName;
+use domain::canonical_profile_routing_valid;
 use domain::case_fold_key;
 use encoding_rs::WINDOWS_1252;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
-use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::Path;
 use std::str;
+use tokio::fs::metadata;
+use tokio::fs::read;
+use tokio::fs::read_dir;
 use toml::Value;
 use toml::from_str;
 #[cfg(windows)]
@@ -32,79 +34,63 @@ use windows::core::Error as WindowsError;
 #[cfg(windows)]
 use windows::core::PCSTR;
 
-const PROFILE_FILES: [&str; 8] = [
+const PROFILE_FILES: [&str; 7] = [
 	"Fallout.ini",
 	"FalloutPrefs.ini",
 	"FalloutCustom.ini",
 	"GECKCustom.ini",
 	"GECKPrefs.ini",
 	"plugins.txt",
-	"loadorder.txt",
 	"Plugins.fnvviewsettings",
 ];
-const MANAGED_ARCHIVE_KEYS: [&str; 3] = ["bInvalidateOlderFiles", "SInvalidationFile", "sArchiveList"];
-const MANAGED_GENERAL_KEYS: [&str; 2] = ["bUseMyGamesDirectory", "SLocalSavePath"];
+/// Validates the canonical Mod Environment layout for settings commands.
+///
+/// Only entry names, entry types, and file contents are checked. Links are
+/// followed like ordinary entries.
+pub(crate) async fn validate(root: &Path) -> Result<(), ErrorMarker> {
+	validate_root_entries(root).await?;
 
-pub(crate) fn validate(root: &Dir) -> Result<(), ErrorMarker> {
-	validate_root_entries(root)?;
-	let mods = fs_access::open_dir(root, Path::new("mods")).context(ErrorMarker::environment_root_unsafe())?;
-	let overwrite =
-		fs_access::open_dir(root, Path::new("overwrite")).context(ErrorMarker::environment_root_unsafe())?;
-	validate_safe_tree(&overwrite)?;
-	if entry_names(&overwrite)?.contains("meta.toml") {
-		validate_meta(&read_regular(&overwrite, "meta.toml")?)?;
+	let overwrite = root.join("overwrite");
+	require_directory(&overwrite).await?;
+	if entry_names(&overwrite).await?.contains("meta.toml") {
+		validate_meta(&read_regular(&overwrite, "meta.toml").await?)?;
 	}
-	let profile = fs_access::open_dir(root, Path::new("profile")).context(ErrorMarker::environment_root_unsafe())?;
-	let listed_mods = validate_profile(&profile)?;
-	validate_mods(&mods, &listed_mods)
+
+	let listed_mods = validate_profile(&root.join("profile")).await?;
+	validate_mods(&root.join("mods"), &listed_mods).await
 }
 
-fn validate_root_entries(root: &Dir) -> Result<(), ErrorMarker> {
+async fn validate_root_entries(root: &Path) -> Result<(), ErrorMarker> {
 	let allowed = HashSet::from(["mods.toml", "mods", "profile", "overwrite", "cache", "temp", "logs"]);
-	for name in entry_names(root)? {
+	for name in entry_names(root).await? {
 		if !allowed.contains(name.as_str()) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		if name == "temp" {
-			let directory = open_real_dir(root, &name)?;
-			validate_safe_tree(&directory)?;
 		}
 	}
 	Ok(())
 }
 
-fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
+async fn validate_profile(profile: &Path) -> Result<Vec<ModName>, ErrorMarker> {
 	let allowed = PROFILE_FILES
 		.into_iter()
+		.chain(IGNORED_PROFILE_FILES)
 		.chain(["modlist.txt", "saves"])
 		.collect::<HashSet<_>>();
-	let names = entry_names(profile)?;
+	let names = entry_names(profile).await?;
 	if names.iter().any(|name| !allowed.contains(name.as_str()))
-		|| ["Fallout.ini", "plugins.txt", "loadorder.txt", "modlist.txt", "saves"]
+		|| ["Fallout.ini", "plugins.txt", "modlist.txt", "saves"]
 			.into_iter()
 			.any(|required| !names.contains(required))
 	{
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	for name in names.iter().filter(|name| name.as_str() != "saves") {
-		open_real_file(profile, name)?;
+		require_file(&profile.join(name)).await?;
 	}
-	let saves = open_real_dir(profile, "saves")?;
-	validate_safe_tree(&saves)?;
+	require_directory(&profile.join("saves")).await?;
 
-	let fallout = decode_ini(&read_regular(profile, "Fallout.ini")?)?;
-	let keys = section_values(&fallout, "Archive", &MANAGED_ARCHIVE_KEYS);
-	if keys.get("binvalidateolderfiles")
-		.is_none_or(|values| values.as_slice() != ["1"])
-		|| keys.get("sinvalidationfile")
-			.is_none_or(|values| values.as_slice() != [""])
-		|| keys.get("sarchivelist")
-			.is_none_or(|values| values.len() != 1 || !archive_list_valid(values[0]))
-		|| contains_keys_outside_section(&fallout, "Archive", &MANAGED_ARCHIVE_KEYS)
-		|| general_values(&fallout, "bUseMyGamesDirectory").as_slice() != ["1"]
-		|| general_values(&fallout, "SLocalSavePath").as_slice() != ["__mods_saves\\"]
-		|| contains_keys_outside_section(&fallout, "General", &MANAGED_GENERAL_KEYS)
-	{
+	let fallout = decode_ini(&read_regular(profile, "Fallout.ini").await?)?;
+	if !canonical_profile_routing_valid("Fallout.ini", &fallout) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
 	for name in ["FalloutPrefs.ini", "FalloutCustom.ini"] {
@@ -112,35 +98,54 @@ fn validate_profile(profile: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 			continue;
 		}
 
-		let text = decode_ini(&read_regular(profile, name)?)?;
-		if contains_keys(&text, &MANAGED_GENERAL_KEYS)
-			|| (name == "FalloutCustom.ini" && contains_keys(&text, &MANAGED_ARCHIVE_KEYS))
-		{
+		let text = decode_ini(&read_regular(profile, name).await?)?;
+		if !canonical_profile_routing_valid(name, &text) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
 	}
-	validate_plugin_list(&read_regular(profile, "plugins.txt")?, false)?;
-	validate_plugin_list(&read_regular(profile, "loadorder.txt")?, true)?;
-	parse_modlist(&read_regular(profile, "modlist.txt")?)
+	validate_plugin_list(&read_regular(profile, "plugins.txt").await?)?;
+	parse_modlist(&read_regular(profile, "modlist.txt").await?)
 }
 
-fn validate_mods(mods: &Dir, listed_mods: &HashSet<String>) -> Result<(), ErrorMarker> {
-	let mut installed = HashSet::new();
-	for name in entry_names(mods)? {
-		if !valid_windows_component(&name) {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-		let directory = open_real_dir(mods, &name)?;
-		validate_safe_tree(&directory)?;
-		if entry_names(&directory)?.contains("meta.toml") {
-			validate_meta(&read_regular(&directory, "meta.toml")?)?;
-		}
-		if !installed.insert(case_fold_key(&name)) {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
+/// Checks that each listed mod has a directory of exactly the listed spelling.
+///
+/// Other entries in `mods` are not installed mods: they contribute nothing, so they are not checked.
+/// Names that are not valid UTF-8 are skipped, because `modlist.txt` cannot list them.
+///
+/// # Errors
+///
+/// - `environment_invalid` with the mod name when a listed mod has no such directory, or when the
+///   metadata of its entry cannot be read.
+/// - `environment_invalid` without a mod name when `mods` or a listed mod directory cannot be read,
+///   when a listed mod directory holds a name that is not valid UTF-8, or when a listed mod has an
+///   invalid `meta.toml`.
+async fn validate_mods(mods: &Path, listed_mods: &[ModName]) -> Result<(), ErrorMarker> {
+	let mut names = HashSet::new();
+	let mut entries = read_dir(mods).await.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
+		if let Ok(name) = entry.file_name().into_string() {
+			names.insert(name);
 		}
 	}
-	if &installed != listed_mods {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
+
+	for listed in listed_mods {
+		let missing = ErrorMarker::environment_invalid(None).with_mod_name(listed.clone());
+		if !names.contains(listed.as_str()) {
+			return Err(report!(missing));
+		}
+
+		let directory = mods.join(listed.as_str());
+		if !metadata(&directory).await.context(missing.clone())?.is_dir() {
+			return Err(report!(missing));
+		}
+
+		if entry_names(&directory).await?.contains("meta.toml") {
+			validate_meta(&read_regular(&directory, "meta.toml").await?)?;
+		}
 	}
 	Ok(())
 }
@@ -154,10 +159,11 @@ fn validate_meta(bytes: &[u8]) -> Result<(), ErrorMarker> {
 	Ok(())
 }
 
-fn parse_modlist(bytes: &[u8]) -> Result<HashSet<String>, ErrorMarker> {
+fn parse_modlist(bytes: &[u8]) -> Result<Vec<ModName>, ErrorMarker> {
 	let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
 	let text = str::from_utf8(bytes).context(ErrorMarker::environment_invalid(None))?;
-	let mut listed = HashSet::new();
+	let mut keys = HashSet::new();
+	let mut listed = Vec::new();
 	for line in text.lines() {
 		if line.is_empty() || line.starts_with('#') {
 			continue;
@@ -165,10 +171,10 @@ fn parse_modlist(bytes: &[u8]) -> Result<HashSet<String>, ErrorMarker> {
 		let Some((state, name)) = line.split_at_checked(1) else {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		};
-		if !matches!(state, "+" | "-") || !valid_windows_component(name) || !listed.insert(case_fold_key(name))
-		{
+		if !matches!(state, "+" | "-") || !valid_windows_component(name) || !keys.insert(case_fold_key(name)) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
+		listed.push(ModName::new(name.to_owned()).context(ErrorMarker::environment_invalid(None))?);
 	}
 	Ok(listed)
 }
@@ -183,59 +189,32 @@ fn valid_windows_component(name: &str) -> bool {
 		&& !is_reserved_name(name)
 }
 
-fn validate_safe_tree(directory: &Dir) -> Result<(), ErrorMarker> {
-	for name in entry_names(directory)? {
-		let metadata = directory
-			.symlink_metadata(&name)
-			.map_err(|error| report!(error).context(ErrorMarker::environment_root_unsafe()))?;
-		if fs_access::is_reparse(&metadata) {
-			return Err(report!(ErrorMarker::environment_root_unsafe()));
-		}
-		if metadata.is_dir() {
-			let child = fs_access::open_dir(directory, Path::new(&name))
-				.context(ErrorMarker::environment_root_unsafe())?;
-			validate_safe_tree(&child)?;
-		} else if metadata.is_file() {
-			fs_access::open_regular(directory, Path::new(&name))
-				.context(ErrorMarker::environment_root_unsafe())?;
-		} else {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		}
-	}
-	Ok(())
-}
-
-fn open_real_dir(parent: &Dir, name: &str) -> Result<Dir, ErrorMarker> {
-	let metadata = parent
-		.symlink_metadata(name)
-		.map_err(|error| report!(error).context(ErrorMarker::environment_invalid(None)))?;
-	if fs_access::is_reparse(&metadata) {
-		return Err(report!(ErrorMarker::environment_root_unsafe()));
-	}
+async fn require_directory(path: &Path) -> Result<(), ErrorMarker> {
+	let metadata = metadata(path).await.context(ErrorMarker::environment_invalid(None))?;
 	if !metadata.is_dir() {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
-	fs_access::open_dir(parent, Path::new(name)).context(ErrorMarker::environment_root_unsafe())
-}
-
-fn open_real_file(parent: &Dir, name: &str) -> Result<(), ErrorMarker> {
-	let metadata = parent
-		.symlink_metadata(name)
-		.map_err(|error| report!(error).context(ErrorMarker::environment_invalid(None)))?;
-	if fs_access::is_reparse(&metadata) {
-		return Err(report!(ErrorMarker::environment_root_unsafe()));
-	}
-	if !metadata.is_file() {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
-	fs_access::open_regular(parent, Path::new(name)).context(ErrorMarker::environment_root_unsafe())?;
 	Ok(())
 }
 
-fn entry_names(directory: &Dir) -> Result<HashSet<String>, ErrorMarker> {
+async fn require_file(path: &Path) -> Result<(), ErrorMarker> {
+	let metadata = metadata(path).await.context(ErrorMarker::environment_invalid(None))?;
+	if !metadata.is_file() {
+		return Err(report!(ErrorMarker::environment_invalid(None)));
+	}
+	Ok(())
+}
+
+async fn entry_names(directory: &Path) -> Result<HashSet<String>, ErrorMarker> {
 	let mut names = HashSet::new();
-	for entry in directory.entries().context(ErrorMarker::environment_invalid(None))? {
-		let entry = entry.context(ErrorMarker::environment_invalid(None))?;
+	let mut entries = read_dir(directory)
+		.await
+		.context(ErrorMarker::environment_invalid(None))?;
+	while let Some(entry) = entries
+		.next_entry()
+		.await
+		.context(ErrorMarker::environment_invalid(None))?
+	{
 		let name = entry
 			.file_name()
 			.into_string()
@@ -247,13 +226,10 @@ fn entry_names(directory: &Dir) -> Result<HashSet<String>, ErrorMarker> {
 	Ok(names)
 }
 
-fn read_regular(directory: &Dir, name: &str) -> Result<Vec<u8>, ErrorMarker> {
-	let mut file =
-		fs_access::open_regular(directory, Path::new(name)).context(ErrorMarker::environment_invalid(None))?;
-	let mut bytes = Vec::new();
-	file.read_to_end(&mut bytes)
-		.context(ErrorMarker::environment_invalid(None))?;
-	Ok(bytes)
+async fn read_regular(directory: &Path, name: &str) -> Result<Vec<u8>, ErrorMarker> {
+	read(directory.join(name))
+		.await
+		.context(ErrorMarker::environment_invalid(None))
 }
 
 fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
@@ -281,14 +257,9 @@ fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
 	}
 }
 
-fn validate_plugin_list(bytes: &[u8], utf8: bool) -> Result<(), ErrorMarker> {
-	let text = if utf8 {
-		str::from_utf8(bytes)
-			.context(ErrorMarker::environment_invalid(None))?
-			.to_owned()
-	} else {
-		decode_active_code_page(bytes)?
-	};
+fn validate_plugin_list(bytes: &[u8]) -> Result<(), ErrorMarker> {
+	// A UTF-8 byte order mark is not part of the first plugin name.
+	let text = decode_active_code_page(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes))?;
 	if text.replace("\r\n", "").contains(['\r', '\n']) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
@@ -400,86 +371,4 @@ fn is_reserved_name(name: &str) -> bool {
 			.is_some_and(|prefix| prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT"))
 		&& base.as_bytes()[3].is_ascii_digit()
 		&& base.as_bytes()[3] != b'0')
-}
-
-fn archive_list_valid(value: &str) -> bool {
-	let values = value
-		.split(',')
-		.map(str::trim)
-		.filter(|item| !item.is_empty())
-		.collect::<Vec<_>>();
-	values.first().is_some_and(|first| is_invalidation_archive(first))
-		&& values.iter().filter(|item| is_invalidation_archive(item)).count() == 1
-}
-
-fn is_invalidation_archive(value: &str) -> bool {
-	case_fold_key(value) == "fallout - invalidation.bsa"
-}
-
-fn general_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
-	section_values(text, "General", &[key])
-		.remove(&key.to_ascii_lowercase())
-		.unwrap_or_default()
-}
-
-fn section_name(line: &str) -> Option<&str> {
-	let line = line.trim();
-	line.strip_prefix('[')?.strip_suffix(']').map(str::trim)
-}
-
-fn contains_keys(text: &str, keys: &[&str]) -> bool {
-	text.lines().any(|line| {
-		line.split_once('=')
-			.is_some_and(|(key, _)| keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim())))
-	})
-}
-
-fn contains_keys_outside_section(text: &str, section: &str, keys: &[&str]) -> bool {
-	let mut current = "";
-	for line in text.lines() {
-		if let Some(found) = section_name(line) {
-			current = found;
-			continue;
-		}
-		if !current.eq_ignore_ascii_case(section)
-			&& line.split_once('=').is_some_and(|(key, _)| {
-				keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim()))
-			}) {
-			return true;
-		}
-	}
-	false
-}
-
-fn section_values<'a>(text: &'a str, wanted_section: &str, wanted_keys: &[&str]) -> HashMap<String, Vec<&'a str>> {
-	let mut result = HashMap::new();
-	let mut current = "";
-	for line in text.lines() {
-		if let Some(section) = section_name(line) {
-			current = section;
-			continue;
-		}
-		if !current.eq_ignore_ascii_case(wanted_section) {
-			continue;
-		}
-		let Some((key, value)) = line.split_once('=') else {
-			continue;
-		};
-		if wanted_keys.iter().any(|wanted| wanted.eq_ignore_ascii_case(key.trim())) {
-			result.entry(key.trim().to_ascii_lowercase())
-				.or_insert_with(Vec::new)
-				.push(value.trim());
-		}
-	}
-	result
-}
-
-#[cfg(test)]
-mod tests {
-	use super::archive_list_valid;
-
-	#[test]
-	fn invalidation_archive_identity_uses_simple_unicode_case_fold() {
-		assert!(archive_list_valid("Fallout - Invalidation.bſa"));
-	}
 }
