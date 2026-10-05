@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { createReviewClient } from "../provider";
 import { calibrationInput, outOfScopeFixtures } from "./input";
 import { reviewChanges } from "../reviewer";
-import { extractStyleRules } from "../rules";
+import { loadStyleRules } from "../policy";
 import { calibrationCases } from "./cases";
 import { perRuleCases } from "./per-rule-cases";
 import { fitRuleThresholds, measure, type ScoredCase } from "./fit";
@@ -14,8 +14,9 @@ if (!output) throw new Error("Usage: bun calibration/per-rule-run.ts <new-output
 await mkdir(dirname(output), { recursive: true });
 await writeFile(`${output}.jsonl`, "", { flag: "wx" });
 const config = JSON.parse(await readFile(".prime/agent/coding-style-gate.json", "utf8"));
-const style = await readFile(config.styleFile, "utf8");
-const rules = extractStyleRules(style);
+const rules = await loadStyleRules(process.cwd(), config.styleFiles);
+const rubric = createHash("sha256");
+for (const styleFile of config.styleFiles) rubric.update(`${styleFile}\0${await readFile(styleFile, "utf8")}\0`);
 const ruleIds = rules.map(rule => rule.id);
 const fixtures = [
 	...perRuleCases.map(sample => ({ ...sample, cohort: "per-rule" })),
@@ -74,7 +75,7 @@ const results = Object.fromEntries(ruleIds.map(ruleId => [ruleId, {
 const result = {
 	model: config.model,
 		timestamp: new Date().toISOString(),
-	rubricSha256: createHash("sha256").update(style).digest("hex"),
+	rubricSha256: rubric.digest("hex"),
 	reviewerSha256: createHash("sha256").update(await readFile(new URL("../reviewer.ts", import.meta.url))).digest("hex"),
 	calibrationInputSha256: createHash("sha256").update(await readFile(new URL("./input.ts", import.meta.url))).digest("hex"),
 	fittingSha256: createHash("sha256").update(await readFile(new URL("./fit.ts", import.meta.url))).digest("hex"),

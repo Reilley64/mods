@@ -1,6 +1,6 @@
 # coding-style-gate
 
-`coding-style-gate` is a project-local Prime Agent extension. It reviews Rust files changed by agent tools against `CODING_STYLE.md` with TypeSafe Jev through OpenRouter.
+`coding-style-gate` is a project-local Prime Agent extension. It reviews Rust files changed by agent tools against the coding-style rubric with TypeSafe Jev through OpenRouter. `CODING_STYLE.md` indexes the rubric; the rules live in one file per area under `docs/coding-style/`.
 
 ## Behavior
 
@@ -8,7 +8,7 @@ The extension takes a snapshot of tracked and untracked, non-ignored Rust files 
 
 By default, each snapshot covers only the current session worktree. Concurrent edits in other registered worktrees are not reviewed or reported to this session. This repository explicitly uses `worktreeScope: "session"` with no `additionalRoots`.
 
-Multi-root review requires an explicit opt-in: `worktreeScope: "registered"` watches every worktree returned by `git worktree list`, and `additionalRoots` adds unrelated Git repositories. Each opted-in root keeps its own style file, thresholds, enabled flag, and tool allowlist. The session model governs every request; the session root controls the watched roots and advisory/enforce mode. Additional roots must be absolute paths to Git repository roots; nested directories and arbitrary filesystem paths are rejected.
+Multi-root review requires an explicit opt-in: `worktreeScope: "registered"` watches every worktree returned by `git worktree list`, and `additionalRoots` adds unrelated Git repositories. Each opted-in root keeps its own style files, thresholds, enabled flag, and tool allowlist. The session model governs every request; the session root controls the watched roots and advisory/enforce mode. Additional roots must be absolute paths to Git repository roots; nested directories and arbitrary filesystem paths are rejected.
 
 Likely violations are appended to the tool result, so the agent sees them before its next action. In both modes, `agent_end` reviews the complete task-baseline-to-current diff. Advisory mode reports the final result without blocking. Enforce mode retains earlier violations after later clean edits and catches changes that are present when the final snapshot is taken.
 
@@ -77,7 +77,7 @@ Prime discovers the extension from `.prime/agent/extensions/coding-style-gate/in
 
 ## Rubric format
 
-Every `###` item in `CODING_STYLE.md` supplies five required `####` fields:
+Every `###` item in a configured style file supplies five required `####` fields:
 
 - `Rule`: the normative requirement;
 - `Violation`: the positive Noul decision boundary;
@@ -105,8 +105,8 @@ For each changed file, the gate submits only the items that cover it. Independen
 - `mode`: `advisory` reports tool and final-task findings, while `enforce` also starts bounded correction turns and keeps the snapshot marked blocked until it passes or the user overrides it;
 - `model`: session-wide OpenRouter model. Defaults to `typesafe/jev-1.13`; the pinned response ID `typesafe/jev-1.13-20260917` is also accepted. Legacy `jev-1.13.0` normalizes to the default. Other session IDs fail configuration validation. Watched-root model values are ignored before validation;
 - `ruleThresholds`: required explicit Noul violation threshold for every rubric rule ID; there is no global fallback. Missing or invalid entries fail the review before an API request. The old scalar `threshold` setting is rejected;
-- `styleFile`: project-relative policy file;
-- `dispositionsFile`: project-relative dispositions file. Defaults to `.prime/agent/coding-style-dispositions.json`. The gate validates it like `styleFile`;
+- `styleFiles`: required list of project-relative rubric files. The gate loads them in order, rejects a duplicate entry, a path or symlink outside the project, a file with no rubric items, and a rule ID that appears in two files. This repository lists every area file under `docs/coding-style/` in the order of the former single `CODING_STYLE.md`, so question order, cache keys, and calibrated scores stay as they were before the split. The old single `styleFile` setting is rejected; list the rubric files in `styleFiles` instead;
+- `dispositionsFile`: project-relative dispositions file. Defaults to `.prime/agent/coding-style-dispositions.json`. The gate confines it to the project like each `styleFiles` entry;
 - `tools`: tool names observed for filesystem changes;
 - `timeoutMs`: timeout for each OpenRouter attempt;
 - `maxConcurrency`: maximum number of file reviews in flight;
@@ -135,10 +135,10 @@ Each request contains:
 
 - the changed Rust file path;
 - a unified diff with 20 context lines around each hunk;
-- the rubric rules that cover the file, with their decision boundaries and examples, extracted from `CODING_STYLE.md`;
+- the rubric rules that cover the file, with their decision boundaries and examples, extracted from the configured style files;
 - paths of Rust files that reference the changed module name, with no unchanged source text.
 
-The extension does not upload the complete resulting file. It rejects patches larger than 100,000 characters rather than silently truncating them. It skips Rust symlinks and rejects a policy file that resolves outside the project.
+The extension does not upload the complete resulting file. It rejects patches larger than 100,000 characters rather than silently truncating them. It skips Rust symlinks and rejects a style file that resolves outside the project.
 
 Tracked Rust files and untracked, non-ignored Rust files in watched roots are eligible. Non-Rust files, unchanged dirty files, and untracked ignored files are not sent. A new or deleted Rust file is necessarily represented in full by its patch. Redaction is not a substitute for keeping secrets out of source code.
 

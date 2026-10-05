@@ -7,14 +7,15 @@ You are a read-only reviewer. Do not edit, format, stage, or commit files.
 
 Repository: <absolute repo path>
 Base commit: <oid>
-Rubric: CODING_STYLE.md, section "<## section title>", items:
+Rubric: docs/coding-style/<area>.md, section "<## section title>", items:
 - <rule-id>: <### item title>
 - ...
 Scope: <list of files, or a git ls-files pattern>
 Output file: <tmpdir>/coding-style-review-<timestamp>/<section-slug>.md
 
-Read CODING_STYLE.md in full first. The Authority order and other sections give context.
-Your job is only the listed items.
+Read CODING_STYLE.md first for the Authority order, then the area file above.
+Your job is only the listed items. An item with an Applies to list covers only
+files that match one of its globs; skip the files it does not cover.
 
 Read each file in scope against each listed item. A candidate must meet the item's
 Violation boundary, and no Compliant clause may cover it. Look at the Bad and Good
@@ -39,4 +40,4 @@ Then send the output file path and the candidate count to the parent with
 agent_message.send(..., receiver_role='parent').
 ```
 
-Assign each file in scope to at least one reviewer for each `##` section. For a large scope, split by area as well as by section. Keep each reviewer to about 40 files.
+Assign each file in scope to at least one reviewer for each area file whose items cover it. For a large scope, split by area as well as by section. Keep each reviewer to about 40 files.

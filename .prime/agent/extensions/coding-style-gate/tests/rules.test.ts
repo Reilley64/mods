@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 
+import { loadConfig } from "../config";
+import { loadStyleRules } from "../policy";
 import { extractStyleRules, ruleAppliesTo } from "../rules";
 
 const style = `# Coding style
@@ -101,7 +103,7 @@ describe("coding style rules", () => {
 	});
 
 	test("extracts every repository rubric item with examples", async () => {
-		const rules = extractStyleRules(await readFile("CODING_STYLE.md", "utf8"));
+		const rules = await loadStyleRules(process.cwd(), (await loadConfig(process.cwd())).styleFiles);
 
 		expect(rules.length).toBeGreaterThan(32);
 		expect(rules.some((rule) => rule.title === "Workspace formatting")).toBeFalse();
@@ -116,6 +118,18 @@ describe("coding style rules", () => {
 			"errors-rootcause-lower-layer-results": ["src/domain/**", "src/application/**", "src/infrastructure/**"],
 			"errors-presentation-error-allowlists": ["src/presentation/**"],
 		});
+	});
+
+	test("indexes every configured area file from CODING_STYLE.md", async () => {
+		const { styleFiles } = await loadConfig(process.cwd());
+		const index = await readFile("CODING_STYLE.md", "utf8");
+		const areaFiles = (await readdir("docs/coding-style")).map((file) => `docs/coding-style/${file}`);
+
+		expect([...styleFiles].sort()).toEqual(areaFiles.sort());
+		expect(extractStyleRules(index)).toEqual([]);
+		for (const file of styleFiles) {
+			expect(index).toContain(`](${file})`);
+		}
 	});
 
 	test("treats Markdown headings inside examples as example content", () => {

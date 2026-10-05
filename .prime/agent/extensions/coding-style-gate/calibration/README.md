@@ -2,7 +2,7 @@
 
 `cases.ts` contains paired synthetic Rust patches for fifteen boundary pairs. Each boundary has one deliberate violation and one compliant counterpart.
 
-`run.ts` sends every patch through the production reviewer against each `CODING_STYLE.md` rubric item that covers the patch path. It rejects a labeled patch whose path is outside its rule's `Applies to` scope. It reports:
+`run.ts` sends every patch through the production reviewer against each configured rubric item that covers the patch path. It rejects a labeled patch whose path is outside its rule's `Applies to` scope. It reports:
 
 - the target-rule score for each labeled patch;
 - the highest score from any other rubric item;
