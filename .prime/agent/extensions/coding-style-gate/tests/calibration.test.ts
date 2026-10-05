@@ -5,7 +5,7 @@ import { calibrationCases } from "../calibration/cases";
 import { commentCalibrationCases } from "../calibration/comment-cases";
 import { fitRuleThresholds } from "../calibration/fit";
 import { perRuleCases } from "../calibration/per-rule-cases";
-import { calibrationInput } from "../calibration/input";
+import { calibrationInput, outOfScopeFixtures } from "../calibration/input";
 import { loadConfig, validateRuleThresholds } from "../config";
 import { extractStyleRules } from "../rules";
 
@@ -58,6 +58,14 @@ describe("coding style calibration corpus", () => {
 	});
 
 
+	test("places every fixture inside its rule's Applies to scope", async () => {
+		const rules = extractStyleRules(await readFile("CODING_STYLE.md", "utf8"));
+		expect(outOfScopeFixtures(rules, [...perRuleCases, ...calibrationCases])).toEqual([]);
+		expect(outOfScopeFixtures(rules, [{ ...calibrationCases.find((sample) => sample.name === "parameter-order-bad")!, path: undefined }])).toEqual([
+			"parameter-order-bad (calibration/parameter-order-bad.rs is outside application-use-cases-and-ports-use-case-parameters Applies to)",
+		]);
+	});
+
 	test("reports overlapping score distributions and rejects invalid scores", () => {
 		const overlapping = [
 			{ ruleId: "a", split: "train" as const, expectedViolation: false, probability: 0.8 },
@@ -103,7 +111,7 @@ describe("coding style calibration corpus", () => {
 		expect(names.size).toBe(calibrationCases.length);
 		expect(calibrationCases.every((calibrationCase) => ruleIds.has(calibrationCase.ruleId))).toBeTrue();
 		expect(calibrationCases.filter((calibrationCase) => calibrationCase.expectedViolation)).toHaveLength(21);
-		expect(calibrationCases.filter((calibrationCase) => !calibrationCase.expectedViolation)).toHaveLength(26);
+		expect(calibrationCases.filter((calibrationCase) => !calibrationCase.expectedViolation)).toHaveLength(25);
 		for (const ruleId of new Set(calibrationCases.map((calibrationCase) => calibrationCase.ruleId))) {
 			const labels = calibrationCases.filter((calibrationCase) => calibrationCase.ruleId === ruleId);
 			expect(labels.some((calibrationCase) => calibrationCase.expectedViolation)).toBeTrue();

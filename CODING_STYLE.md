@@ -2,7 +2,7 @@
 
 This document is the repository authority for handwritten Rust. Apply it during implementation and review.
 
-Each style item is a rubric. `Rule` is normative. `Violation` and `Compliant` define the decision boundary. Good and bad examples are representative rather than exhaustive. The coding-style gate submits every rubric item to Jev; formatting, compilation, lint, dependency, layout, and repository checks remain independent sources of deterministic evidence.
+Each style item is a rubric. `Rule` is normative. `Violation` and `Compliant` define the decision boundary. Good and bad examples are representative rather than exhaustive. An optional `Applies to` field lists repository-relative globs; an item with it covers only changed files that match one glob, and an item without it covers every file. The coding-style gate submits each rubric item to Jev for the changed files it covers; formatting, compilation, lint, dependency, layout, and repository checks remain independent sources of deterministic evidence.
 
 ## Authority
 
@@ -351,6 +351,9 @@ struct RenamePairCorrelator { /* narrow state */ }
 
 ### Use-case declaration order
 
+#### Applies to
+
+- `src/application/**`
 
 #### Rule
 
@@ -384,6 +387,9 @@ pub async fn install_archive() { }
 
 ### Use-case parameters
 
+#### Applies to
+
+- `src/application/**`
 
 #### Rule
 
@@ -438,6 +444,9 @@ let archive = dependencies.open_archive.call((path,)).await?;
 
 ### Reusable capability ports
 
+#### Applies to
+
+- `src/application/**`
 
 #### Rule
 
@@ -484,6 +493,9 @@ pub struct ExecuteProgramDependencies {
 
 ### Focused use-case orchestration
 
+#### Applies to
+
+- `src/application/**`
 
 #### Rule
 
@@ -516,6 +528,9 @@ use archive_path::normalize_archive_path;
 
 ### Use-case-local implementation modules
 
+#### Applies to
+
+- `src/application/**`
 
 #### Rule
 
@@ -560,6 +575,10 @@ patch: pub struct InstallArchiveInput; pub struct InstallArchiveOutput;
 
 ### Required positional arguments and optional named arguments
 
+#### Applies to
+
+- `src/presentation/**`
+
 #### Rule
 
 Use positional arguments for required CLI inputs. Use long options for optional inputs: `--argument <value>` for values and `--flag` for boolean switches. Inputs that callers may omit because they have defaults are optional and use long options. Do not make named options required or define optional positional arguments.
@@ -590,6 +609,11 @@ tool copy <source> [--destination <destination>]
 
 ### Rootcause lower-layer results
 
+#### Applies to
+
+- `src/domain/**`
+- `src/application/**`
+- `src/infrastructure/**`
 
 #### Rule
 
@@ -675,6 +699,9 @@ operation().into_report()?;
 
 ### Presentation error allowlists
 
+#### Applies to
+
+- `src/presentation/**`
 
 #### Rule
 

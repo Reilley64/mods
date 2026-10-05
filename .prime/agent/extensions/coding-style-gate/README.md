@@ -77,7 +77,7 @@ Prime discovers the extension from `.prime/agent/extensions/coding-style-gate/in
 
 ## Rubric format
 
-Every `###` item in `CODING_STYLE.md` supplies five `####` fields:
+Every `###` item in `CODING_STYLE.md` supplies five required `####` fields:
 
 - `Rule`: the normative requirement;
 - `Violation`: the positive Noul decision boundary;
@@ -85,7 +85,17 @@ Every `###` item in `CODING_STYLE.md` supplies five `####` fields:
 - `Bad example`: representative input for the violation criterion;
 - `Good example`: representative input for the compliant criterion.
 
-The gate submits every item to Jev. Independent rubric questions that share a patch are sent together in one request, subject to TypeSafe's request token budget. Repository tools remain the authority for facts that `rustfmt`, rustc, Clippy, Cargo metadata, or tests can establish.
+An item may also have an `Applies to` field: a Markdown list of repository-relative globs, matched with `path.posix.matchesGlob` against the changed file's repository path.
+
+```markdown
+#### Applies to
+
+- `src/application/**`
+```
+
+An item with `Applies to` covers only changed files that match at least one glob. An item without it covers every changed Rust file. Scope an item only when its subject lives in specific paths, such as application use cases; leave general rules unscoped. A glob must not be absolute, contain `..`, or use backslashes.
+
+For each changed file, the gate submits only the items that cover it. Independent rubric questions that share a patch are sent together in one request, subject to TypeSafe's request token budget. A file that no item covers makes no request and does not count as reviewed. Findings, thresholds, and dispositions then apply per file as before; a disposition for a rule that does not cover its file can never match a finding, so remove it. Repository tools remain the authority for facts that `rustfmt`, rustc, Clippy, Cargo metadata, or tests can establish.
 
 ## Configuration
 
@@ -125,7 +135,7 @@ Each request contains:
 
 - the changed Rust file path;
 - a unified diff with 20 context lines around each hunk;
-- rubric rules, decision boundaries, and examples extracted from `CODING_STYLE.md`;
+- the rubric rules that cover the file, with their decision boundaries and examples, extracted from `CODING_STYLE.md`;
 - paths of Rust files that reference the changed module name, with no unchanged source text.
 
 The extension does not upload the complete resulting file. It rejects patches larger than 100,000 characters rather than silently truncating them. It skips Rust symlinks and rejects a policy file that resolves outside the project.
@@ -152,8 +162,10 @@ bun ./.prime/agent/extensions/coding-style-gate/calibration/per-rule-run.ts .scr
 every rule. Thresholds are fitted only on training rows and saved before
 validation starts. The selection minimizes `2 * false positives + false negatives`,
 then favors fewer false positives and a larger observed separation margin.
-Validation uses all production rubric questions; training and legacy regression
-cases query their labeled rule through the same production reviewer.
+Validation uses every production rubric question that covers the fixture path;
+training and legacy regression cases query their labeled rule through the same
+production reviewer. Both runners reject a fixture whose path is outside its
+rule's `Applies to` scope, because the gate would never ask that rule about it.
 
 The runner writes a JSONL progress journal and a final JSON report. It never edits
 configuration automatically. Inspect held-out failures and overlapping score
@@ -219,7 +231,7 @@ endpoint; passing tests are not evidence of a live Jev review.
 
 Validated raw rule probabilities are stored under the Git common directory in `coding-style-gate-cache/v1`. Linked worktrees, reloads, and sessions share this local cache. Delete that directory to clear it. It is outside tracked source; records contain only a request hash, schema version, response model, and probabilities, never patches or credentials.
 
-Each key covers the complete submitted file request (including its diff, path, change kind, entry-point flag, module references, ordered questions, instructions, criteria and examples), requested model, backend identity and schema versions. Different diffs that reach the same final source are not equivalent. Unchanged file requests are reusable within larger reviews. Full-task and per-tool review coverage is unchanged.
+Each key covers the complete submitted file request (including its diff, path, change kind, entry-point flag, module references, the ordered questions that cover the file, instructions, criteria and examples), requested model, backend identity and schema versions. Different diffs that reach the same final source are not equivalent. Unchanged file requests are reusable within larger reviews. Full-task and per-tool review coverage is unchanged.
 
 Thresholds are applied to raw scores on every review. Changing thresholds needs no inference for an otherwise identical request, but still invalidates an enforcement override. Cache hits spend zero new tokens; receipts count cached files independently. Invalid responses, failed requests, corrupt records and model mismatches are never accepted as clean reviews. Cache storage failures do not block successful inference. Only active requests are held in memory, and failed in-flight work is removed.
 

@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { createReviewClient } from "../provider";
-import { calibrationInput } from "./input";
+import { calibrationInput, outOfScopeFixtures } from "./input";
 import { reviewChanges } from "../reviewer";
 import { extractStyleRules } from "../rules";
 import { calibrationCases } from "./cases";
@@ -34,6 +34,8 @@ for (const ruleId of ruleIds) {
 for (const sample of fixtures) {
 	if (!ruleIds.includes(sample.ruleId)) throw new Error(`Unknown fixture rule ${sample.ruleId}`);
 }
+const outOfScope = outOfScopeFixtures(rules, fixtures);
+if (outOfScope.length > 0) throw new Error(`Fixtures outside their rule scope: ${outOfScope.join(", ")}`);
 const client = createReviewClient({ ...config, timeoutMs: 20_000 });
 const rows: Array<ScoredCase & { name: string; cohort: string; inputTokens: number; outputTokens: number }> = [];
 async function scoreSplit(split: "train" | "validation") {
@@ -77,7 +79,7 @@ const result = {
 	calibrationInputSha256: createHash("sha256").update(await readFile(new URL("./input.ts", import.meta.url))).digest("hex"),
 	fittingSha256: createHash("sha256").update(await readFile(new URL("./fit.ts", import.meta.url))).digest("hex"),
 	fixtureSha256: createHash("sha256").update(JSON.stringify(fixtures)).digest("hex"),
-	method: "Training only; minimize 2*FP+FN, then fewer FP, then largest observed margin, then larger threshold. Per-rule held-out validation uses all production rubric questions. Training and legacy regression score only their labeled rule with the production question builder.",
+	method: "Training only; minimize 2*FP+FN, then fewer FP, then largest observed margin, then larger threshold. Per-rule held-out validation uses every production rubric question that applies to the fixture path. Training and legacy regression score only their labeled rule with the production question builder.",
 	results, rows,
 	usage: { inputTokens: rows.reduce((sum, row) => sum + row.inputTokens, 0), outputTokens: rows.reduce((sum, row) => sum + row.outputTokens, 0) },
 };

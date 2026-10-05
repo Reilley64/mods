@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 
-import { extractStyleRules } from "../rules";
+import { extractStyleRules, ruleAppliesTo } from "../rules";
 
 const style = `# Coding style
 
@@ -106,6 +106,16 @@ describe("coding style rules", () => {
 		expect(rules.length).toBeGreaterThan(32);
 		expect(rules.some((rule) => rule.title === "Workspace formatting")).toBeFalse();
 		expect(rules.every((rule) => rule.badExamples.length > 0 && rule.goodExamples.length > 0)).toBeTrue();
+		expect(Object.fromEntries(rules.filter((rule) => rule.appliesTo !== undefined).map((rule) => [rule.id, rule.appliesTo]))).toEqual({
+			"application-use-cases-and-ports-use-case-declaration-order": ["src/application/**"],
+			"application-use-cases-and-ports-use-case-parameters": ["src/application/**"],
+			"application-use-cases-and-ports-reusable-capability-ports": ["src/application/**"],
+			"application-use-cases-and-ports-focused-use-case-orchestration": ["src/application/**"],
+			"application-use-cases-and-ports-use-case-local-implementation-modules": ["src/application/**"],
+			"cli-arguments-required-positional-arguments-and-optional-named-arguments": ["src/presentation/**"],
+			"errors-rootcause-lower-layer-results": ["src/domain/**", "src/application/**", "src/infrastructure/**"],
+			"errors-presentation-error-allowlists": ["src/presentation/**"],
+		});
 	});
 
 	test("treats Markdown headings inside examples as example content", () => {
@@ -115,9 +125,35 @@ describe("coding style rules", () => {
 	});
 
 	test("rejects unknown rubric fields", () => {
-		expect(() => extractStyleRules(style.replace("#### Violation", "#### Applies to"))).toThrow(
-			"unknown rubric field Applies to",
+		expect(() => extractStyleRules(style.replace("#### Violation", "#### Scope"))).toThrow(
+			"unknown rubric field Scope",
 		);
+	});
+
+	test("scopes an item to the files its Applies to globs match", () => {
+		const scoped = style.replace(
+			"### Guard clauses\n",
+			"### Guard clauses\n\n#### Applies to\n\n- `src/application/**`\n- src/domain/**\n",
+		);
+		const [guardClauses, workspaceFormatting] = extractStyleRules(scoped);
+
+		expect(guardClauses?.appliesTo).toEqual(["src/application/**", "src/domain/**"]);
+		expect(workspaceFormatting).not.toHaveProperty("appliesTo");
+		expect(ruleAppliesTo(guardClauses!, "src/application/src/installation/install_mod.rs")).toBeTrue();
+		expect(ruleAppliesTo(guardClauses!, "src/domain/src/mods.rs")).toBeTrue();
+		expect(ruleAppliesTo(guardClauses!, "src/infrastructure/archive/src/adapter.rs")).toBeFalse();
+		expect(ruleAppliesTo(guardClauses!, "src/applications/src/lib.rs")).toBeFalse();
+		expect(ruleAppliesTo(workspaceFormatting!, "src/infrastructure/archive/src/adapter.rs")).toBeTrue();
+	});
+
+	test("rejects an empty, malformed, or escaping Applies to list", () => {
+		const withScope = (body: string) => style.replace("### Guard clauses\n", `### Guard clauses\n\n#### Applies to\n\n${body}\n`);
+
+		expect(() => extractStyleRules(withScope(""))).toThrow("empty Applies to list");
+		expect(() => extractStyleRules(withScope("src/application/**"))).toThrow("list of repository-relative globs");
+		for (const glob of ["/src/**", "../outside/**", "src/../../outside/**", "src\\application\\**"]) {
+			expect(() => extractStyleRules(withScope(`- \`${glob}\``))).toThrow("must stay within the repository");
+		}
 	});
 
 });
