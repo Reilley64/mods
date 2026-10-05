@@ -8,12 +8,14 @@ Capture `$LASTEXITCODE` immediately after `mods` in PowerShell. Preserve stdout 
 | --- | --- |
 | Successful query/mutation, help/version, incomplete FOMOD Choices, or Install Plan preview | 0 |
 | Ordinary application failure | 1 |
-| Argument parsing failure, invalid FOMOD selection, or Environment Root selection failure | 2 |
+| Argument parsing failure, invalid FOMOD selection, Environment Root selection failure, or a Nexus mod page without exactly one available Main file | 2 |
 | Managed execution: program not found | 127 |
 | Managed execution: unsupported/failed launch or invalid working directory | 126 |
 | Other managed execution failure | 125 |
 | Cancellation | Windows `0xC000013A` (shells may display a signed value) |
 | Child finished under managed execution | Child's actual 32-bit exit status |
+
+A Nexus mod-page input without a file ID selects a file only when exactly one available Main file exists. With zero or several, the command exits with status 2. Stderr starts with `error [nexus_file_selection_required]` and lists one line per available file with `file_id`, `name`, `version`, and `category`. Rerun with `--file ID`; do not pick a file without the user's choice.
 
 Failures before execution dispatch can still use general statuses. Output write/flush failure, including a broken pipe, produces status 1. A child can itself return 125–127; distinguish the source using stderr, not the number alone. A nonzero child status does not by itself mean the manager failed to launch it.
 
@@ -27,7 +29,16 @@ With `--json`, errors are Problem Details on stderr. Use `type` as the machine i
 | --- | --- |
 | `unexpected argument '--json'` with status 2 | The installed release has no JSON output; rerun without `--json` and read the text output |
 | `environment_already_initialized`, `environment_root_not_empty`, `environment_root_unsafe` | Confirm Environment Root and inspect existing contents; do not wipe it |
-| `environment_invalid`, settings/override errors | Inspect manifest and `config list`; only `MODS_GAME_DIR` is a supported `MODS_*` setting variable; malformed/unknown overrides can fail validation |
+| `environment_invalid`, settings/override errors | Inspect manifest and `config list`; the supported `MODS_*` variables are `MODS_GAME_DIR` and `MODS_NEXUS_API_KEY`; malformed/unknown overrides can fail validation |
+| `environment_invalid` with `phase = download_cache` | A completed entry in `cache/downloads/newvegas-MOD_ID-FILE_ID/` has malformed metadata, a different Nexus identity, or an archive of the wrong size; with the user's approval, delete that entry and rerun |
+| `nexus_source_invalid` | Use a New Vegas Nexus mod-page or file URL; do not combine `--file` with a local path or with a different URL `file_id` |
+| `nexus_premium_required` | A new download needs a Premium account API key in `nexus_api_key` or `MODS_NEXUS_API_KEY`; otherwise install a local archive |
+| `nexus_credentials_invalid` | Nexus rejected the API key; ask the user to check it; never print or share the key |
+| `nexus_access_denied` | Nexus refused access to the mod or file; check it on the Nexus page |
+| `nexus_rate_limited` | Wait before retrying; do not loop |
+| `nexus_unavailable` | The mod or selected file is missing, removed, or not downloadable; check the mod page and file ID |
+| `nexus_network_failure` | A request failed, returned an unexpected status, or the transfer was incomplete; partial bytes are removed; retry only with authorization |
+| `nexus_response_invalid` | Nexus returned data that `mods` could not use; retry later or install a local archive |
 | Game Installation not found/invalid or observed-build mismatch | Check Steam installation and effective/stored Game Binding; ask before updating it |
 | `invalid_mod_name`, `mod_already_exists`, `mod_not_found` | Check name and replacement intent; do not silently rename or replace |
 | Unsafe/unsupported archive or installer, unmet dependency | Inspect package provenance/layout and error details; do not bypass validation |

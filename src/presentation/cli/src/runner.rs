@@ -28,9 +28,12 @@ use application::environment::initialize_environment;
 use application::execution::ExecuteProgramDependencies;
 use application::execution::ExecutionWarning;
 use application::execution::execute_program;
-use application::installation::InstallArchiveDependencies;
 use application::installation::InstallArchiveOutput;
-use application::installation::install_archive;
+use application::installation::InstallModDependencies;
+use application::installation::InstallModOutput;
+use application::installation::ModSource;
+use application::installation::RemoteModSource;
+use application::installation::install_mod;
 use application::ports::ProgressEvent;
 use application::settings::GetSettingDependencies;
 use application::settings::ListSettingsDependencies;
@@ -76,7 +79,7 @@ pub(crate) struct Dependencies {
 	pub(crate) list_settings: ListSettingsDependencies,
 	pub(crate) get_setting: GetSettingDependencies,
 	pub(crate) set_game_directory: SetGameDirectoryDependencies,
-	pub(crate) install_archive: InstallArchiveDependencies,
+	pub(crate) install_mod: InstallModDependencies,
 	pub(crate) list_effective_conflicts: ListEffectiveConflictsDependencies,
 	pub(crate) inspect_mod_conflicts: InspectModConflictsDependencies,
 	pub(crate) explain_path: ExplainPathDependencies,
@@ -87,6 +90,8 @@ pub(crate) struct RunOutcome {
 	pub(crate) status: u32,
 	pub(crate) stdout: String,
 	pub(crate) stderr: String,
+	pub(crate) execution_failed: bool,
+	pub(crate) diagnostic_log: Option<PathBuf>,
 	pub(crate) presentation: Option<JsonPresentation>,
 }
 
@@ -115,7 +120,15 @@ impl RunOutcome {
 	}
 }
 
-fn success(mut outcome: RunOutcome, json_mode: bool, mut value: Value, warnings: Vec<Value>) -> RunOutcome {
+fn success(stdout: String, stderr: String, json_mode: bool, mut value: Value, warnings: Vec<Value>) -> RunOutcome {
+	let mut outcome = RunOutcome {
+		presentation: None,
+		execution_failed: false,
+		diagnostic_log: None,
+		status: 0,
+		stdout,
+		stderr,
+	};
 	if json_mode {
 		value["warnings"] = Value::Array(warnings);
 		outcome.presentation = Some(JsonPresentation::Success(value));
@@ -189,6 +202,8 @@ pub(crate) async fn execute(
 			});
 			return RunOutcome {
 				presentation,
+				execution_failed: true,
+				diagnostic_log: None,
 				status: 2,
 				stdout: String::new(),
 				stderr: format!("error: {message}\n"),
@@ -228,6 +243,7 @@ pub(crate) async fn execute(
 		};
 
 	let session_id = session.as_ref().map(DiagnosticSession::id);
+	let diagnostic_log = session.as_ref().map(DiagnosticSession::path);
 	let dependencies = match dependency_factory(&root) {
 		Ok(dependencies) => dependencies,
 		Err(marker) => {
@@ -253,6 +269,8 @@ pub(crate) async fn execute(
 			}
 			return RunOutcome {
 				presentation,
+				execution_failed: true,
+				diagnostic_log,
 				status: 1,
 				stdout: String::new(),
 				stderr,
@@ -268,6 +286,7 @@ pub(crate) async fn execute(
 		None => work.await,
 	};
 
+	result.diagnostic_log = diagnostic_log;
 	let terminal = if result.status == 0 {
 		"success"
 	} else if result.status == 0xC000_013A {
@@ -349,17 +368,7 @@ async fn dispatch(
 							}
 						})
 						.collect();
-					success(
-						RunOutcome {
-							presentation: None,
-							status: 0,
-							stdout,
-							stderr,
-						},
-						json_mode,
-						json!({}),
-						warnings,
-					)
+					success(stdout, stderr, json_mode, json!({}), warnings)
 				}
 				Err(report) => report_outcome(&report, json_mode),
 			}
@@ -367,12 +376,8 @@ async fn dispatch(
 		Command::Config { command } => match command {
 			ConfigCommand::List => match list_settings(dependencies.list_settings).await {
 				Ok(output) => success(
-					RunOutcome {
-						presentation: None,
-						status: 0,
-						stdout: output::settings(&output.settings),
-						stderr: String::new(),
-					},
+					output::settings(&output.settings),
+					String::new(),
 					json_mode,
 					json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
 					vec![],
@@ -381,12 +386,8 @@ async fn dispatch(
 			},
 			ConfigCommand::Get { key } => match get_setting(dependencies.get_setting, key.into()).await {
 				Ok(output) => success(
-					RunOutcome {
-						presentation: None,
-						status: 0,
-						stdout: output::setting(&output.setting),
-						stderr: String::new(),
-					},
+					output::setting(&output.setting),
+					String::new(),
 					json_mode,
 					json!({"setting": json_output::setting(&output.setting)}),
 					vec![],
@@ -409,17 +410,7 @@ async fn dispatch(
 					Ok(output) => {
 						let (stdout, stderr) = output::set_game_directory(&output);
 						let warnings = json_output::game_directory_warnings(&output.warnings);
-						success(
-							RunOutcome {
-								presentation: None,
-								status: 0,
-								stdout,
-								stderr,
-							},
-							json_mode,
-							json!({}),
-							warnings,
-						)
+						success(stdout, stderr, json_mode, json!({}), warnings)
 					}
 					Err(report) => report_outcome(&report, json_mode),
 				}
@@ -428,10 +419,23 @@ async fn dispatch(
 		Command::Install(arguments) => {
 			let cancellation = operation::ctrl_c_token();
 
-			let archive_path = resolve_path(&arguments.archive, &startup);
-			let Ok(archive) = ArchivePath::new(archive_path) else {
-				return marker_outcome(ErrorMarker::unsafe_archive(), json_mode);
+			let source = if let Some(url) =
+				arguments.archive.to_str().filter(|source| source.contains("://"))
+			{
+				ModSource::Remote(RemoteModSource {
+					url: url.to_owned(),
+					file_id: arguments.file,
+				})
+			} else {
+				if arguments.file.is_some() {
+					return marker_outcome(ErrorMarker::nexus_source_invalid(), json_mode);
+				}
+				let Ok(archive) = ArchivePath::new(resolve_path(&arguments.archive, &startup)) else {
+					return marker_outcome(ErrorMarker::unsafe_archive(), json_mode);
+				};
+				ModSource::Local(archive)
 			};
+
 			let mod_name = if let Some(value) = arguments.name {
 				let Ok(value) = ModName::new(value) else {
 					return marker_outcome(ErrorMarker::invalid_mod_name(), json_mode);
@@ -444,9 +448,10 @@ async fn dispatch(
 				Ok(choices) => choices,
 				Err(report) => return report_outcome(&report, json_mode),
 			};
-			match install_archive(
-				dependencies.install_archive,
-				archive,
+
+			match install_mod(
+				dependencies.install_mod,
+				source,
 				mod_name,
 				arguments.replace,
 				choices,
@@ -455,47 +460,48 @@ async fn dispatch(
 			)
 			.await
 			{
-				Ok(InstallArchiveOutput::AdditionalSelectionsRequired(output_value)) => {
+				Ok(InstallModOutput::SelectionRequired(files)) => {
+					let mut stderr = "error [nexus_file_selection_required]: Select a file with --file <id>.\n".to_owned();
+					for file in &files {
+						stderr.push_str(&format!(
+							"file_id = {}, name = {}, version = {}, category = {}\n",
+							file.file_id,
+							output::quote(&file.name),
+							output::quote(&file.version),
+							output::quote(&file.category)
+						));
+					}
+					RunOutcome {
+						presentation: json_mode.then(|| {
+							JsonPresentation::Problem(
+								json_install::file_selection_required(&files),
+							)
+						}),
+						execution_failed: false,
+						diagnostic_log: None,
+						status: 2,
+						stdout: String::new(),
+						stderr,
+					}
+				}
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::AdditionalSelectionsRequired(
+					output_value,
+				))) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
-					success(
-						RunOutcome {
-							presentation: None,
-							status: 0,
-							stdout: stdout.clone(),
-							stderr: stderr.clone(),
-						},
-						json_mode,
-						json_install::additional(&output_value),
-						json_install::warnings(&output_value.warnings),
-					)
+					let value = json_install::additional(&output_value);
+					let warnings = json_install::warnings(&output_value.warnings);
+					success(stdout, stderr, json_mode, value, warnings)
 				}
-				Ok(InstallArchiveOutput::Preview(output_value)) => {
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::Preview(output_value))) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
-					success(
-						RunOutcome {
-							presentation: None,
-							status: 0,
-							stdout: stdout.clone(),
-							stderr: stderr.clone(),
-						},
-						json_mode,
-						json_install::preview(&output_value),
-						json_install::warnings(&output_value.plan.warnings),
-					)
+					let value = json_install::preview(&output_value);
+					let warnings = json_install::warnings(&output_value.plan.warnings);
+					success(stdout, stderr, json_mode, value, warnings)
 				}
-				Ok(InstallArchiveOutput::Installed(output_value)) => {
+				Ok(InstallModOutput::Archive(InstallArchiveOutput::Installed(output_value))) => {
 					let stderr = output::install_warnings(&output_value.warnings);
-					success(
-						RunOutcome {
-							presentation: None,
-							status: 0,
-							stdout: String::new(),
-							stderr,
-						},
-						json_mode,
-						json_install::installed(),
-						json_install::warnings(&output_value.warnings),
-					)
+					let warnings = json_install::warnings(&output_value.warnings);
+					success(String::new(), stderr, json_mode, json_install::installed(), warnings)
 				}
 				Err(report) => report_outcome(&report, json_mode),
 			}
@@ -508,20 +514,13 @@ async fn dispatch(
 			)
 			.await
 			{
-				Ok(output) => {
-					let stdout = conflict_output::list(&output);
-					success(
-						RunOutcome {
-							presentation: None,
-							status: 0,
-							stdout: stdout.clone(),
-							stderr: String::new(),
-						},
-						json_mode,
-						json_conflicts::list(&output),
-						vec![],
-					)
-				}
+				Ok(output) => success(
+					conflict_output::list(&output),
+					String::new(),
+					json_mode,
+					json_conflicts::list(&output),
+					vec![],
+				),
 				Err(report) => report_outcome(&report, json_mode),
 			},
 			ConflictsCommand::Inspect {
@@ -546,20 +545,13 @@ async fn dispatch(
 				)
 				.await
 				{
-					Ok(output) => {
-						let stdout = conflict_output::inspection(&output);
-						success(
-							RunOutcome {
-								presentation: None,
-								status: 0,
-								stdout: stdout.clone(),
-								stderr: String::new(),
-							},
-							json_mode,
-							json_conflicts::inspection(&output),
-							vec![],
-						)
-					}
+					Ok(output) => success(
+						conflict_output::inspection(&output),
+						String::new(),
+						json_mode,
+						json_conflicts::inspection(&output),
+						vec![],
+					),
 					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
@@ -582,25 +574,32 @@ async fn dispatch(
 				)
 				.await
 				{
-					Ok(output) => {
-						let stdout = conflict_output::explanation(&output);
-						success(
-							RunOutcome {
-								presentation: None,
-								status: 0,
-								stdout: stdout.clone(),
-								stderr: String::new(),
-							},
-							json_mode,
-							json_conflicts::explanation(&output),
-							vec![],
-						)
-					}
+					Ok(output) => success(
+						conflict_output::explanation(&output),
+						String::new(),
+						json_mode,
+						json_conflicts::explanation(&output),
+						vec![],
+					),
 					Err(report) => report_outcome(&report, json_mode),
 				}
 			}
 		},
 		Command::Exec(arguments) => {
+			if arguments.hidden && !cfg!(windows) {
+				let marker = ErrorMarker::program_unsupported();
+				return RunOutcome {
+					execution_failed: true,
+					..problem_outcome(
+						error::execution_exit_status(marker.code()),
+						"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
+							.to_owned(),
+						json_mode,
+						Some(&marker),
+					)
+				};
+			}
+
 			let output_target = if let Some(name) = arguments.output_target {
 				let Ok(name) = ModName::new(name) else {
 					return execution_report_outcome(
@@ -643,7 +642,8 @@ async fn dispatch(
 					false,
 				);
 			};
-			let Ok(arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() else {
+			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
+			else {
 				return execution_report_outcome(
 					&report!(ErrorMarker::program_launch_failed()),
 					json_mode,
@@ -668,14 +668,24 @@ async fn dispatch(
 				})
 			}));
 
-			let signals = operation::ExecutionSignals::new(dependencies.execution_force_cancellation);
+			let signals = if arguments.hidden {
+				None
+			} else {
+				Some(operation::ExecutionSignals::new(
+					dependencies.execution_force_cancellation,
+				))
+			};
+			let cancellation = signals
+				.as_ref()
+				.map_or_else(CancellationToken::new, |signals| signals.cancellation.clone());
+
 			match execute_program(
 				execution,
 				output_target,
 				working_directory,
 				program,
-				arguments,
-				signals.cancellation.clone(),
+				program_arguments,
+				cancellation,
 			)
 			.await
 			{
@@ -694,6 +704,8 @@ async fn dispatch(
 					}
 					RunOutcome {
 						presentation: None,
+						execution_failed: false,
+						diagnostic_log: None,
 						status: output.status.value(),
 						stdout: String::new(),
 						stderr,
@@ -707,10 +719,26 @@ async fn dispatch(
 	}
 }
 
+#[cfg(any(windows, test))]
+pub(crate) fn hidden_failure_dialog(outcome: &RunOutcome) -> Option<String> {
+	if !outcome.execution_failed {
+		return None;
+	}
+
+	let mut message = outcome.stderr.trim_end().to_owned();
+	if let Some(path) = &outcome.diagnostic_log {
+		message.push_str(&format!("\nDiagnostic log: {}", path.display()));
+	}
+	Some(message)
+}
+
 fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bool) -> RunOutcome {
 	let marker = error::application_marker(report);
 	let status = marker.map_or(125, |marker| error::execution_exit_status(marker.code()));
-	problem_outcome(status, error::application_error(report), json_mode && !launched, marker)
+	RunOutcome {
+		execution_failed: true,
+		..problem_outcome(status, error::application_error(report), json_mode && !launched, marker)
+	}
 }
 
 fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarker> {
@@ -761,6 +789,8 @@ fn problem_outcome(status: u32, stderr: String, json_mode: bool, marker: Option<
 	});
 	RunOutcome {
 		presentation,
+		execution_failed: false,
+		diagnostic_log: None,
 		status,
 		stdout: String::new(),
 		stderr,
@@ -794,6 +824,8 @@ pub(crate) async fn run_current_process(
 mod tests {
 	use super::Cli;
 	use super::Dependencies;
+	use super::RunOutcome;
+	use super::hidden_failure_dialog;
 	use super::parse_choices;
 	use super::run;
 	use super::select_environment_root;
@@ -812,10 +844,22 @@ mod tests {
 	use application::execution::ExecuteProgramDependencies;
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
+	use application::installation::ArchiveIndex;
+	use application::installation::DownloadModOutput;
+	use application::installation::DownloadedMod;
+	use application::installation::FomodGroup;
+	use application::installation::FomodInstaller;
+	use application::installation::FomodOption;
+	use application::installation::IndexedInstaller;
 	use application::installation::InstallArchiveDependencies;
+	use application::installation::InstallModDependencies;
+	use application::installation::InstallationAssessment;
+	use application::installation::InstallationState;
+	use application::installation::NexusProvenance;
 	use application::ports::GameInstallationSource;
 	use application::ports::InitializationProfileSources;
 	use application::ports::InitializationTargetAssessment;
+	use application::ports::InstallationChange;
 	use application::ports::PortFuture;
 	use application::ports::ProgressEvent;
 	use application::ports::ResolvedGameInstallation;
@@ -826,9 +870,16 @@ mod tests {
 	use application::settings::SetGameDirectoryDependencies;
 	use application::settings::SettingSource;
 	use clap::Parser;
+	use domain::ArchiveIdentity;
+	use domain::ArchivePath;
 	use domain::DataRelativePath;
+	use domain::FomodCardinality;
+	use domain::FomodCondition;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
+	use domain::InstallCandidate;
+	use domain::InstallCandidateOrigin;
+	use domain::InstallationPhase;
 	use domain::ModName;
 	use domain::ModPriority;
 	use domain::OutputTarget;
@@ -836,13 +887,20 @@ mod tests {
 	use domain::ProcessStatus;
 	use domain::ProviderIdentity;
 	use domain::ProviderReference;
+	use domain::ResolvedOptionType;
+	use domain::Sha256Digest;
 	use domain::SteamBuildId;
+	#[cfg(windows)]
+	use domain::WorkingDirectory;
 	use rootcause::report;
 	use serde_json::Value;
 	use serde_json::from_str;
 	use serde_json::json;
+	use std::collections::HashMap;
 	use std::error::Error;
 	use std::ffi::OsString;
+	use std::fs::create_dir_all;
+	use std::fs::read;
 	use std::fs::read_dir;
 	use std::fs::read_to_string;
 	use std::fs::write;
@@ -852,6 +910,28 @@ mod tests {
 	use std::sync::atomic::Ordering;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
+
+	#[test]
+	fn hidden_dialog_reports_failures_but_not_child_exit_codes() {
+		let failure = RunOutcome {
+			presentation: None,
+			status: 126,
+			stdout: String::new(),
+			stderr: "error [program_launch_failed]: launch failed\n".into(),
+			execution_failed: true,
+			diagnostic_log: Some("logs/session.jsonl".into()),
+		};
+		assert_eq!(
+			hidden_failure_dialog(&failure).as_deref(),
+			Some("error [program_launch_failed]: launch failed\nDiagnostic log: logs/session.jsonl")
+		);
+		let child_exit = RunOutcome {
+			status: 126,
+			execution_failed: false,
+			..failure
+		};
+		assert!(hidden_failure_dialog(&child_exit).is_none());
+	}
 
 	macro_rules! arguments {
 		($($value:expr),* $(,)?) => {
@@ -1063,7 +1143,13 @@ mod tests {
 					Box::pin(async move { Ok(binding) }) as PortFuture<_>
 				}),
 			},
-			install_archive,
+			install_mod: InstallModDependencies {
+				install_archive,
+				download_mod: Arc::new(|_, _| {
+					Box::pin(async { Err(report!(ErrorMarker::nexus_network_failure())) })
+						as PortFuture<_>
+				}),
+			},
 			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
 			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
 			explain_path: unavailable_explain_path_dependencies(),
@@ -1092,6 +1178,215 @@ mod tests {
 				}),
 			},
 		))
+	}
+
+	#[tokio::test]
+	#[expect(
+		clippy::expect_used,
+		reason = "synthetic fixture values must retain report details on setup failure"
+	)]
+	async fn remote_install_replays_full_choices_previews_and_retains_cache_after_installation_failure()
+	-> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let cache = temp.path().join("cache/downloads/newvegas-42-7");
+		create_dir_all(&cache)?;
+		let archive_path = cache.join("archive");
+		write(&archive_path, b"completed archive fixture")?;
+		let archive = ArchivePath::new(archive_path.clone()).expect("archive fixture");
+		let provenance = NexusProvenance {
+			game_domain: "newvegas".into(),
+			mod_id: 42,
+			file_id: 7,
+			file_version: "01-beta".into(),
+			mod_version: "2.0".into(),
+			mod_name: "Page".into(),
+			file_name: "Selected file".into(),
+		};
+		let game_binding = GameBinding::new(
+			GameInstallationPath::new(temp.path().join("game")).expect("game fixture"),
+			SteamBuildId::new(1).expect("build fixture"),
+		);
+		let candidate = InstallCandidate {
+			candidate_id: 1,
+			origin: InstallCandidateOrigin::Required,
+			phase: InstallationPhase::Required,
+			declared_priority: 0,
+			descriptor_order: 0,
+			source_member: "Data/file.txt".into(),
+			destination: DataRelativePath::new("file.txt".into()).expect("path fixture"),
+		};
+		let groups = [("first", "a"), ("second", "b")]
+			.into_iter()
+			.map(|(group, option)| FomodGroup {
+				id: group.into(),
+				label: group.into(),
+				description: String::new(),
+				cardinality: FomodCardinality::SelectExactlyOne,
+				condition: FomodCondition::Constant(true),
+				options: vec![FomodOption {
+					id: option.into(),
+					label: option.into(),
+					description: String::new(),
+					condition: FomodCondition::Constant(true),
+					default_type: ResolvedOptionType::Optional,
+					type_patterns: Vec::new(),
+					flag_writes: Vec::new(),
+					file_candidates: Vec::new(),
+					file_effects: Vec::new(),
+				}],
+			})
+			.collect();
+		let index = ArchiveIndex {
+			identity: ArchiveIdentity::Fomod {
+				archive_sha256: Sha256Digest::new("a".repeat(64)).expect("hash fixture"),
+				package_root: String::new(),
+				config_member: "fomod/ModuleConfig.xml".into(),
+				config_sha256: Sha256Digest::new("b".repeat(64)).expect("hash fixture"),
+			},
+			installer: IndexedInstaller::Fomod(FomodInstaller {
+				schema_version: "5.0".into(),
+				module_condition: FomodCondition::Constant(true),
+				groups,
+				required_candidates: vec![candidate],
+				conditional_candidates: Vec::new(),
+				warnings: Vec::new(),
+			}),
+		};
+
+		for (choices, dry_run, expected) in [
+			(vec![], true, "additional_selections_required"),
+			(vec!["first=a"], true, "additional_selections_required"),
+			(vec!["first=a", "second=b"], true, "preview"),
+			(vec!["first=a", "second=b"], false, "failed"),
+		] {
+			let mut dependencies = successful_dependencies(temp.path()).expect("dependency fixture");
+			dependencies.install_mod.download_mod = Arc::new({
+				let downloaded = DownloadedMod {
+					suggested_name: "Selected file".into(),
+					archive: archive.clone(),
+					provenance: Some(provenance.clone()),
+				};
+				move |source, _| {
+					assert_eq!(source.url, "https://www.nexusmods.com/newvegas/mods/42");
+					assert_eq!(source.file_id, Some(7));
+					let downloaded = downloaded.clone();
+					Box::pin(async move { Ok(DownloadModOutput::Downloaded(downloaded)) })
+						as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.load_installation_state = Arc::new({
+				let game_binding = game_binding.clone();
+				move |_, _| {
+					let game_binding = game_binding.clone();
+					Box::pin(async move {
+						Ok(InstallationState {
+							game_binding,
+							installed_mods: Vec::new(),
+							current_winners: HashMap::new(),
+							file_dependencies: HashMap::new(),
+						})
+					}) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.index_archive = Arc::new({
+				let archive = archive.clone();
+				let index = index.clone();
+				move |received, _, _| {
+					assert_eq!(received, archive);
+					let index = index.clone();
+					Box::pin(async move { Ok(index) }) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.assess_installation = Arc::new(|_, _| {
+				Box::pin(async { Ok(InstallationAssessment { overlaps: Vec::new() }) }) as PortFuture<_>
+			});
+			dependencies.install_mod.install_archive.scan_environment_conflicts = Arc::new(|_| {
+				Box::pin(async {
+					Ok(EnvironmentConflictScan {
+						providers: Vec::new(),
+						problems: Vec::new(),
+					})
+				}) as PortFuture<_>
+			});
+			let began = Arc::new(AtomicBool::new(false));
+			let published = Arc::new(AtomicBool::new(false));
+			dependencies.install_mod.install_archive.begin_installation = Arc::new({
+				let began = began.clone();
+				let published = published.clone();
+				let provenance = provenance.clone();
+				move |approved, _| {
+					began.store(true, Ordering::SeqCst);
+					assert_eq!(approved.nexus, Some(provenance.clone()));
+					assert_eq!(
+						approved.plan
+							.accepted_choices
+							.iter()
+							.map(|choice| (
+								choice.group_id.as_str(),
+								choice.option_id.as_str()
+							))
+							.collect::<Vec<_>>(),
+						[("first", "a"), ("second", "b")]
+					);
+					let published = published.clone();
+					Box::pin(async move {
+						Ok(InstallationChange {
+							begin_file: Arc::new(|_, _| {
+								Box::pin(async {
+									Err(report!(ErrorMarker::io_failure()))
+								}) as PortFuture<_>
+							}),
+							finish: Arc::new(move |_| {
+								published.store(true, Ordering::SeqCst);
+								Box::pin(async { Ok(()) }) as PortFuture<_>
+							}),
+						})
+					}) as PortFuture<_>
+				}
+			});
+			dependencies.install_mod.install_archive.extract_approved_files =
+				Arc::new(|_, _, _, _, _, _| {
+					Box::pin(async { Err(report!(ErrorMarker::unsafe_archive())) }) as PortFuture<_>
+				});
+			let mut arguments = arguments![
+				"mods",
+				"--log-level",
+				"off",
+				"install",
+				"https://www.nexusmods.com/newvegas/mods/42",
+				"--file",
+				"7"
+			];
+			for choice in choices {
+				arguments.extend(arguments!["--choice", choice]);
+			}
+			if dry_run {
+				arguments.push(OsString::from("--dry-run"));
+			}
+
+			let result = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
+				Ok(dependencies)
+			})
+			.await?;
+
+			if expected == "failed" {
+				assert_ne!(result.status, 0);
+				assert!(result.stderr.contains("unsafe_archive"));
+				assert!(began.load(Ordering::SeqCst));
+			} else {
+				assert_eq!(result.status, 0, "{}", result.stderr);
+				assert!(
+					result.stdout.contains(&format!("outcome = \"{expected}\"")),
+					"{}",
+					result.stdout
+				);
+				assert!(!began.load(Ordering::SeqCst));
+			}
+			assert!(!published.load(Ordering::SeqCst));
+			assert_eq!(read(&archive_path)?, b"completed archive fixture");
+			assert!(!temp.path().join("mods/Selected file/meta.toml").exists());
+		}
+		Ok(())
 	}
 
 	#[tokio::test]
@@ -1125,7 +1420,118 @@ mod tests {
 			assert_eq!(outcome.status, status);
 			assert!(outcome.stdout.is_empty());
 			assert!(outcome.stderr.is_empty());
+			assert!(!outcome.execution_failed);
 		}
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn execution_failure_dialog_uses_the_created_diagnostic_path() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let outcome = run(
+			arguments!["mods", "exec", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+		let path = outcome.diagnostic_log.as_ref().ok_or("expected diagnostic log")?;
+		assert!(path.exists());
+		assert!(hidden_failure_dialog(&outcome)
+			.is_some_and(|message| message.contains(&path.display().to_string())));
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn hidden_exec_runs_managed_execution_and_classifies_its_result() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for failed in [false, true] {
+			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+			let called = Arc::new(AtomicBool::new(false));
+			let observed = called.clone();
+			let expected_cwd = temp.path().join("tools");
+			dependencies.execute_program.run_managed_program =
+				Arc::new(move |target, cwd, program, arguments, _, cancellation| {
+					observed.store(true, Ordering::SeqCst);
+					assert!(
+						matches!(target, OutputTarget::DataMod(name) if name.as_str() == "Tool Output")
+					);
+					assert_eq!(
+						cwd.as_ref().map(WorkingDirectory::as_path),
+						Some(expected_cwd.as_path())
+					);
+					assert_eq!(program.as_os_str(), "tool.exe");
+					assert_eq!(
+						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
+						["", "--hidden", "雪"]
+					);
+					assert!(!cancellation.is_cancelled());
+					Box::pin(async move {
+						if failed {
+							return Err(report!(
+								ErrorMarker::execution_supervision_failed()
+							));
+						}
+
+						Ok(ExecuteProgramOutput {
+							status: ProcessStatus::new(125),
+							warnings: Vec::new(),
+						})
+					}) as PortFuture<_>
+				});
+
+			let outcome = run(
+				arguments![
+					"mods",
+					"--log-level",
+					"off",
+					"exec",
+					"--hidden",
+					"--cwd",
+					"tools",
+					"--output-target",
+					"Tool Output",
+					"--",
+					"tool.exe",
+					"",
+					"--hidden",
+					"雪"
+				],
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_| Ok(dependencies),
+			)
+			.await?;
+
+			assert!(called.load(Ordering::SeqCst));
+			assert_eq!(outcome.status, 125);
+			assert_eq!(outcome.execution_failed, failed);
+			assert_eq!(hidden_failure_dialog(&outcome).is_some(), failed);
+			assert!(outcome.diagnostic_log.is_none());
+		}
+		Ok(())
+	}
+
+	#[cfg(not(windows))]
+	#[tokio::test]
+	async fn hidden_exec_is_explicitly_unsupported_on_non_windows() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
+		let outcome = run(
+			arguments!["mods", "--log-level", "off", "exec", "--hidden", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| Ok(dependencies),
+		)
+		.await?;
+		assert_eq!(outcome.status, 126);
+		assert_eq!(
+			outcome.stderr,
+			"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
+		);
+		assert!(outcome.execution_failed);
 		Ok(())
 	}
 

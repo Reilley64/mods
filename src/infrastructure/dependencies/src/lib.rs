@@ -17,6 +17,10 @@ use infrastructure_environment::EnvironmentAdapter;
 pub use infrastructure_execution::CapturedOutput;
 pub use infrastructure_execution::CapturedStream;
 pub use infrastructure_execution::ExecutionCapture;
+#[cfg(windows)]
+pub use infrastructure_execution::detach_console;
+#[cfg(windows)]
+pub use infrastructure_execution::show_error;
 use infrastructure_game_platform::GamePlatformAdapter;
 use infrastructure_settings::SettingsAdapter;
 

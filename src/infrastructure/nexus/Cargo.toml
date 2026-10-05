@@ -1,0 +1,23 @@
+[package]
+name = "infrastructure-nexus"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+application = { workspace = true }
+domain = { workspace = true }
+rootcause = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "time"] }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "net"] }

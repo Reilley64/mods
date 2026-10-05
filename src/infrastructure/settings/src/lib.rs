@@ -145,6 +145,7 @@ impl SettingsAdapter {
 			.to_str()
 			.ok_or_else(|| report!(ErrorMarker::setting_value_invalid()))?;
 		let replacement = toml::to_string_pretty(&WritableManifest {
+			nexus_api_key: manifest.nexus_api_key.as_deref(),
 			schema_version: manifest.schema_version,
 			name: manifest.name.as_deref(),
 			steam_app_id: manifest.steam_app_id,
@@ -215,6 +216,17 @@ impl SettingsAdapter {
 		})
 	}
 
+	/// Keeps credentials outside the queryable settings registry.
+	pub fn load_nexus_api_key(&self) -> Result<Option<String>, ErrorMarker> {
+		let (_, text) = open_bound_root(&self.root)?;
+		let (_, effective, _) = config_source::read_sources(
+			&text,
+			&self.environment,
+			ErrorMarker::settings_environment_invalid(),
+		)?;
+		Ok(effective.nexus_api_key.filter(|value| !value.trim().is_empty()))
+	}
+
 	pub fn load_port(&self) -> LoadSettings {
 		let adapter = self.clone();
 		Arc::new(move || {
@@ -268,6 +280,8 @@ struct PreparedGameBinding {
 
 #[derive(Serialize)]
 struct WritableManifest<'a> {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	nexus_api_key: Option<&'a str>,
 	schema_version: u32,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<&'a str>,
@@ -533,6 +547,34 @@ mod tests {
 			),
 		)?;
 		Ok((temp, root))
+	}
+
+	#[test]
+	fn game_directory_rewrite_preserves_stored_key_without_exposing_it_in_settings() -> Result<()> {
+		let (temp, root) = fixture()?;
+		let path = temp.path().join("mods.toml");
+		let text = format!(
+			"{}\nnexus_api_key = 'synthetic-stored-key'\n",
+			fs::read_to_string(&path)?
+		);
+		fs::write(&path, text)?;
+		let adapter = SettingsAdapter::with_environment(
+			root,
+			vec![(
+				OsString::from("MODS_NEXUS_API_KEY"),
+				OsString::from("synthetic-override-key"),
+			)],
+		);
+		let binding = GameBinding::new(
+			GameInstallationPath::new(STORED_GAME_DIR.into())?,
+			SteamBuildId::new(7)?,
+		);
+		adapter.store_game_binding(binding, CancellationToken::new())?;
+		let stored = fs::read_to_string(path)?;
+		assert!(stored.contains("synthetic-stored-key"));
+		assert!(!stored.contains("synthetic-override-key"));
+		assert!(!format!("{:?}", adapter.load()?).contains("synthetic"));
+		Ok(())
 	}
 
 	#[test]
@@ -821,6 +863,33 @@ mod tests {
 		fs::write(temp.path().join("profile/loadorder.txt"), "Example.eSL\r\n")?;
 
 		SettingsAdapter::with_environment(root, Vec::new()).load()?;
+		Ok(())
+	}
+
+	#[test]
+	fn installed_mod_without_metadata_is_accepted() -> Result<()> {
+		let (temp, root) = fixture()?;
+		fs::create_dir(temp.path().join("mods/Example Mod"))?;
+		fs::write(temp.path().join("profile/modlist.txt"), "+Example Mod\n")?;
+
+		SettingsAdapter::with_environment(root, Vec::new()).load()?;
+		Ok(())
+	}
+
+	#[test]
+	fn installed_mod_with_invalid_metadata_is_rejected() -> Result<()> {
+		for metadata in ["not = [", "schema_version = 2\n"] {
+			let (temp, root) = fixture()?;
+			fs::create_dir(temp.path().join("mods/Example Mod"))?;
+			fs::write(temp.path().join("mods/Example Mod/meta.toml"), metadata)?;
+			fs::write(temp.path().join("profile/modlist.txt"), "+Example Mod\n")?;
+
+			let error = SettingsAdapter::with_environment(root, Vec::new())
+				.load()
+				.err()
+				.ok_or_else(|| IoError::other("present invalid metadata unexpectedly loaded"))?;
+			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
+		}
 		Ok(())
 	}
 

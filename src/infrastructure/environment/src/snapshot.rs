@@ -13,6 +13,7 @@ use crate::safe_fs::is_reparse;
 use crate::safe_fs::read_bounded;
 use crate::safe_fs::validate_exact_entries;
 use crate::validate_bsa_file;
+use crate::validate_download_cache_entries;
 use application::ErrorCode;
 use application::ErrorMarker;
 use application::installation::CandidateDecision;
@@ -41,15 +42,24 @@ use domain::resolve_effective_file;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str::from_utf8;
+use std::time::SystemTime;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use toml::Value;
 use toml::from_str;
+
+#[cfg(test)]
+thread_local! {
+	pub(crate) static INVENTORY_IO: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
 
 const UTF8_BOM: &[u8] = &[0xef, 0xbb, 0xbf];
 const INVALIDATION_ARCHIVE: &str = "Fallout - Invalidation.bsa";
@@ -59,6 +69,8 @@ pub(crate) const MAX_PROVIDER_METADATA_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct EnvironmentSnapshotData {
+	pub(crate) file_details: HashMap<String, ProviderFileDetails>,
+	pub(crate) provider_metadata: Vec<(PathBuf, Vec<u8>)>,
 	pub(crate) game_binding: GameBinding,
 	pub(crate) installed_mods: Vec<InstalledMod>,
 	pub(crate) current_winners: HashMap<DataRelativePath, EffectiveResult>,
@@ -182,7 +194,7 @@ fn load_inner(
 	)?;
 	validate_manifest(&root, cancellation)?;
 	let cache = root.open_dir("cache").context(ErrorMarker::environment_invalid(None))?;
-	validate_exact_entries(&cache, &[INVALIDATION_ARCHIVE], cancellation)?;
+	validate_download_cache_entries(&cache, cancellation)?;
 	validate_bsa_file(&cache, cancellation)?;
 	if root.exists("logs").context(ErrorMarker::environment_invalid(None))? {
 		root.open_dir("logs").context(ErrorMarker::environment_invalid(None))?;
@@ -203,9 +215,19 @@ fn load_inner(
 	} else {
 		validate_profile_files(&profile_dir, false, cancellation)?;
 	}
-	validate_provider(&overwrite, ProviderKind::Overwrite, cancellation)?;
+	let mut overwrite_inventory = collect_provider_inventory(
+		&overwrite,
+		ProviderKind::Overwrite,
+		effective_binding.is_some(),
+		cancellation,
+	)?;
+	let mut provider_metadata = Vec::new();
+	if let Some(bytes) = overwrite_inventory.metadata.take() {
+		provider_metadata.push((root_path.join("overwrite/meta.toml"), bytes));
+	}
 
 	let mut directories = HashMap::new();
+	let mut discovered_names = HashSet::new();
 	let opened = mods.entries();
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -246,8 +268,17 @@ fn load_inner(
 		{
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
-		validate_provider(&directory, ProviderKind::DataMod, cancellation)?;
-		directories.insert(key, name);
+		let mut inventory = collect_provider_inventory(
+			&directory,
+			ProviderKind::DataMod,
+			effective_binding.is_some(),
+			cancellation,
+		)?;
+		if let Some(bytes) = inventory.metadata.take() {
+			provider_metadata.push((root_path.join("mods").join(name.as_str()).join("meta.toml"), bytes));
+		}
+		discovered_names.insert(name.as_str().to_owned());
+		directories.insert(key, (name, inventory));
 	}
 
 	let modlist = read_bounded(
@@ -258,17 +289,21 @@ fn load_inner(
 		cancellation,
 	)?;
 	let parsed = parse_modlist(&modlist)?;
-	if parsed.len() != directories.len() {
+	let listed_names: HashSet<_> = parsed.iter().map(|entry| entry.name.as_str().to_owned()).collect();
+	if listed_names != discovered_names {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
+
 	let mut installed_mods = Vec::with_capacity(parsed.len());
+	let mut inventories = Vec::with_capacity(parsed.len());
 	for entry in parsed {
-		let Some(canonical) = directories.remove(entry.name.comparison_key()) else {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		};
+		let (canonical, inventory) = directories
+			.remove(entry.name.comparison_key())
+			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 		if canonical.as_str() != entry.name.as_str() {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
+		inventories.push(inventory);
 		installed_mods.push(InstalledMod {
 			name: canonical,
 			priority: entry.priority,
@@ -278,12 +313,24 @@ fn load_inner(
 	if !directories.is_empty() {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
+
 	let game_binding = if let Some(binding) = effective_binding {
 		binding.clone()
 	} else {
 		manifest_game_binding(&root, cancellation)?
 	};
-	let current_winners = current_winners(&root, &mods, &installed_mods, &game_binding, cancellation)?;
+	let InventoryWinners {
+		files: current_winners,
+		details: file_details,
+	} = current_winners(
+		&installed_mods,
+		inventories,
+		overwrite_inventory,
+		&game_binding,
+		effective_binding.is_some(),
+		cancellation,
+	)?;
+	provider_metadata.sort_by(|left, right| left.0.cmp(&right.0));
 	let file_dependencies = if effective_binding.is_some() {
 		HashMap::new()
 	} else {
@@ -294,11 +341,37 @@ fn load_inner(
 	}
 
 	Ok(EnvironmentSnapshotData {
+		file_details,
+		provider_metadata,
 		game_binding,
 		installed_mods,
 		current_winners,
 		file_dependencies,
 	})
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ProviderFileDetails {
+	pub(crate) length: u64,
+	pub(crate) modified: SystemTime,
+}
+
+#[derive(Default)]
+struct ProviderInventory {
+	entries: Vec<(DataRelativePath, bool)>,
+	files: HashMap<String, ProviderFileDetails>,
+	tombstones: Vec<(DataRelativePath, bool)>,
+	metadata: Option<Vec<u8>>,
+}
+
+struct ProviderMetadata {
+	tombstones: Vec<(DataRelativePath, bool)>,
+	bytes: Vec<u8>,
+}
+
+struct InventoryWinners {
+	files: HashMap<DataRelativePath, EffectiveResult>,
+	details: HashMap<String, ProviderFileDetails>,
 }
 
 #[derive(Clone, Copy)]
@@ -320,6 +393,17 @@ fn validate_provider(
 	kind: ProviderKind,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
+	collect_provider_inventory(provider, kind, false, cancellation)?;
+	Ok(())
+}
+
+fn collect_provider_inventory(
+	provider: &SafeDir,
+	kind: ProviderKind,
+	file_details: bool,
+	cancellation: &CancellationToken,
+) -> Result<ProviderInventory, ErrorMarker> {
+	let mut inventory = ProviderInventory::default();
 	let mut paths = HashSet::new();
 	let mut budget = EntryBudget::new(MAX_PROVIDER_ENTRIES);
 	validate_provider_directory(
@@ -328,25 +412,21 @@ fn validate_provider(
 		kind,
 		"",
 		&mut paths,
+		&mut inventory,
+		file_details,
 		cancellation,
 		&mut budget,
 		MAX_TRAVERSAL_DEPTH,
 	)?;
-	if matches!(kind, ProviderKind::DataMod)
-		&& !provider
-			.exists("meta.toml")
-			.context(ErrorMarker::environment_invalid(None))?
-	{
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	}
 	if !provider
 		.exists("meta.toml")
 		.context(ErrorMarker::environment_invalid(None))?
 	{
-		return Ok(());
+		return Ok(inventory);
 	}
 
-	let tombstones = validate_metadata(provider, cancellation)?;
+	let ProviderMetadata { tombstones, bytes } = read_metadata(provider, cancellation)?;
+	inventory.metadata = Some(bytes);
 	let mut directory_tombstones = HashSet::new();
 	for (tombstone, directory) in &tombstones {
 		if cancellation.is_cancelled() {
@@ -387,7 +467,9 @@ fn validate_provider(
 			}
 		}
 	}
-	Ok(())
+
+	inventory.tombstones = tombstones;
+	Ok(inventory)
 }
 
 #[expect(
@@ -400,6 +482,8 @@ fn validate_provider_directory(
 	kind: ProviderKind,
 	prefix: &str,
 	paths: &mut HashSet<String>,
+	inventory: &mut ProviderInventory,
+	file_details: bool,
 	cancellation: &CancellationToken,
 	budget: &mut EntryBudget,
 	remaining_depth: usize,
@@ -414,6 +498,11 @@ fn validate_provider_directory(
 	if !ancestry.context(ErrorMarker::environment_invalid(None))? {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
+	#[cfg(test)]
+	INVENTORY_IO.with(|count| {
+		let (walks, metadata) = count.get();
+		count.set((walks + 1, metadata));
+	});
 	let opened = directory.entries();
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -462,6 +551,7 @@ fn validate_provider_directory(
 		}
 		let metadata = metadata.context(ErrorMarker::environment_invalid(None))?;
 		if metadata.is_dir() {
+			inventory.entries.push((data_path, true));
 			let child = directory.open_dir(&entry);
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
@@ -472,6 +562,8 @@ fn validate_provider_directory(
 				kind,
 				&relative,
 				paths,
+				inventory,
+				file_details,
 				cancellation,
 				budget,
 				remaining_depth - 1,
@@ -485,7 +577,7 @@ fn validate_provider_directory(
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
-		opened.context(ErrorMarker::environment_invalid(None))?;
+		let file = opened.context(ErrorMarker::environment_invalid(None))?;
 		if prefix.is_empty() {
 			let identity = case_fold_key(spelling);
 			if identity == case_fold_key(INVALIDATION_ARCHIVE) {
@@ -497,6 +589,23 @@ fn validate_provider_directory(
 				return Err(report!(ErrorMarker::environment_invalid(None)));
 			}
 		}
+		if prefix.is_empty() && spelling == "meta.toml" {
+			continue;
+		}
+		if file_details {
+			let metadata = file.metadata().context(ErrorMarker::environment_invalid(None))?;
+			inventory.files.insert(
+				data_path.comparison_key().to_owned(),
+				ProviderFileDetails {
+					length: metadata.len(),
+					modified: metadata
+						.modified()
+						.context(ErrorMarker::environment_invalid(None))?
+						.into_std(),
+				},
+			);
+		}
+		inventory.entries.push((data_path, false));
 	}
 	Ok(())
 }
@@ -505,6 +614,15 @@ fn validate_metadata(
 	provider: &SafeDir,
 	cancellation: &CancellationToken,
 ) -> Result<Vec<(DataRelativePath, bool)>, ErrorMarker> {
+	Ok(read_metadata(provider, cancellation)?.tombstones)
+}
+
+fn read_metadata(provider: &SafeDir, cancellation: &CancellationToken) -> Result<ProviderMetadata, ErrorMarker> {
+	#[cfg(test)]
+	INVENTORY_IO.with(|count| {
+		let (walks, metadata) = count.get();
+		count.set((walks, metadata + 1));
+	});
 	let bytes = read_bounded(
 		provider,
 		"meta.toml",
@@ -524,7 +642,10 @@ fn validate_metadata(
 	let invalidation_archive_identity = case_fold_key(INVALIDATION_ARCHIVE);
 	let mut result = Vec::new();
 	let Some(tombstones) = table.get("tombstones") else {
-		return Ok(result);
+		return Ok(ProviderMetadata {
+			tombstones: result,
+			bytes,
+		});
 	};
 
 	let tombstones = tombstones
@@ -561,7 +682,10 @@ fn validate_metadata(
 			result.push((canonical, directory));
 		}
 	}
-	Ok(result)
+	Ok(ProviderMetadata {
+		tombstones: result,
+		bytes,
+	})
 }
 
 pub(crate) fn validate_prospective_namespace(
@@ -647,21 +771,23 @@ pub(crate) fn validate_prospective_namespace(
 }
 
 fn current_winners(
-	root: &SafeDir,
-	mods: &SafeDir,
 	installed: &[InstalledMod],
+	inventories: Vec<ProviderInventory>,
+	overwrite: ProviderInventory,
 	binding: &GameBinding,
+	file_details: bool,
 	cancellation: &CancellationToken,
-) -> Result<HashMap<DataRelativePath, EffectiveResult>, ErrorMarker> {
+) -> Result<InventoryWinners, ErrorMarker> {
 	let mut namespace = HashMap::new();
 	let mut winners = HashMap::new();
 	let game = SafeDir::open_absolute(binding.game_directory().as_path())
 		.context(ErrorMarker::environment_invalid(None))?;
 	match game.open_dir("Data") {
 		Ok(data) => {
-			validate_provider(&data, ProviderKind::GameBase, cancellation)?;
-			apply_provider(
-				&data,
+			let inventory =
+				collect_provider_inventory(&data, ProviderKind::GameBase, file_details, cancellation)?;
+			apply_inventory(
+				inventory,
 				ProviderClass::SteamData,
 				None,
 				None,
@@ -673,16 +799,16 @@ fn current_winners(
 		Err(error) if error.current_context().kind() == io::ErrorKind::NotFound => {}
 		Err(error) => return Err(error.context(ErrorMarker::environment_invalid(None))),
 	}
-	for installed_mod in installed.iter().filter(|installed_mod| installed_mod.enabled) {
+	for (installed_mod, inventory) in installed.iter().zip(inventories) {
+		if !installed_mod.enabled {
+			continue;
+		}
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let directory = mods
-			.open_dir(installed_mod.name.as_str())
-			.context(ErrorMarker::environment_invalid(None))?;
-		apply_provider(
-			&directory,
+		apply_inventory(
+			inventory,
 			ProviderClass::DataMod,
 			Some(installed_mod.name.clone()),
 			Some(installed_mod.priority),
@@ -691,11 +817,8 @@ fn current_winners(
 			cancellation,
 		)?;
 	}
-	let overwrite = root
-		.open_dir("overwrite")
-		.context(ErrorMarker::environment_invalid(None))?;
-	apply_provider(
-		&overwrite,
+	apply_inventory(
+		overwrite,
 		ProviderClass::Overwrite,
 		None,
 		None,
@@ -705,13 +828,19 @@ fn current_winners(
 	)?;
 
 	let mut result = HashMap::with_capacity(winners.len());
-	for (path, effective) in winners.into_values() {
+	let mut details = HashMap::new();
+	for (path, effective, file) in winners.into_values() {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
+		if matches!(effective, EffectiveResult::File(_))
+			&& let Some(file) = file
+		{
+			details.insert(path.comparison_key().to_owned(), file);
+		}
 		result.insert(path, effective);
 	}
-	Ok(result)
+	Ok(InventoryWinners { files: result, details })
 }
 
 fn apply_provider(
@@ -720,10 +849,44 @@ fn apply_provider(
 	mod_name: Option<ModName>,
 	priority: Option<ModPriority>,
 	namespace: &mut HashMap<String, bool>,
-	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult)>,
+	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult, Option<ProviderFileDetails>)>,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	for (path, is_directory) in collect_entries(directory, "", cancellation)? {
+	let entries = collect_entries(directory, "", cancellation)?;
+	let tombstones = if directory
+		.exists("meta.toml")
+		.context(ErrorMarker::environment_invalid(None))?
+	{
+		validate_metadata(directory, cancellation)?
+	} else {
+		Vec::new()
+	};
+
+	apply_inventory(
+		ProviderInventory {
+			entries,
+			tombstones,
+			..ProviderInventory::default()
+		},
+		class,
+		mod_name,
+		priority,
+		namespace,
+		winners,
+		cancellation,
+	)
+}
+
+fn apply_inventory(
+	mut inventory: ProviderInventory,
+	class: ProviderClass,
+	mod_name: Option<ModName>,
+	priority: Option<ModPriority>,
+	namespace: &mut HashMap<String, bool>,
+	winners: &mut HashMap<String, (DataRelativePath, EffectiveResult, Option<ProviderFileDetails>)>,
+	cancellation: &CancellationToken,
+) -> Result<(), ErrorMarker> {
+	for (path, is_directory) in inventory.entries {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -734,19 +897,17 @@ fn apply_provider(
 		namespace.insert(key.clone(), is_directory);
 		if !is_directory {
 			let provider = provider_reference(class, mod_name.clone(), priority, path.clone())?;
-			winners.insert(key, (path, EffectiveResult::File(provider)));
+			let details = inventory.files.remove(&key);
+			winners.insert(key, (path, EffectiveResult::File(provider), details));
 		}
 	}
-	if !directory
-		.exists("meta.toml")
-		.context(ErrorMarker::environment_invalid(None))?
-	{
+	if inventory.tombstones.is_empty() {
 		return Ok(());
 	}
 
 	let mut path_tombstones = HashMap::new();
 	let mut tombstone_index = TombstoneIndex::default();
-	for (path, directory_scope) in validate_metadata(directory, cancellation)? {
+	for (path, directory_scope) in inventory.tombstones {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -763,7 +924,7 @@ fn apply_provider(
 		path_tombstones.insert(path.comparison_key().to_owned(), (path, tombstone));
 	}
 
-	for (key, (_, effective)) in winners.iter_mut() {
+	for (key, (_, effective, _)) in winners.iter_mut() {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
@@ -795,6 +956,7 @@ fn apply_provider(
 				EffectiveResult::Absent {
 					controlling_tombstone: Some(tombstone),
 				},
+				None,
 			),
 		);
 	}
@@ -848,6 +1010,11 @@ fn collect_entries_inner(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+	#[cfg(test)]
+	INVENTORY_IO.with(|count| {
+		let (walks, metadata) = count.get();
+		count.set((walks + 1, metadata));
+	});
 	let opened = directory.entries();
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
@@ -1415,6 +1582,7 @@ mod tests {
 	use super::MAX_MODS;
 	use super::MAX_PROVIDER_ENTRIES;
 	use super::MAX_PROVIDER_METADATA_BYTES;
+	use super::ProviderInventory;
 	use super::ProviderKind;
 	use super::assess_installation;
 	use super::collect_entries_inner;
@@ -1533,6 +1701,8 @@ mod tests {
 			ProviderKind::Overwrite,
 			"",
 			&mut paths,
+			&mut ProviderInventory::default(),
+			false,
 			&CancellationToken::new(),
 			&mut validation_budget,
 			0,
@@ -1582,6 +1752,18 @@ mod tests {
 
 			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentInvalid);
 		}
+		Ok(())
+	}
+
+	#[test]
+	fn data_mod_validation_accepts_missing_metadata() -> StdResult<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		fs::write(temp.path().join("ordinary.dds"), b"content")?;
+		let directory = SafeDir::open_absolute(&temp.path().canonicalize()?)
+			.map_err(|_| "safe provider directory must open")?;
+
+		validate_provider(&directory, ProviderKind::DataMod, &CancellationToken::new())
+			.map_err(|_| "missing metadata must mean empty tombstones")?;
 		Ok(())
 	}
 
@@ -1685,6 +1867,34 @@ mod tests {
 			.expect_err("pre-cancelled provider validation must stop");
 
 		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
+		Ok(())
+	}
+
+	#[test]
+	fn snapshot_accepts_data_mod_without_metadata() -> StdResult<(), Box<dyn Error>> {
+		let fixture = TempDir::new_in(current_dir()?)?;
+		let game = fixture.path().join("game");
+		fs::create_dir_all(game.join("Data"))?;
+		let root = EnvironmentRoot::new(fixture.path().join("environment"))
+			.expect("fixture environment root must be valid");
+		EnvironmentAdapter
+			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.expect("fixture environment must initialize");
+		let mod_dir = root.as_path().join("mods/Plain");
+		fs::create_dir(&mod_dir)?;
+		fs::write(mod_dir.join("ordinary.dds"), b"content")?;
+		fs::write(root.as_path().join("profile/modlist.txt"), b"+Plain\n")?;
+
+		let snapshot = load(
+			root.as_path(),
+			InstallationStateAccess::Preview,
+			&CancellationToken::new(),
+		)
+		.expect("metadata-free Data Mod must load");
+		assert_eq!(
+			snapshot.file_dependencies.get("ordinary.dds").map(|fact| fact.state),
+			Some(FileDependencyState::Active)
+		);
 		Ok(())
 	}
 

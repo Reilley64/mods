@@ -8,6 +8,7 @@ use application::installation::AdditionalSelectionsRequired;
 use application::installation::CandidateDecision;
 use application::installation::ConditionOperator;
 use application::installation::ConditionScope;
+use application::installation::DownloadModFile;
 use application::installation::InstallMode;
 use application::installation::InstallPlan;
 use application::installation::InstallPreview;
@@ -48,6 +49,28 @@ pub(crate) fn preview(output: &InstallPreview) -> Value {
 
 pub(crate) fn installed() -> Value {
 	json!({"outcome": "installed"})
+}
+
+pub(crate) fn file_selection_required(files: &[DownloadModFile]) -> Value {
+	let files = files
+		.iter()
+		.map(|file| {
+			json!({
+				"file_id": file.file_id,
+				"name": file.name,
+				"version": file.version,
+				"category": file.category,
+			})
+		})
+		.collect::<Vec<_>>();
+
+	json_output::problem(
+		"nexus_file_selection_required",
+		"Nexus file selection required",
+		"Select a file with --file <id>.",
+		2,
+		json!({"files": files}),
+	)
 }
 
 pub(crate) fn warnings(values: &[InstallWarning]) -> Vec<Value> {

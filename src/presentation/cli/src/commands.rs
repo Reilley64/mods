@@ -91,7 +91,10 @@ impl fmt::Display for LogLevel {
 
 #[derive(Debug, Args)]
 pub(crate) struct InstallArgs {
+	#[arg(value_name = "ARCHIVE_OR_NEXUS_URL")]
 	pub(crate) archive: PathBuf,
+	#[arg(long, value_name = "ID")]
+	pub(crate) file: Option<u64>,
 	#[arg(long)]
 	pub(crate) name: Option<String>,
 	#[arg(long)]
@@ -126,6 +129,12 @@ pub(crate) struct ExecArgs {
 	pub(crate) output_target: Option<String>,
 	#[arg(long)]
 	pub(crate) cwd: Option<PathBuf>,
+	#[arg(
+		long,
+		conflicts_with = "json",
+		help = "Detach the launcher console and show launch failures in dialogs (Windows only)"
+	)]
+	pub(crate) hidden: bool,
 	#[arg(last = true, required = true, num_args = 1.., allow_hyphen_values = true)]
 	pub(crate) command: Vec<OsString>,
 }
@@ -161,6 +170,33 @@ mod tests {
 	use super::parse_from;
 	use std::error::Error;
 	use std::ffi::OsString;
+	use std::path::Path;
+
+	#[test]
+	fn nexus_file_selection_preserves_existing_install_options() -> Result<(), Box<dyn Error>> {
+		let parsed = parse_from([
+			"mods",
+			"install",
+			"https://www.nexusmods.com/newvegas/mods/42",
+			"--file",
+			"7",
+			"--name",
+			"Chosen",
+			"--replace",
+			"--dry-run",
+			"--choice",
+			"group=option",
+		])?;
+		let Command::Install(arguments) = parsed.command else {
+			return Err("install must parse".into());
+		};
+		assert_eq!(arguments.file, Some(7));
+		assert_eq!(arguments.name.as_deref(), Some("Chosen"));
+		assert!(arguments.replace && arguments.dry_run);
+		assert_eq!(arguments.choice, ["group=option"]);
+		assert!(parse_from(["mods", "config", "get", "nexus-api-key"]).is_err());
+		Ok(())
+	}
 
 	#[test]
 	fn parses_environment_log_level_and_issue_twenty_seven_commands() {
@@ -320,6 +356,36 @@ mod tests {
 		};
 		assert_eq!(arguments.command, values.map(OsString::from));
 		assert!(parse_from(["mods", "exec", "--"]).is_err());
+		Ok(())
+	}
+
+	#[test]
+	fn hidden_exec_preserves_launch_options_and_child_arguments() -> Result<(), Box<dyn Error>> {
+		let cli = parse_from([
+			"mods",
+			"exec",
+			"--output-target",
+			"High",
+			"--cwd",
+			"tools",
+			"--hidden",
+			"--",
+			"tool.exe",
+			"--hidden",
+			"",
+			"雪",
+		])?;
+		let Command::Exec(args) = cli.command else {
+			return Err("expected exec".into());
+		};
+		assert!(args.hidden);
+		assert_eq!(args.output_target.as_deref(), Some("High"));
+		assert_eq!(args.cwd.as_deref(), Some(Path::new("tools")));
+		assert_eq!(args.command, ["tool.exe", "--hidden", "", "雪"].map(OsString::from));
+		let Command::Exec(normal) = parse_from(["mods", "exec", "--", "tool.exe"])?.command else {
+			return Err("expected exec".into());
+		};
+		assert!(!normal.hidden);
 		Ok(())
 	}
 

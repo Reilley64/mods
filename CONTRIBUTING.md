@@ -16,6 +16,12 @@ cargo check --workspace --target x86_64-pc-windows-msvc
 
 Pull request titles must follow Conventional Commits. This repository validates squash pull request titles in GitHub Actions. It does not install Husky or enforce individual local commit messages.
 
+## Installation seams
+
+The CLI parses local or remote input and calls the provider-neutral `installation::install_mod` use case. Its `DownloadMod` port returns a completed local archive with a suggested Mod Name and optional explicit source metadata, or files that need explicit selection. Nexus authentication, file resolution, and cache handling stay inside `infrastructure-nexus::NexusAdapter` behind that port. `install_archive` keeps the existing archive safety, FOMOD, preview, and publication flow.
+
+Keep provider policy tests in the Nexus adapter. Test installation orchestration through `install_mod` and command wiring through the CLI. Credential loading is infrastructure wiring, not an application setting that callers can inspect. The Nexus adapter supplies explicit Nexus provenance; downloads without it remain valid. Nexus provenance still uses the required `[nexus]` table; the provider-neutral orchestration does not choose a provider or derive names from that table.
+
 ## Release Please credentials
 
 The release workflow creates a short-lived token from a repository-scoped GitHub App. Configure the App Client ID as the `RELEASE_PLEASE_APP_CLIENT_ID` repository variable and its private key as the `RELEASE_PLEASE_APP_PRIVATE_KEY` repository secret. Grant the App only repository `contents`, `pull requests`, and `issues` write access. The workflow requests only those permissions.
