@@ -71,6 +71,7 @@ async fn main() {
 		};
 
 		Ok(runner::Dependencies {
+			create_shortcut: resources.create_shortcut_dependencies(startup.to_owned()),
 			execute_program,
 			execution_force_cancellation,
 			initialize_environment: resources.initialize_environment_dependencies(),

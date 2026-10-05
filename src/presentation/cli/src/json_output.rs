@@ -278,6 +278,12 @@ mod tests {
 			ErrorCode::VfsFailed,
 			ErrorCode::ExecutionSupervisionFailed,
 			ErrorCode::OperationCancelled,
+			ErrorCode::ShortcutUnsupported,
+			ErrorCode::ShortcutNameInvalid,
+			ErrorCode::ShortcutDestinationInvalid,
+			ErrorCode::ShortcutLaunchInvalid,
+			ErrorCode::ShortcutArgumentsTooLong,
+			ErrorCode::ShortcutFailed,
 		];
 		for code in codes {
 			match code {
@@ -323,7 +329,13 @@ mod tests {
 				| ErrorCode::ProgramLaunchFailed
 				| ErrorCode::VfsFailed
 				| ErrorCode::ExecutionSupervisionFailed
-				| ErrorCode::OperationCancelled => {}
+				| ErrorCode::OperationCancelled
+				| ErrorCode::ShortcutUnsupported
+				| ErrorCode::ShortcutNameInvalid
+				| ErrorCode::ShortcutDestinationInvalid
+				| ErrorCode::ShortcutLaunchInvalid
+				| ErrorCode::ShortcutArgumentsTooLong
+				| ErrorCode::ShortcutFailed => {}
 			}
 		}
 		let synthetic = [

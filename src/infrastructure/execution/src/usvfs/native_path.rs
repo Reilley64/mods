@@ -28,7 +28,7 @@ pub(super) fn wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError> {
 /// # Errors
 ///
 /// Returns [`ExecutionError`] when the path is empty, contains an embedded NUL, or contains a verbatim component whose meaning would change after conversion.
-pub(super) fn native_path_wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError> {
+pub(crate) fn native_path_wide(value: &OsStr) -> Result<Vec<u16>, ExecutionError> {
 	normalize_native_path(wide(value)?)
 }
 

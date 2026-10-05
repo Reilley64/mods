@@ -41,6 +41,8 @@ use application::settings::SetGameDirectoryDependencies;
 use application::settings::get_setting;
 use application::settings::list_settings;
 use application::settings::set_game_directory;
+use application::shortcut::CreateShortcutDependencies;
+use application::shortcut::create_shortcut;
 use clap::Error as ClapError;
 use clap::error::ErrorKind;
 use domain::ArchivePath;
@@ -73,6 +75,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub(crate) struct Dependencies {
+	pub(crate) create_shortcut: CreateShortcutDependencies,
 	pub(crate) execution_force_cancellation: CancellationToken,
 	pub(crate) execute_program: ExecuteProgramDependencies,
 	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
@@ -234,6 +237,7 @@ pub(crate) async fn execute(
 			command: ConflictsCommand::Explain { .. },
 		} => "conflicts.explain",
 		Command::Exec(_) => "exec",
+		Command::Shortcut(_) => "shortcut",
 	};
 	let (mut session, diagnostic_warning) =
 		match DiagnosticSession::start(root.as_path(), cli.log_level, operation_name) {
@@ -280,7 +284,15 @@ pub(crate) async fn execute(
 	};
 
 	let json_mode = cli.json;
-	let work = dispatch(cli.command, dependencies, root, startup_directory, json_mode);
+	let quiet_success = matches!(&cli.command, Command::Shortcut(_));
+	let work = dispatch(
+		cli.command,
+		dependencies,
+		root,
+		startup_directory,
+		cli.log_level.to_string(),
+		json_mode,
+	);
 	let mut result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
@@ -318,7 +330,9 @@ pub(crate) async fn execute(
 			}
 		}
 	} else {
-		result.stderr.push_str(&diagnostic_warning);
+		if !quiet_success || result.status != 0 {
+			result.stderr.push_str(&diagnostic_warning);
+		}
 		if result.status != 0
 			&& let Some(id) = session_id
 		{
@@ -334,6 +348,7 @@ async fn dispatch(
 	dependencies: Dependencies,
 	root: EnvironmentRoot,
 	startup: PathBuf,
+	log_level: String,
 	json_mode: bool,
 ) -> RunOutcome {
 	match command {
@@ -585,6 +600,50 @@ async fn dispatch(
 				}
 			}
 		},
+		Command::Shortcut(arguments) => {
+			let output_target = if let Some(name) = arguments.output_target {
+				let Ok(name) = ModName::new(name) else {
+					return marker_outcome(ErrorMarker::invalid_output_target(), json_mode);
+				};
+				OutputTarget::DataMod(name)
+			} else {
+				OutputTarget::Overwrite
+			};
+			let Ok(working_directory) = WorkingDirectory::new(resolve_path(
+				arguments.cwd.as_deref().unwrap_or(&startup),
+				&startup,
+			)) else {
+				return marker_outcome(ErrorMarker::invalid_working_directory(), json_mode);
+			};
+			let mut command = arguments.command.into_iter();
+			let Some(program) = command.next() else {
+				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
+			};
+			let Ok(program) = Program::new(program) else {
+				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
+			};
+			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
+			else {
+				return marker_outcome(ErrorMarker::program_launch_failed(), json_mode);
+			};
+
+			match create_shortcut(
+				dependencies.create_shortcut,
+				output_target,
+				Some(working_directory),
+				program,
+				program_arguments,
+				arguments.name,
+				arguments.destination.map(|path| resolve_path(&path, &startup)),
+				log_level,
+				operation::ctrl_c_token(),
+			)
+			.await
+			{
+				Ok(_) => success(String::new(), String::new(), json_mode, json!({}), vec![]),
+				Err(report) => report_outcome(&report, json_mode),
+			}
+		}
 		Command::Exec(arguments) => {
 			if arguments.hidden && !cfg!(windows) {
 				let marker = ErrorMarker::program_unsupported();
@@ -862,14 +921,22 @@ mod tests {
 	use application::ports::InitializationTargetAssessment;
 	use application::ports::InstallationChange;
 	use application::ports::PortFuture;
+	use application::ports::PrepareExecutionEnvironment;
+	use application::ports::PreparedExecution;
 	use application::ports::ProgressEvent;
+	use application::ports::ResolveLaunchInputs;
 	use application::ports::ResolvedGameInstallation;
+	use application::ports::ResolvedLaunch;
 	use application::ports::StoredAndEffectiveBinding;
 	use application::settings::GetSettingDependencies;
 	use application::settings::ListSettingsDependencies;
 	use application::settings::ResolvedSettings;
 	use application::settings::SetGameDirectoryDependencies;
+	use application::settings::SettingKey;
+	use application::settings::SettingRecord;
 	use application::settings::SettingSource;
+	use application::settings::SettingValue;
+	use application::shortcut::CreateShortcutDependencies;
 	use clap::Parser;
 	use domain::ArchiveIdentity;
 	use domain::ArchivePath;
@@ -895,6 +962,7 @@ mod tests {
 	#[cfg(windows)]
 	use domain::WorkingDirectory;
 	use infrastructure_dependencies::Resources;
+	use rootcause::compat::boxed_error::IntoBoxedError;
 	use rootcause::report;
 	use serde_json::Value;
 	use serde_json::from_str;
@@ -908,6 +976,7 @@ mod tests {
 	use std::fs::read_to_string;
 	use std::fs::write;
 	use std::path::Path;
+	use std::path::PathBuf;
 	use std::sync::Arc;
 	use std::sync::atomic::AtomicBool;
 	use std::sync::atomic::Ordering;
@@ -1054,6 +1123,29 @@ mod tests {
 		}
 	}
 
+	fn resolved_launch(working_directory: PathBuf, program: PathBuf) -> ResolvedLaunch {
+		ResolvedLaunch {
+			command_line: program.as_os_str().to_owned(),
+			program,
+			working_directory,
+			target_lease: Arc::new(()),
+		}
+	}
+
+	fn prepared_execution(binding: GameBinding) -> PreparedExecution {
+		PreparedExecution {
+			game_binding: binding.clone(),
+			providers: Vec::new(),
+			winners: Vec::new(),
+			visible_files: Vec::new(),
+			profile_files: Vec::new(),
+			profile_directory: PathBuf::new(),
+			data_directory: binding.game_directory().as_path().join("Data"),
+			cache_directory: PathBuf::new(),
+			revalidation_basis: Arc::new(()),
+		}
+	}
+
 	fn dependencies_with_list(binding: GameBinding, list_settings: ListSettingsDependencies) -> Dependencies {
 		let resolved = ResolvedSettings {
 			settings: Vec::new(),
@@ -1061,11 +1153,39 @@ mod tests {
 			manifest_binding: binding.clone(),
 		};
 		let install_archive = unavailable_install_archive_dependencies();
+		let prepared = prepared_execution(binding.clone());
+		let prepare_execution_environment: PrepareExecutionEnvironment = Arc::new(move |_, _| {
+			let prepared = prepared.clone();
+			Box::pin(async move { Ok(prepared) }) as PortFuture<_>
+		});
+		let resolve_launch_inputs: ResolveLaunchInputs = Arc::new(|cwd, program, _, _| {
+			let launch = resolved_launch(
+				cwd.map(|cwd| cwd.as_path().to_owned()).unwrap_or_default(),
+				program.as_os_str().into(),
+			);
+			Box::pin(async move { Ok(launch) }) as PortFuture<_>
+		});
 		Dependencies {
+			create_shortcut: CreateShortcutDependencies {
+				locate_launcher: Arc::new(|| {
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
+				}),
+				resolve_launch_inputs: resolve_launch_inputs.clone(),
+				prepare_execution_environment: prepare_execution_environment.clone(),
+				load_settings: list_settings.load_settings.clone(),
+				locate_environment_root: Arc::new(|| {
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
+				}),
+				persist: Arc::new(|_| {
+					Box::pin(async { Err(report!(ErrorMarker::shortcut_unsupported())) })
+				}),
+			},
 			execution_force_cancellation: CancellationToken::new(),
 			execute_program: ExecuteProgramDependencies {
 				report_progress: None,
-				run_managed_program: Arc::new(|_, _, _, _, _, _| {
+				resolve_launch_inputs,
+				prepare_execution_environment,
+				run_managed_program: Arc::new(|_, _, _, _, _| {
 					Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
 				}),
 			},
@@ -1159,11 +1279,31 @@ mod tests {
 		}
 	}
 
-	fn successful_dependencies(root: &Path) -> Result<Dependencies, ErrorMarker> {
+	fn test_binding(root: &Path) -> Result<GameBinding, ErrorMarker> {
 		let game = GameInstallationPath::new(root.join("game"))
 			.map_err(|_| ErrorMarker::environment_invalid(None))?;
 		let build = SteamBuildId::new(1).map_err(|_| ErrorMarker::environment_invalid(None))?;
-		let binding = GameBinding::new(game, build);
+		Ok(GameBinding::new(game, build))
+	}
+
+	fn named_settings(binding: GameBinding, name: &str) -> ResolvedSettings {
+		ResolvedSettings {
+			settings: vec![SettingRecord {
+				key: SettingKey::Name,
+				value: SettingValue::String(name.to_owned()),
+				source: SettingSource::Manifest,
+				manifest_value: SettingValue::String(name.to_owned()),
+				manifest_path: "name",
+				shadowed: false,
+				writable: true,
+			}],
+			effective_binding: binding.clone(),
+			manifest_binding: binding,
+		}
+	}
+
+	fn successful_dependencies(root: &Path) -> Result<Dependencies, ErrorMarker> {
+		let binding = test_binding(root)?;
 		let listed_binding = binding.clone();
 		Ok(dependencies_with_list(
 			binding,
@@ -1397,22 +1537,25 @@ mod tests {
 		let temp = TempDir::new()?;
 		for status in [0, 1, 125, 126, 127, 256, 259, 0xC000_0005] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program.run_managed_program =
-				Arc::new(move |target, cwd, program, arguments, _, _| {
-					assert_eq!(target, OutputTarget::Overwrite);
-					assert!(cwd.is_none());
-					assert_eq!(program.as_os_str(), "tool.exe");
-					assert_eq!(
-						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
-						["", "--", "雪"]
-					);
-					Box::pin(async move {
-						Ok(ExecuteProgramOutput {
-							status: ProcessStatus::new(status),
-							warnings: Vec::new(),
-						})
-					}) as PortFuture<_>
-				});
+			dependencies.execute_program.resolve_launch_inputs = Arc::new(|cwd, program, arguments, _| {
+				assert!(cwd.is_none());
+				assert_eq!(program.as_os_str(), "tool.exe");
+				assert_eq!(
+					arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
+					["", "--", "雪"]
+				);
+				let launch = resolved_launch(PathBuf::new(), program.as_os_str().into());
+				Box::pin(async move { Ok(launch) }) as PortFuture<_>
+			});
+			dependencies.execute_program.run_managed_program = Arc::new(move |target, _, _, _, _| {
+				assert_eq!(target, OutputTarget::Overwrite);
+				Box::pin(async move {
+					Ok(ExecuteProgramOutput {
+						status: ProcessStatus::new(status),
+						warnings: Vec::new(),
+					})
+				}) as PortFuture<_>
+			});
 			let outcome = run(
 				arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe", "", "--", "雪"],
 				temp.path().to_owned(),
@@ -1455,12 +1598,8 @@ mod tests {
 			let called = Arc::new(AtomicBool::new(false));
 			let observed = called.clone();
 			let expected_cwd = temp.path().join("tools");
-			dependencies.execute_program.run_managed_program =
-				Arc::new(move |target, cwd, program, arguments, _, cancellation| {
-					observed.store(true, Ordering::SeqCst);
-					assert!(
-						matches!(target, OutputTarget::DataMod(name) if name.as_str() == "Tool Output")
-					);
+			dependencies.execute_program.resolve_launch_inputs =
+				Arc::new(move |cwd, program, arguments, cancellation| {
 					assert_eq!(
 						cwd.as_ref().map(WorkingDirectory::as_path),
 						Some(expected_cwd.as_path())
@@ -1469,6 +1608,16 @@ mod tests {
 					assert_eq!(
 						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
 						["", "--hidden", "雪"]
+					);
+					assert!(!cancellation.is_cancelled());
+					let launch = resolved_launch(expected_cwd.clone(), program.as_os_str().into());
+					Box::pin(async move { Ok(launch) }) as PortFuture<_>
+				});
+			dependencies.execute_program.run_managed_program =
+				Arc::new(move |target, _, _, _, cancellation| {
+					observed.store(true, Ordering::SeqCst);
+					assert!(
+						matches!(target, OutputTarget::DataMod(name) if name.as_str() == "Tool Output")
 					);
 					assert!(!cancellation.is_cancelled());
 					Box::pin(async move {
@@ -1542,7 +1691,7 @@ mod tests {
 	async fn exec_qualifies_projection_warnings_without_changing_child_output() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-		dependencies.execute_program.run_managed_program = Arc::new(|_, _, _, _, _, _| {
+		dependencies.execute_program.run_managed_program = Arc::new(|_, _, _, _, _| {
 			Box::pin(async {
 				Ok(ExecuteProgramOutput {
 					status: ProcessStatus::new(259),
@@ -1590,7 +1739,12 @@ mod tests {
 		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let called = Arc::new(AtomicBool::new(false));
 		let observed = called.clone();
-		dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _, _| {
+		let resolved = called.clone();
+		dependencies.execute_program.resolve_launch_inputs = Arc::new(move |_, _, _, _| {
+			resolved.store(true, Ordering::SeqCst);
+			Box::pin(async { Err(report!(ErrorMarker::program_not_found())) }) as PortFuture<_>
+		});
+		dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _| {
 			observed.store(true, Ordering::SeqCst);
 			Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
 		});
@@ -1986,7 +2140,7 @@ mod tests {
 		let temp = TempDir::new()?;
 		for launched in [false, true] {
 			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, reporter, _| {
+			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, reporter, _| {
 				Box::pin(async move {
 					if launched && let Some(reporter) = reporter {
 						reporter.call((ProgressEvent::ExecutionPrepared,)).await;
@@ -2167,6 +2321,7 @@ mod tests {
 		let resources = Resources::system(root.clone());
 		let execution_force_cancellation = CancellationToken::new();
 		Dependencies {
+			create_shortcut: resources.create_shortcut_dependencies(startup.to_owned()),
 			execute_program: resources
 				.execute_program_dependencies(startup.to_owned(), execution_force_cancellation.clone()),
 			execution_force_cancellation,
@@ -2243,6 +2398,264 @@ mod tests {
 				}
 			}
 		}
+		Ok(())
+	}
+	#[tokio::test]
+	async fn shortcut_forwards_startup_relative_paths_and_stays_quiet_without_execution()
+	-> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		for custom in [false, true] {
+			let mut dependencies = successful_dependencies(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let expected_root = temp.path().join("environment");
+			let expected_cwd = if custom {
+				temp.path().join("work")
+			} else {
+				temp.path().to_owned()
+			};
+			let expected_destination = custom.then(|| temp.path().join("links"));
+			let launcher = temp.path().join("mods.exe");
+			let program = temp.path().join("tool.exe");
+			let published = Arc::new(AtomicBool::new(false));
+			let observed = published.clone();
+			let executed = Arc::new(AtomicBool::new(false));
+			let observed_execution = executed.clone();
+			dependencies.execute_program.run_managed_program = Arc::new(move |_, _, _, _, _| {
+				observed_execution.store(true, Ordering::SeqCst);
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) })
+			});
+			let resolved_cwd = expected_cwd.clone();
+			let resolved_program = program.clone();
+			let binding = test_binding(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let prepared = prepared_execution(binding.clone());
+			let settings = named_settings(binding, "Vanilla Plus");
+			dependencies.create_shortcut = CreateShortcutDependencies {
+				locate_launcher: Arc::new(move || {
+					let launcher = launcher.clone();
+					Box::pin(async move { Ok(launcher) })
+				}),
+				resolve_launch_inputs: Arc::new(move |cwd, input, arguments, _| {
+					assert_eq!(input.as_os_str(), "tool.exe");
+					assert_eq!(
+						cwd.as_ref().map(|value| value.as_path()),
+						Some(resolved_cwd.as_path())
+					);
+					assert_eq!(
+						arguments.iter().map(|value| value.as_os_str()).collect::<Vec<_>>(),
+						["", "a\"b", "雪", "--"]
+					);
+					let launch = resolved_launch(resolved_cwd.clone(), resolved_program.clone());
+					Box::pin(async move { Ok(launch) }) as PortFuture<_>
+				}),
+				prepare_execution_environment: Arc::new(move |target, _| {
+					if custom {
+						assert!(
+							matches!(&target, OutputTarget::DataMod(name) if name.as_str() == "--Generated")
+						);
+					} else {
+						assert_eq!(target, OutputTarget::Overwrite);
+					}
+					let prepared = prepared.clone();
+					Box::pin(async move { Ok(prepared) }) as PortFuture<_>
+				}),
+				load_settings: Arc::new(move || {
+					let settings = settings.clone();
+					Box::pin(async move { Ok(settings) }) as PortFuture<_>
+				}),
+				locate_environment_root: Arc::new(move || {
+					let root = expected_root.clone();
+					Box::pin(async move { Ok(root) })
+				}),
+				persist: Arc::new(move |definition| {
+					observed.store(true, Ordering::SeqCst);
+					assert_eq!(definition.destination, expected_destination);
+					assert_eq!(
+						definition.name,
+						if custom { "My tool" } else { "Vanilla Plus — tool" }
+					);
+					assert_eq!(
+						&definition.arguments[2..6],
+						["--log-level", "off", "exec", "--hidden"].map(OsString::from)
+					);
+					let saved = Cli::try_parse_from(
+						[OsString::from("mods")].into_iter().chain(definition.arguments),
+					);
+					assert!(saved.is_ok());
+					Box::pin(async { Ok(()) })
+				}),
+			};
+			let mut values =
+				arguments!["mods", "--environment", "environment", "--log-level", "off", "shortcut"];
+			if custom {
+				values.extend(arguments![
+					"--cwd",
+					"work",
+					"--output-target=--Generated",
+					"--name",
+					"My tool",
+					"--destination",
+					"links"
+				]);
+			}
+			values.extend(arguments!["--", "tool.exe", "", "a\"b", "雪", "--"]);
+			let outcome = run(values, temp.path().to_owned(), None, |_| Ok(dependencies)).await?;
+
+			assert_eq!(outcome.status, 0);
+			assert!(outcome.stdout.is_empty());
+			assert!(outcome.stderr.is_empty());
+			assert!(published.load(Ordering::SeqCst));
+			assert!(!executed.load(Ordering::SeqCst));
+		}
+		Ok(())
+	}
+	#[tokio::test]
+	async fn shortcut_logging_setup_failure_is_quiet_only_after_success() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		write(temp.path().join("logs"), b"block diagnostic directory creation")?;
+		for succeeds in [true, false] {
+			let mut dependencies = successful_dependencies(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let root = temp.path().to_owned();
+			let launcher = root.join("mods.exe");
+			let environment = root.clone();
+			dependencies.create_shortcut.locate_launcher = Arc::new(move || {
+				let launcher = launcher.clone();
+				Box::pin(async move { Ok(launcher) })
+			});
+			dependencies.create_shortcut.locate_environment_root = Arc::new(move || {
+				let environment = environment.clone();
+				Box::pin(async move { Ok(environment) })
+			});
+			dependencies.create_shortcut.persist = Arc::new(move |_| {
+				Box::pin(async move {
+					if !succeeds {
+						return Err(report!(ErrorMarker::shortcut_failed()));
+					}
+					Ok(())
+				})
+			});
+			let outcome = run(
+				arguments![
+					"mods",
+					"--environment",
+					temp.path().as_os_str(),
+					"--log-level",
+					"debug",
+					"shortcut",
+					"--",
+					"tool.exe"
+				],
+				temp.path().to_owned(),
+				None,
+				|_| Ok(dependencies),
+			)
+			.await?;
+
+			assert!(outcome.stdout.is_empty());
+			assert!(outcome.diagnostic_log.is_none());
+			if succeeds {
+				assert_eq!(outcome.status, 0);
+				assert!(outcome.stderr.is_empty(), "{}", outcome.stderr);
+			} else {
+				assert_eq!(outcome.status, 1);
+				assert!(outcome.stderr.contains("error [shortcut_failed]"));
+				assert!(outcome.stderr.contains(SINK_WARNING));
+			}
+		}
+		Ok(())
+	}
+
+	#[cfg(not(windows))]
+	#[tokio::test]
+	async fn shortcut_reports_unsupported_platform_through_normal_diagnostics() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let mut dependencies = successful_dependencies(temp.path())
+			.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+		let outcome = run(
+			arguments!["mods", "--log-level", "off", "shortcut", "--", "tool.exe"],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|root| {
+				dependencies.create_shortcut = Resources::system(root.clone())
+					.create_shortcut_dependencies(temp.path().to_owned());
+				Ok(dependencies)
+			},
+		)
+		.await?;
+
+		assert_eq!(outcome.status, 1);
+		assert!(outcome.stdout.is_empty());
+		assert_eq!(
+			outcome.stderr,
+			"error [shortcut_unsupported]: Launch Shortcuts are supported only on Windows\n"
+		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn json_shortcut_reports_warnings_and_marker_problems() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		write(temp.path().join("logs"), b"block diagnostic directory creation")?;
+		let cases = [
+			(arguments!["--log-level", "off", "shortcut", "--", "tool.exe"], 0),
+			(arguments!["--log-level", "debug", "shortcut", "--", "tool.exe"], 0),
+			(
+				arguments!["--log-level", "off", "shortcut", "--name", "a/b", "--", "tool.exe"],
+				1,
+			),
+			(
+				arguments![
+					"--log-level",
+					"off",
+					"shortcut",
+					"--output-target",
+					"",
+					"--",
+					"tool.exe"
+				],
+				1,
+			),
+		];
+		let mut documents = Vec::new();
+		for (command, status) in cases {
+			let mut dependencies = successful_dependencies(temp.path())
+				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let launcher = temp.path().join("mods.exe");
+			let environment = temp.path().to_owned();
+			dependencies.create_shortcut.locate_launcher = Arc::new(move || {
+				let launcher = launcher.clone();
+				Box::pin(async move { Ok(launcher) })
+			});
+			dependencies.create_shortcut.locate_environment_root = Arc::new(move || {
+				let environment = environment.clone();
+				Box::pin(async move { Ok(environment) })
+			});
+			dependencies.create_shortcut.persist = Arc::new(|_| Box::pin(async { Ok(()) }));
+			let mut values = arguments!["mods", "--json", "--environment", temp.path().as_os_str()];
+			values.extend(command);
+			let outcome = run(values, temp.path().to_owned(), None, |_| Ok(dependencies)).await?;
+
+			assert_eq!(outcome.status, status, "{}", outcome.stderr);
+			let (document, other) = if status == 0 {
+				(&outcome.stdout, &outcome.stderr)
+			} else {
+				(&outcome.stderr, &outcome.stdout)
+			};
+			assert!(other.is_empty());
+			documents.push(from_str::<Value>(document)?);
+		}
+
+		assert_eq!(documents[0], json!({"warnings": []}));
+		assert_eq!(documents[1]["warnings"][0]["code"], "diagnostic_logging_unavailable");
+		assert_eq!(documents[2]["code"], "shortcut_name_invalid");
+		assert_eq!(documents[2]["exit_code"], 1);
+		assert_eq!(
+			documents[2]["detail"],
+			"shortcut name must be a valid Windows filename without a path"
+		);
+		assert_eq!(documents[3]["code"], "invalid_output_target");
+		assert_eq!(documents[3]["exit_code"], 1);
 		Ok(())
 	}
 }

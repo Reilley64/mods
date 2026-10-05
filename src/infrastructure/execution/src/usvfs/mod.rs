@@ -20,7 +20,7 @@ use ffi::mods_usvfs_launch;
 use ffi::mods_usvfs_link_directory;
 use ffi::mods_usvfs_link_file;
 use ffi::mods_usvfs_open;
-use native_path::native_path_wide;
+pub(crate) use native_path::native_path_wide;
 use native_path::physical_path_wide;
 use native_path::wide;
 use rootcause::Result;

@@ -241,3 +241,33 @@ Managing the child process failed. A failure after launch is plain stderr, not t
 ## operation_cancelled
 
 The operation was cancelled.
+
+<a id="shortcut_unsupported"></a>
+## shortcut_unsupported
+
+Launch Shortcuts are supported only on Windows.
+
+<a id="shortcut_name_invalid"></a>
+## shortcut_name_invalid
+
+The shortcut name is not a valid Windows filename, or it contains a path.
+
+<a id="shortcut_destination_invalid"></a>
+## shortcut_destination_invalid
+
+The destination is not a directory, or an existing entry with the shortcut name is not a Shell Link that may be replaced.
+
+<a id="shortcut_launch_invalid"></a>
+## shortcut_launch_invalid
+
+The CLI could not capture valid absolute paths for the launcher, Environment Root, program, or working directory.
+
+<a id="shortcut_arguments_too_long"></a>
+## shortcut_arguments_too_long
+
+The saved `mods exec --hidden` arguments exceed the Shell Link storage limit.
+
+<a id="shortcut_failed"></a>
+## shortcut_failed
+
+Preparing, verifying, or publishing the Shell Link failed.

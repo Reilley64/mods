@@ -46,6 +46,10 @@ With `--json`, errors are Problem Details on stderr. Use `type` as the machine i
 | Invalid Data path or invalid conflict resolution | Use a relative path beneath Data and read scoped problems |
 | Invalid Output Target | Select Overwrite by omission or an existing enabled Data Mod |
 | `program_not_found`, `program_unsupported`, `program_launch_failed`, `invalid_working_directory` | Check actual executable path, PATH lookup, arguments, supported target, and cwd |
+| `shortcut_unsupported` | Launch Shortcuts work only on Windows |
+| `shortcut_name_invalid`, `shortcut_destination_invalid` | Use a valid filename stem without a path, and an existing destination directory; only a same-named Shell Link can be replaced |
+| `shortcut_launch_invalid`, `shortcut_arguments_too_long` | Check that the executable, working directory, and Environment Root have valid absolute paths; shorten the child arguments |
+| `shortcut_failed` | The `.lnk` could not be prepared or published; a preparation failure keeps any previous shortcut; check destination permissions |
 | `vfs_failed`, `execution_supervision_failed` | Check matching native runtime/prerequisites and collect diagnostics; do not retry execution without authorization |
 | `manual_cleanup_required` | Stop and inspect retained state with the user; there is no documented automatic cleanup command |
 

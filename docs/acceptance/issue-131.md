@@ -76,6 +76,15 @@ The user then made two contract decisions:
 - Secret safety: a runner test uses real infrastructure adapters with a stored `nexus_api_key`. `config list`, `config get game-dir`, and a failed install, with valid and malformed manifests, in JSON and text mode, never print the key. Process-environment `MODS_NEXUS_API_KEY` is not covered, because setting a process variable needs `unsafe`. Infrastructure settings tests cover the override.
 - All 13 examples, and captured CLI documents for `config list`, the `--json --hidden` rejection, and an install failure, pass `docs/cli/schema.json`.
 
+## Coverage after merging #117
+
+- Shortcut failures now use the shared marker allowlist. `ShortcutFailure` is removed. The six codes (`shortcut_unsupported`, `shortcut_name_invalid`, `shortcut_destination_invalid`, `shortcut_launch_invalid`, `shortcut_arguments_too_long`, `shortcut_failed`) are `ErrorCode` values with `ErrorMarker` constructors. The shortcut ports return `ErrorMarker`, and `error::application_error` no longer has a separate shortcut mapping. Text codes, messages, and exit status 1 are unchanged.
+- JSON `shortcut` success returns `{"warnings": [...]}` (`$defs/shortcut`, an alias of `mutation`, is in the aggregate `anyOf`, with `docs/cli/examples/shortcut.json`). JSON keeps `diagnostic_logging_unavailable`, which text mode hides on success.
+- `docs/cli/problems.md` has anchors for the six codes, and the anchor test lists them.
+- Tests cover JSON success with and without the logging warning, an invalid name as the `shortcut_name_invalid` Problem, and an invalid Output Target as the marker Problem.
+- The Windows-only `infrastructure/execution/src/shortcut.rs` changed mechanically from `ShortcutFailure::*` to `ErrorMarker::shortcut_*()`. It cannot be compiled on macOS, so the Windows CI build is its first compile check.
+- All 14 examples pass `docs/cli/schema.json`.
+
 ## Follow-ups outside this ticket
 
 The marker has `setting_key` and `mod_name`, but the existing text error allowlist omits them. Extending the allowlist needs a separate decision. Serializer-switch deduplication and broader typed JSON representations can be considered after the public contract is reviewed. Neither follow-up changes this ticket's output.

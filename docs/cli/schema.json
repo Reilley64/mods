@@ -302,6 +302,9 @@
         }
       }
     },
+    "shortcut": {
+      "$ref": "#/$defs/mutation"
+    },
     "conflict_problem": {
       "type": "object",
       "required": [
@@ -1776,6 +1779,9 @@
     },
     {
       "$ref": "#/$defs/mutation"
+    },
+    {
+      "$ref": "#/$defs/shortcut"
     },
     {
       "$ref": "#/$defs/conflicts_list"
