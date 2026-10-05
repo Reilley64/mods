@@ -9,58 +9,20 @@ use crate::snapshot::MAX_PROVIDER_METADATA_BYTES;
 use crate::snapshot::load_execution;
 use application::ErrorMarker;
 use application::installation::InstallationState;
-use domain::DataRelativePath;
+use application::ports::ExecutionProfileText;
+use application::ports::ExecutionProvider;
+use application::ports::ExecutionVisibleFile;
+use application::ports::PreparedExecution;
 use domain::EffectiveResult;
 use domain::EnvironmentRoot;
 use domain::GameBinding;
 use domain::ProviderIdentity;
-use domain::ProviderReference;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
-use std::path::PathBuf;
 use std::str::from_utf8;
-use std::time::SystemTime;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionProvider {
-	pub identity: ProviderIdentity,
-	pub root: PathBuf,
-	pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionVisibleFile {
-	pub path: DataRelativePath,
-	pub physical_path: PathBuf,
-	pub modified: SystemTime,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionProfileText {
-	pub name: &'static str,
-	pub text: String,
-}
-
-/// Validated, read-only inputs for managed execution.
-/// Winners and visible files describe the analytical Data projection, not observed
-/// runtime visibility. Profile texts come from canonical Profile State.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedExecution {
-	pub game_binding: GameBinding,
-	pub providers: Vec<ExecutionProvider>,
-	pub winners: Vec<ProviderReference>,
-	pub visible_files: Vec<ExecutionVisibleFile>,
-	pub profile_files: Vec<ExecutionProfileText>,
-	pub profile_directory: PathBuf,
-	pub data_directory: PathBuf,
-	pub cache_directory: PathBuf,
-	consumed_state: InstallationState,
-	consumed_bytes: Vec<(PathBuf, Vec<u8>)>,
-	file_lengths: Vec<u64>,
-}
 
 impl EnvironmentAdapter {
 	/// Reads execution inputs without repairing or rewriting canonical state.

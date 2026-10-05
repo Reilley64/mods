@@ -1,6 +1,8 @@
 use crate::execution::ExecutionWarning;
+use crate::ports::PrepareExecutionEnvironment;
 use crate::ports::ProgressEvent;
 use crate::ports::ReportProgress;
+use crate::ports::ResolveLaunchInputs;
 use crate::ports::RunManagedProgram;
 use domain::OutputTarget;
 use domain::ProcessStatus;
@@ -15,6 +17,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 pub struct ExecuteProgramDependencies {
 	pub report_progress: Option<ReportProgress>,
+	pub resolve_launch_inputs: ResolveLaunchInputs,
+	pub prepare_execution_environment: PrepareExecutionEnvironment,
 	pub run_managed_program: RunManagedProgram,
 }
 
@@ -45,13 +49,22 @@ pub async fn execute_program(
 		progress.call((ProgressEvent::PreparingExecution,)).await;
 	}
 
+	let launch = dependencies
+		.resolve_launch_inputs
+		.call((working_directory, program, arguments, cancellation.clone()))
+		.await
+		.context(ExecuteProgramError)?;
+	let prepared = dependencies
+		.prepare_execution_environment
+		.call((output_target.clone(), cancellation.clone()))
+		.await
+		.context(ExecuteProgramError)?;
 	let output = dependencies
 		.run_managed_program
 		.call((
 			output_target,
-			working_directory,
-			program,
-			arguments,
+			launch,
+			prepared,
 			dependencies.report_progress.clone(),
 			cancellation,
 		))
@@ -72,28 +85,95 @@ mod tests {
 	use super::execute_program;
 	use crate::ErrorMarker;
 	use crate::execution::ExecutionWarning;
+	use crate::installation::InstallationState;
 	use crate::ports::PortFuture;
+	use crate::ports::PreparedExecution;
+	use crate::ports::ResolvedLaunch;
+	use domain::GameBinding;
+	use domain::GameInstallationPath;
+	use domain::ModName;
 	use domain::OutputTarget;
 	use domain::ProcessStatus;
 	use domain::Program;
 	use domain::ProgramArgument;
+	use domain::SteamBuildId;
 	use rootcause::Result;
+	use rootcause::prelude::ResultExt;
 	use rootcause::report;
+	use std::collections::HashMap;
+	use std::env::temp_dir;
 	use std::sync::Arc;
+	use std::sync::atomic::AtomicBool;
+	use std::sync::atomic::Ordering;
 	use tokio_util::sync::CancellationToken;
 
+	fn resolved_launch() -> ResolvedLaunch {
+		ResolvedLaunch {
+			program: temp_dir().join("tool.exe"),
+			working_directory: temp_dir(),
+			command_line: "\"tool.exe\"".into(),
+			target_lease: Arc::new(()),
+		}
+	}
+
+	fn prepared_execution() -> Result<PreparedExecution, ErrorMarker> {
+		let binding = GameBinding::new(
+			GameInstallationPath::new(temp_dir().join("game"))
+				.context(ErrorMarker::game_install_invalid())?,
+			SteamBuildId::new(1).context(ErrorMarker::game_install_invalid())?,
+		);
+		Ok(PreparedExecution {
+			game_binding: binding.clone(),
+			providers: Vec::new(),
+			winners: Vec::new(),
+			visible_files: Vec::new(),
+			profile_files: Vec::new(),
+			profile_directory: temp_dir().join("profile"),
+			data_directory: temp_dir().join("game").join("Data"),
+			cache_directory: temp_dir().join("cache"),
+			consumed_state: InstallationState {
+				game_binding: binding,
+				installed_mods: Vec::new(),
+				current_winners: HashMap::new(),
+				file_dependencies: HashMap::new(),
+			},
+			consumed_bytes: Vec::new(),
+			file_lengths: Vec::new(),
+		})
+	}
+
 	#[tokio::test]
-	async fn forwards_typed_launch_values_and_preserves_nonzero_child_status() -> Result<(), ErrorMarker> {
+	async fn composes_launch_resolution_preparation_and_run_and_preserves_nonzero_child_status()
+	-> Result<(), ErrorMarker> {
 		let cancellation = CancellationToken::new();
 		let observed_cancellation = cancellation.clone();
+		let prepared = prepared_execution()?;
+		let expected_prepared = prepared.clone();
+		let target = OutputTarget::DataMod(
+			ModName::new("Output".into()).context(ErrorMarker::invalid_output_target())?,
+		);
+		let expected_target = target.clone();
+		let prepared_target = target.clone();
 		let dependencies = ExecuteProgramDependencies {
 			report_progress: None,
-			run_managed_program: Arc::new(move |target, directory, program, arguments, _, token| {
-				assert_eq!(target, OutputTarget::Overwrite);
+			resolve_launch_inputs: Arc::new(|directory, program, arguments, token| {
 				assert!(directory.is_none());
 				assert_eq!(program.as_os_str(), "tool.exe");
 				assert_eq!(arguments[0].as_os_str(), "");
 				assert_eq!(arguments[1].as_os_str(), "--");
+				assert!(!token.is_cancelled());
+				Box::pin(async { Ok(resolved_launch()) }) as PortFuture<_>
+			}),
+			prepare_execution_environment: Arc::new(move |target, token| {
+				assert_eq!(target, prepared_target);
+				assert!(!token.is_cancelled());
+				let prepared = prepared.clone();
+				Box::pin(async move { Ok(prepared) }) as PortFuture<_>
+			}),
+			run_managed_program: Arc::new(move |target, launch, prepared, _, token| {
+				assert_eq!(target, expected_target);
+				assert_eq!(launch.program, temp_dir().join("tool.exe"));
+				assert_eq!(prepared, expected_prepared);
 				token.cancel();
 				Box::pin(async {
 					Ok(ExecuteProgramOutput {
@@ -105,7 +185,7 @@ mod tests {
 		};
 		let result = execute_program(
 			dependencies,
-			OutputTarget::Overwrite,
+			target,
 			None,
 			Program::new("tool.exe".into())
 				.map_err(|error| error.context(ErrorMarker::program_unsupported()))?,
@@ -126,11 +206,21 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn preserves_launcher_cause_under_fixed_use_case_context() -> Result<(), ErrorMarker> {
+	async fn preserves_launch_resolution_cause_and_stops_before_preparation() -> Result<(), ErrorMarker> {
+		let prepared = Arc::new(AtomicBool::new(false));
+		let observed = prepared.clone();
 		let dependencies = ExecuteProgramDependencies {
 			report_progress: None,
-			run_managed_program: Arc::new(|_, _, _, _, _, _| {
+			resolve_launch_inputs: Arc::new(|_, _, _, _| {
 				Box::pin(async { Err(report!(ErrorMarker::program_not_found())) }) as PortFuture<_>
+			}),
+			prepare_execution_environment: Arc::new(move |_, _| {
+				observed.store(true, Ordering::SeqCst);
+				Box::pin(async { Err(report!(ErrorMarker::environment_invalid(None))) })
+					as PortFuture<_>
+			}),
+			run_managed_program: Arc::new(|_, _, _, _, _| {
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
 			}),
 		};
 		let result = execute_program(
@@ -143,13 +233,52 @@ mod tests {
 			CancellationToken::new(),
 		)
 		.await;
-		let Err(error) = result else {
-			return Err(report!(ErrorMarker::execution_supervision_failed()));
-		};
+		let error = result
+			.err()
+			.ok_or_else(|| report!(ErrorMarker::execution_supervision_failed()))?;
 		assert!(error
 			.iter_reports()
 			.any(|cause| cause.downcast_current_context::<ErrorMarker>()
 				== Some(&ErrorMarker::program_not_found())));
+		assert!(!prepared.load(Ordering::SeqCst));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn preparation_failure_is_preserved_and_never_runs() -> Result<(), ErrorMarker> {
+		let ran = Arc::new(AtomicBool::new(false));
+		let observed = ran.clone();
+		let dependencies = ExecuteProgramDependencies {
+			report_progress: None,
+			resolve_launch_inputs: Arc::new(|_, _, _, _| {
+				Box::pin(async { Ok(resolved_launch()) }) as PortFuture<_>
+			}),
+			prepare_execution_environment: Arc::new(|_, _| {
+				Box::pin(async { Err(report!(ErrorMarker::output_target_disabled())) }) as PortFuture<_>
+			}),
+			run_managed_program: Arc::new(move |_, _, _, _, _| {
+				observed.store(true, Ordering::SeqCst);
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed())) }) as PortFuture<_>
+			}),
+		};
+		let result = execute_program(
+			dependencies,
+			OutputTarget::Overwrite,
+			None,
+			Program::new("tool.exe".into())
+				.map_err(|error| error.context(ErrorMarker::program_unsupported()))?,
+			vec![],
+			CancellationToken::new(),
+		)
+		.await;
+		let error = result
+			.err()
+			.ok_or_else(|| report!(ErrorMarker::execution_supervision_failed()))?;
+		assert!(error
+			.iter_reports()
+			.any(|cause| cause.downcast_current_context::<ErrorMarker>()
+				== Some(&ErrorMarker::output_target_disabled())));
+		assert!(!ran.load(Ordering::SeqCst));
 		Ok(())
 	}
 }

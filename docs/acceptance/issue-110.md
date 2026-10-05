@@ -27,6 +27,16 @@ harness was added. See [usage](../usage.md).
   both x64 and x86 afterward, with Windows strict workspace Clippy and CLI rebuild.
 - Final format, staged whitespace, and dependency checks passed. Complete-suite
   counts above describe the pre-repair snapshots; repairs received focused checks.
+- A user-approved refactor applies the "Reusable capability ports" rule. The
+  shortcut-named `ValidateShortcutLaunch` workflow port is split into single-step
+  ports. `create_shortcut` and `execute_program` now compose the same
+  `ResolveLaunchInputs` and `PrepareExecutionEnvironment` ports. Shortcut also
+  reuses `LoadSettings`. Only `LocateLauncher`, `LocateEnvironmentRoot` and
+  `PersistShortcut` stay shortcut-specific. `RunManagedProgram` now receives the
+  resolved launch and prepared environment, so exec no longer resolves or
+  prepares inside the run step. After the refactor, macOS `bun run check` passed:
+  409 Rust tests, 137 tooling tests and 2 release-version tests. The Windows-only
+  paths of this refactor were not compiled on the macOS host; Windows CI covers them.
 
 ## Native desktop acceptance
 
@@ -92,10 +102,9 @@ relative to `src/`.
 | File | Rule | Reason for acceptance |
 | --- | --- | --- |
 | `presentation/cli/src/runner.rs` | Callable port invocation | Calls an application use-case function; actual callable ports use `.call`. |
-| `infrastructure/dependencies/src/create_shortcut.rs` | Use-case parameters | Infrastructure factory/private adapter, not an application use case. |
+| `infrastructure/dependencies/src/create_shortcut.rs` | Use-case parameters | Infrastructure factory, not an application use case. |
 | `application/src/shortcut/types.rs` | Presentation error allowlists | Internal error contexts are mapped to fixed CLI strings, not printed raw. |
 | `infrastructure/execution/src/shortcut.rs` | Test public behavior | Tests exercise persistence through its public adapter seam and inspect saved fields; canonicalized-path test reproduces an observed project defect. |
-| `infrastructure/dependencies/src/create_shortcut.rs` | Phase spacing | Resolution, environment/provider validation, name acquisition and output are separated. |
 | `application/src/shortcut/create_shortcut/name.rs` | Phase spacing | Sanitization, reserved-name handling, rejection and output have distinct phases. |
 | `infrastructure/execution/src/launch_inputs.rs` | Focused use-case orchestration | Existing infrastructure encoder only gains crate-private visibility; no application algorithm moved here. |
 | `presentation/cli/src/runner.rs` | Phase spacing | Conversion, application invocation and result/diagnostic reporting are separated. |
@@ -105,14 +114,18 @@ relative to `src/`.
 | `presentation/cli/src/main.rs` | Phase spacing | Existing composition phases remain; shortcut only joins the mutating-command classification. |
 | `application/src/shortcut/mod.rs` | Use-case declaration order | Re-export module; owning use-case file has the required declaration order. |
 | `presentation/cli/src/main.rs` | Use-case parameters | Presentation composition, not an application use case. |
-| `application/src/shortcut/create_shortcut.rs` | Phase spacing | Name validation, launch validation, saved arguments and publication are separated. |
+| `application/src/shortcut/create_shortcut.rs` | Phase spacing | Name validation, launch and environment validation, saved arguments and publication are separated. |
 | `infrastructure/execution/src/shortcut.rs` | Narrow custom implementations | Narrow missing Shell Link adapter reuses Windows APIs, tempfile and existing encoding/path conversion. |
-| `infrastructure/dependencies/src/create_shortcut.rs` | Narrow custom implementations | Composes existing read-only validation; no generic replacement infrastructure. |
 | `infrastructure/dependencies/src/create_shortcut.rs` | Dependency direction/composition roots | Existing composition crate implements application-owned ports; deterministic dependency check passes. |
 | `infrastructure/dependencies/src/create_shortcut.rs` | Use-case declaration order | Infrastructure factory/adapter, not the owning application use-case file. |
 | `application/src/shortcut/types.rs` | Use-case parameters | Port aliases/data types, not use-case entry points. |
 | `infrastructure/execution/src/shortcut.rs` | Use-case parameters | Native adapter boundary, not application orchestration. |
 | `presentation/cli/src/runner.rs` | Use-case declaration order | No application use case declared in presentation dispatch. |
+
+The user-approved port split removed two earlier dispositions for
+`infrastructure/dependencies/src/create_shortcut.rs`: "Phase spacing" and "Narrow
+custom implementations". That file now only composes ports, and the validation
+workflow it held no longer exists.
 
 Earlier notices are also accounted: application cause preservation uses `.context`;
 application use-case dependencies are first, with separate business inputs; initial
