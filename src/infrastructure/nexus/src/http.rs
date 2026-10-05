@@ -21,10 +21,11 @@ use rootcause::prelude::ResultExt;
 use rootcause::report;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use std::fs;
 use std::time::Duration;
 use tempfile::Builder;
 use tokio::fs::File;
+use tokio::fs::rename;
+use tokio::fs::write;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
@@ -189,7 +190,9 @@ async fn download_with(
 		return Err(report!(ErrorMarker::nexus_response_invalid()));
 	}
 
-	let directory = cache::directory(&root, true)?.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
+	let directory = cache::directory(&root, true)
+		.await?
+		.ok_or_else(|| report!(ErrorMarker::io_failure()))?;
 	let request = NexusRequest {
 		game_domain: provenance.game_domain.clone(),
 		mod_id: provenance.mod_id,
@@ -241,11 +244,15 @@ async fn download_with(
 
 	let metadata = toml::to_string(&CompletedMetadata::from_provenance(&provenance, size))
 		.context(ErrorMarker::io_failure())?;
-	fs::write(temporary.path().join("provenance.toml"), metadata).context(ErrorMarker::io_failure())?;
+	write(temporary.path().join("provenance.toml"), metadata)
+		.await
+		.context(ErrorMarker::io_failure())?;
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
-	fs::rename(temporary.path(), &destination).context(ErrorMarker::io_failure())?;
+	rename(temporary.path(), &destination)
+		.await
+		.context(ErrorMarker::io_failure())?;
 
 	let suggested_name = if provenance.file_name.is_empty() {
 		provenance.mod_name.clone()
@@ -280,6 +287,7 @@ pub(crate) async fn download(
 mod tests {
 	use super::*;
 	use application::ErrorCode;
+	use std::fs;
 	use std::sync::Arc;
 	use std::sync::Mutex;
 	use tempfile::TempDir;
@@ -393,6 +401,7 @@ mod tests {
 			file_id: Some(7),
 		};
 		let cached = cache::read(&root, &request, &CancellationToken::new())
+			.await
 			.expect("read")
 			.expect("cache");
 		assert_eq!(cached.provenance, Some(provenance()));

@@ -64,6 +64,7 @@ use tokio::fs::create_dir_all;
 use tokio::fs::metadata;
 use tokio::fs::read;
 use tokio::fs::read_dir;
+use tokio::fs::symlink_metadata;
 use tokio::fs::write;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -499,7 +500,7 @@ pub(crate) async fn validate_download_cache_entries(
 	cache: &Path,
 	cancellation: &CancellationToken,
 ) -> Result<(), ErrorMarker> {
-	match metadata(cache.join("downloads")).await {
+	match symlink_metadata(cache.join("downloads")).await {
 		Ok(downloads) if !downloads.is_dir() => Err(report!(ErrorMarker::environment_root_unsafe())),
 		Ok(_) => {
 			validate_exact_entries(cache, &["Fallout - Invalidation.bsa", "downloads"], cancellation).await
@@ -532,6 +533,7 @@ async fn validate_bsa_file(cache: &Path, cancellation: &CancellationToken) -> Re
 )]
 mod tests {
 	use super::EnvironmentAdapter;
+	use super::validate_download_cache_entries;
 	use crate::profile::PROFILE_FILES;
 	use application::ErrorCode;
 	use application::ports::InitializationPlan;
@@ -543,6 +545,8 @@ mod tests {
 	use domain::GameInstallationPath;
 	use std::env::current_dir;
 	use std::fs;
+	#[cfg(unix)]
+	use std::os::unix::fs::symlink;
 	use std::path::Path;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
@@ -569,6 +573,31 @@ mod tests {
 				files,
 				fallout_default_ini: b"[Archive]\r\nsArchiveList=Fallout - Meshes.bsa\r\n".to_vec(),
 			},
+		}
+	}
+
+	#[tokio::test]
+	async fn download_cache_must_be_a_real_directory() {
+		let parent = temp_dir();
+		let cache = parent.path().join("cache");
+		fs::create_dir(&cache).expect("cache must be created");
+		fs::write(cache.join("Fallout - Invalidation.bsa"), b"archive").expect("archive must write");
+		fs::create_dir(cache.join("downloads")).expect("downloads must be created");
+
+		validate_download_cache_entries(&cache, &CancellationToken::new())
+			.await
+			.expect("a downloads directory is accepted");
+
+		#[cfg(unix)]
+		{
+			let outside = temp_dir();
+			fs::remove_dir(cache.join("downloads")).expect("downloads must be removed");
+			symlink(outside.path(), cache.join("downloads")).expect("link must be created");
+
+			let error = validate_download_cache_entries(&cache, &CancellationToken::new())
+				.await
+				.expect_err("a linked downloads directory is refused");
+			assert_eq!(error.current_context().code(), ErrorCode::EnvironmentRootUnsafe);
 		}
 	}
 
