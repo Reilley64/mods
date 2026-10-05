@@ -72,7 +72,7 @@ fn scan_environment(
 		} else if key.eq_ignore_ascii_case("MODS_NEXUS_API_KEY") {
 			"MODS_NEXUS_API_KEY"
 		} else {
-			return Err(report!(invalid.clone()));
+			continue;
 		};
 		if result.contains_key(canonical) {
 			return Err(report!(invalid.clone()));
@@ -139,9 +139,20 @@ mod tests {
 	}
 
 	#[test]
-	fn unknown_duplicate_and_empty_mods_values_fail() {
-		let unknown = vec![(OsString::from("MODS_GAMEDIR"), OsString::from("x"))];
-		assert!(initialization_override(&unknown).is_err());
+	fn unknown_mods_variables_are_ignored() {
+		let environment = vec![
+			(OsString::from("MODS_GAMEDIR"), OsString::from("x")),
+			(OsString::from("MODS_USVFS_ARTIFACTS"), OsString::from("")),
+			(OsString::from("MODS_GAME_DIR"), OsString::from("game")),
+		];
+		assert_eq!(
+			initialization_override(&environment).ok(),
+			Some(Some("game".to_owned()))
+		);
+	}
+
+	#[test]
+	fn duplicate_and_empty_mods_values_fail() {
 		let duplicate = vec![
 			(OsString::from("MODS_GAME_DIR"), OsString::from("a")),
 			(OsString::from("mods_game_dir"), OsString::from("b")),

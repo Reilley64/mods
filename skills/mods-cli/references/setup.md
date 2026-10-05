@@ -55,7 +55,7 @@ A **Game Binding** records the Game Installation's Steam identity, path, and obs
 
 Initialization creates the manifest and Profile State. Use a nonexistent or empty root; existing `logs` and an empty `temp` are permitted when safe. An existing `mods.toml`, other contents, unsafe paths, or unfinished temporary state can block initialization. It is not a repair/reset command.
 
-`MODS_GAME_DIR` is the only supported `MODS_*` setting override. Use an absolute Game Installation path. Unknown, duplicate, empty, or non-Unicode overrides fail validation; even an explicit `--game-install` does not bypass malformed override validation. Use [configuration](commands.md) to inspect effective versus stored values before changing a binding.
+`MODS_GAME_DIR` overrides the Game Installation, and `MODS_NEXUS_API_KEY` overrides the stored Nexus API key. Use an absolute Game Installation path. Other `MODS_*` variables are ignored. A duplicate, empty, or non-Unicode `MODS_GAME_DIR`, or a duplicate or non-Unicode `MODS_NEXUS_API_KEY`, fails validation; even an explicit `--game-install` does not bypass malformed override validation. Use [configuration](commands.md) to inspect effective versus stored values before changing a binding.
 
 ## Setup failures
 
