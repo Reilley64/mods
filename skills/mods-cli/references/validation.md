@@ -51,10 +51,10 @@ All source paths below are under the fixed [v0.1.0 tree](https://github.com/Reil
 | Complete ordered choices, cardinality and synthetic none | `CONTEXT.md`; `src/application/src/installation/install_archive/fomod.rs` |
 | Conflict reports, invalid resolutions, content states and analytical scope | `src/presentation/cli/src/conflict_output.rs`; `src/application/src/conflicts/`; `CONTEXT.md` |
 | Output Target, mapping limits, executable resolution and cwd | `src/infrastructure/execution/src/configuration.rs`, `launch_inputs/windows_inputs.rs`; `CONTEXT.md` |
-| Errors, cancellation, child statuses, diagnostics | `src/presentation/cli/src/error.rs`, `main.rs`, `publication.rs`, `diagnostics.rs`, `operation.rs`; `src/infrastructure/execution/src/managed.rs`. On the default branch, error text, exit statuses, and diagnostic decoration are in `command_outcome.rs` |
+| Errors, cancellation, child statuses, diagnostics | `src/presentation/cli/src/error.rs`, `main.rs`, `publication.rs`, `diagnostics.rs`, `operation.rs`; `src/infrastructure/execution/src/managed.rs` |
 | Runtime prerequisites and files | Published runtime ZIP, `BUILD-AND-SOURCE.md`, runtime checksum asset; tagged `docs/distribution.md` |
 
-v0.1.0 has no `--json` flag, so the table above is not evidence for JSON output. JSON output comes from issue #131 and is unreleased at this reference version. Its source is `src/presentation/cli/src/json_output.rs`, `json_install.rs`, `json_conflicts.rs`, and, for problem documents, `command_outcome.rs` on the default branch, and its contract is [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
+v0.1.0 has no `--json` flag, so the table above is not evidence for JSON output. JSON output comes from issue #131 and is unreleased at this reference version. Its source is `src/presentation/cli/src/json_output.rs`, `json_install.rs`, and `json_conflicts.rs` on the default branch, and its contract is [JSON output](https://github.com/Reilley64/mods/blob/main/docs/cli/json.md).
 
 Examples were checked against these released definitions and tests. The `--json` flag in the examples was checked against the default-branch source above, not against v0.1.0. Paths, tool names/arguments, and FOMOD IDs are illustrative, not claims of executed game workflows. Windows commands must still be checked against the user's installed help.
 

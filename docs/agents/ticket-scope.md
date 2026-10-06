@@ -18,6 +18,8 @@ Treat the accepted contract as the boundary for the ticket. A scope change requi
 
 Use one writer for a worktree. Reviewers remain read-only. Hand ownership to a new writer only after the previous writer has stopped.
 
+Branch each ticket from the default branch after all of its blockers have merged. Do not stack pull requests. The repository squash-merges, so a branch built on an unmerged branch conflicts once that branch merges.
+
 Pause and report a scope delta before adding any of the following unless the contract already requires it:
 
 - a new threat model or security boundary;
