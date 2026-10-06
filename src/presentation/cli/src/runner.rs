@@ -123,6 +123,7 @@ pub(crate) async fn execute(
 		command_family,
 		composition,
 	} = invocation(cli.command);
+
 	let root = match root {
 		Ok(root) => root,
 		Err(selection_error) => {
@@ -161,6 +162,7 @@ pub(crate) async fn execute(
 			if let Some(session) = session.take() {
 				session.finish("failure");
 			}
+
 			return command_outcome::outcome(CommandResult::Failed(report.into()), context);
 		}
 	};
@@ -2249,6 +2251,7 @@ mod tests {
 		);
 		Ok(())
 	}
+
 	#[tokio::test]
 	async fn stored_nexus_api_key_never_reaches_cli_output() -> Result<(), Box<dyn Error>> {
 		let secret = "synthetic-nexus-secret";

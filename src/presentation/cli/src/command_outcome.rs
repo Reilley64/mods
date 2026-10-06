@@ -85,6 +85,7 @@ pub(crate) fn outcome(result: CommandResult, context: OutcomeContext) -> Command
 				warnings.push(diagnostic_logging_unavailable());
 			}
 			document["warnings"] = Value::Array(warnings);
+
 			return CommandOutcome {
 				status: 0,
 				stdout: json_output::document(&document),
@@ -186,6 +187,7 @@ pub(crate) fn outcome(result: CommandResult, context: OutcomeContext) -> Command
 	if let Some(session) = context.diagnostic_session {
 		document["instance"] = json!(session.to_string());
 	}
+
 	CommandOutcome {
 		status: problem.status,
 		stdout: String::new(),
