@@ -467,12 +467,12 @@ mod tests {
 				},
 			),
 			(
-				&["conflicts", "explain", "file.esp"],
+				&["conflicts", "explain", "file.esp", "--compare-content"],
 				Some(SettingsLoadMode::Inspection),
 				|prepared| {
 					matches!(
 						prepared,
-						PreparedCommand::ExplainPath { path, compare_content: false, .. }
+						PreparedCommand::ExplainPath { path, compare_content: true, .. }
 							if path == "file.esp"
 					)
 				},

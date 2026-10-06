@@ -166,11 +166,7 @@ pub(crate) async fn execute(
 	cli: Cli,
 	startup_directory: PathBuf,
 	local_app_data: Option<PathBuf>,
-	dependency_factory: impl AsyncFnOnce(
-		&EnvironmentRoot,
-		&Path,
-		Composition,
-	) -> RootResult<PreparedCommand, ErrorMarker>,
+	prepare_command: impl AsyncFnOnce(&EnvironmentRoot, &Path, Composition) -> RootResult<PreparedCommand, ErrorMarker>,
 ) -> RunOutcome {
 	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
 		Ok(root) => root,
@@ -212,7 +208,7 @@ pub(crate) async fn execute(
 
 	let session_id = session.as_ref().map(DiagnosticSession::id);
 	let diagnostic_log = session.as_ref().map(DiagnosticSession::path);
-	let prepared = match dependency_factory(&root, &startup_directory, composition).await {
+	let prepared = match prepare_command(&root, &startup_directory, composition).await {
 		Ok(prepared) => prepared,
 		Err(report) => {
 			let marker = report.current_context();
@@ -915,16 +911,12 @@ fn problem_outcome(status: u32, stderr: String, json_mode: bool, marker: Option<
 
 pub(crate) async fn run_current_process(
 	cli: Result<Cli, ClapError>,
-	dependency_factory: impl AsyncFnOnce(
-		&EnvironmentRoot,
-		&Path,
-		Composition,
-	) -> RootResult<PreparedCommand, ErrorMarker>,
+	prepare_command: impl AsyncFnOnce(&EnvironmentRoot, &Path, Composition) -> RootResult<PreparedCommand, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
 	let cli = cli?;
-	Ok(execute(cli, startup_directory, local_app_data, dependency_factory).await)
+	Ok(execute(cli, startup_directory, local_app_data, prepare_command).await)
 }
 
 #[cfg(test)]
