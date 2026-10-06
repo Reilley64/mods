@@ -14,6 +14,18 @@ bun run check
 cargo check --workspace --target x86_64-pc-windows-msvc
 ```
 
+On macOS or Linux, run the Windows check through [cargo-xwin](https://github.com/rust-cross/cargo-xwin) instead. It needs LLVM's `clang-cl` and `llvm-lib` on `PATH`, and the pinned usvfs bundle in `MODS_USVFS_ARTIFACTS`:
+
+```text
+cargo install cargo-xwin --locked
+brew install llvm
+export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+export MODS_USVFS_ARTIFACTS="$PWD/native/artifacts/bin"
+cargo xwin clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc -- -D warnings
+```
+
+Get the bundle with `pwsh ./native/fetch.ps1`, as `native/README.md` describes. The first run downloads the MSVC CRT and Windows SDK headers. This check compiles and lints `cfg(windows)` code; Windows CI still runs the Windows tests.
+
 Pull request titles must follow Conventional Commits. This repository validates squash pull request titles in GitHub Actions. It does not install Husky or enforce individual local commit messages.
 
 ## Installation seams
