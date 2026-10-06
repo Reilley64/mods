@@ -4,7 +4,7 @@ import { cachedInference, requestKey } from "./cache";
 import { backendIdentity, responseModelMatches } from "./provider";
 
 import { validateRuleThresholds } from "./config";
-import type { StyleRule } from "./rules";
+import { ruleAppliesTo, type StyleRule } from "./rules";
 import { declaresFileNamedEntryPoint, type RustChange } from "./snapshot";
 
 const MAX_PATCH_CHARS = 100_000;
@@ -91,22 +91,27 @@ export async function reviewChanges(
 	}
 
 	interface Scores { model: string; probabilities: number[]; }
-	const validateScores = (value: unknown): Scores => {
+	const applicableRules = changes.map((change) => rules.filter((rule) => ruleAppliesTo(rule, change.path)));
+	const scoresValidator = (expected: number) => (value: unknown): Scores => {
 		const scores = value as Scores;
 		if (!scores || !responseModelMatches(options.model, scores.model)
-			|| !Array.isArray(scores.probabilities) || scores.probabilities.length !== rules.length
+			|| !Array.isArray(scores.probabilities) || scores.probabilities.length !== expected
 			|| scores.probabilities.some((score) => typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > 1)) {
 			throw new Error("coding-style-gate: invalid cached scores");
 		}
 		return scores;
 	};
-	const results = new Array<{ value: Scores; cached: boolean; inputTokens: number; outputTokens: number }>(changes.length);
+	const results = new Array<{ value: Scores; cached: boolean; inputTokens: number; outputTokens: number } | undefined>(changes.length);
 	let nextIndex = 0;
 	const worker = async () => {
 		while (nextIndex < changes.length) {
 			const index = nextIndex++;
 			const change = changes[index]!;
-			const questions = Object.fromEntries(rules.map((rule) => [rule.id, questionFor(rule)]));
+			const fileRules = applicableRules[index]!;
+			if (fileRules.length === 0) {
+				continue;
+			}
+			const questions = Object.fromEntries(fileRules.map((rule) => [rule.id, questionFor(rule)]));
 			const request = {
 				model: options.model,
 				state: {
@@ -122,14 +127,14 @@ export async function reviewChanges(
 			let inputTokens = 0;
 			let outputTokens = 0;
 			const result = await cachedInference(options.cacheDirectory,
-				requestKey(request, backendIdentity()), validateScores, async () => {
+				requestKey(request, backendIdentity()), scoresValidator(fileRules.length), async () => {
 					const response = await client.systemOne(request, { signal: options.signal });
 					if (!responseModelMatches(options.model, response.model)) {
 						throw new Error("coding-style-gate: OpenRouter returned a response from an unexpected model");
 					}
 					inputTokens = validateUsage(response.usage?.input_tokens, "input token usage");
 					outputTokens = validateUsage(response.usage?.output_tokens, "output token usage");
-					return { model: response.model, probabilities: rules.map((rule) =>
+					return { model: response.model, probabilities: fileRules.map((rule) =>
 						validateAnswer((response.answers as Record<string, unknown>)?.[rule.id], rule).noul) };
 				});
 			results[index] = { ...result, inputTokens, outputTokens };
@@ -143,11 +148,14 @@ export async function reviewChanges(
 	let inputTokens = 0;
 	let outputTokens = 0;
 	for (const [index, result] of results.entries()) {
+		if (result === undefined) {
+			continue;
+		}
 		const change = changes[index]!;
 		model = result.value.model;
 		inputTokens += result.inputTokens;
 		outputTokens += result.outputTokens;
-		for (const [ruleIndex, rule] of rules.entries()) {
+		for (const [ruleIndex, rule] of applicableRules[index]!.entries()) {
 			const probability = result.value.probabilities[ruleIndex]!;
 			if (probability >= options.ruleThresholds[rule.id]!) {
 				findings.push({ file: change.path, probability, rule });
@@ -157,8 +165,8 @@ export async function reviewChanges(
 
 	return {
 		model,
-		filesReviewed: changes.length,
-		cachedFiles: results.filter((result) => result.cached).length,
+		filesReviewed: results.filter((result) => result !== undefined).length,
+		cachedFiles: results.filter((result) => result?.cached).length,
 		findings: findings.sort((left, right) => right.probability - left.probability),
 		inputTokens,
 		outputTokens,

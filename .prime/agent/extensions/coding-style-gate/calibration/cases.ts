@@ -115,6 +115,7 @@ export const calibrationCases: CalibrationCase[] = [
 		name: "parameter-order-bad",
 		expectedViolation: true,
 		ruleId: "application-use-cases-and-ports-use-case-parameters",
+		path: "src/application/src/installation/install_archive.rs",
 		before: "",
 		after: "async fn install(path: PathBuf, cancellation: CancellationToken, dependencies: Dependencies) { }\n",
 	},
@@ -122,6 +123,7 @@ export const calibrationCases: CalibrationCase[] = [
 		name: "parameter-order-good",
 		expectedViolation: false,
 		ruleId: "application-use-cases-and-ports-use-case-parameters",
+		path: "src/application/src/installation/install_archive.rs",
 		before: "",
 		after: "async fn install(dependencies: Dependencies, path: PathBuf, cancellation: CancellationToken) { }\n",
 	},
@@ -129,6 +131,7 @@ export const calibrationCases: CalibrationCase[] = [
 		name: "raw-report-bad",
 		expectedViolation: true,
 		ruleId: "errors-presentation-error-allowlists",
+		path: "src/presentation/cli/src/output.rs",
 		before: "",
 		after: "fn error_response(report: Report) -> Response {\n\tResponse::error(format!(\"{report:?}\"))\n}\n",
 	},
@@ -136,6 +139,7 @@ export const calibrationCases: CalibrationCase[] = [
 		name: "allowlisted-report-good",
 		expectedViolation: false,
 		ruleId: "errors-presentation-error-allowlists",
+		path: "src/presentation/cli/src/output.rs",
 		before: "",
 		after: "fn error_response(report: &Report) -> Response {\n\tResponse::error(map_report_to_public_error(report))\n}\n",
 	},
@@ -312,22 +316,6 @@ pub async fn install_archive(input: InstallArchiveInput) -> Result<InstallArchiv
 		referencingFiles: ["src/application/src/game/mod.rs", "src/application/src/game/synchronize.rs"],
 		before: "",
 		after: `pub(super) fn read_version(path: &Path) -> Result<Version, ReadVersionError> {
-	let bytes = fs::read(path)?;
-	Version::parse(&bytes)
-}
-`,
-	},
-	{
-		name: "use-case-local-non-application-scope-good",
-		expectedViolation: false,
-		ruleId: "application-use-cases-and-ports-use-case-local-implementation-modules",
-		path: "src/infrastructure/game_platform/src/file_version.rs",
-		referencingFiles: [
-			"src/infrastructure/game_platform/src/adapter.rs",
-			"src/infrastructure/game_platform/src/lib.rs",
-		],
-		before: "",
-		after: `pub(crate) fn read_version(path: &Path) -> Result<Version, ReadVersionError> {
 	let bytes = fs::read(path)?;
 	Version::parse(&bytes)
 }

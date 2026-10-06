@@ -2,7 +2,7 @@
 
 `cases.ts` contains paired synthetic Rust patches for fifteen boundary pairs. Each boundary has one deliberate violation and one compliant counterpart.
 
-`run.ts` sends every patch through the production reviewer against the complete `CODING_STYLE.md` rubric. It reports:
+`run.ts` sends every patch through the production reviewer against each configured rubric item that covers the patch path. It rejects a labeled patch whose path is outside its rule's `Applies to` scope. It reports:
 
 - the target-rule score for each labeled patch;
 - the highest score from any other rubric item;
@@ -59,5 +59,5 @@ Review one rule against selected changed files:
 bun ./.prime/agent/extensions/coding-style-gate/calibration/review-range.ts <base-oid> <head-oid> <rule-id> <exact-path>...
 ```
 
-The command resolves the merge base, loads each changed Rust file from that base and the head, loads the complete head Rust tree for module-reference evidence, builds task-style patches with 20 context lines, and runs the configured production model and threshold. Redirect stdout when a large JSON report is expected.
+The command resolves the merge base, loads each changed Rust file from that base and the head, loads the complete head Rust tree for module-reference evidence, builds task-style patches with 20 context lines, and runs the configured production model and threshold. Each file gets only the rules whose `Applies to` scope covers it, so a rule filter skips files outside that rule's scope. Redirect stdout when a large JSON report is expected.
 

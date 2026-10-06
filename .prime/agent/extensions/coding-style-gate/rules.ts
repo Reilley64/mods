@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+
 export interface StyleRule {
 	id: string;
 	section: string;
@@ -7,9 +9,10 @@ export interface StyleRule {
 	compliant: string;
 	badExamples: string[];
 	goodExamples: string[];
+	appliesTo?: string[];
 }
 
-type FieldName = "Rule" | "Violation" | "Compliant" | "Bad example" | "Good example";
+type FieldName = "Rule" | "Violation" | "Compliant" | "Bad example" | "Good example" | "Applies to";
 
 interface RubricItem {
 	section: string;
@@ -19,7 +22,8 @@ interface RubricItem {
 
 const SECTION = /^##\s+(.+?)\s*$/;
 const ITEM = /^###\s+(.+?)\s*$/;
-const FIELD = /^####\s+(Rule|Violation|Compliant|Bad example|Good example)\s*$/;
+const FIELD = /^####\s+(Rule|Violation|Compliant|Bad example|Good example|Applies to)\s*$/;
+const GLOB_ITEM = /^\s*-\s+`?([^`]+?)`?\s*$/;
 const ANY_FIELD = /^####\s+(.+?)\s*$/;
 const REQUIRED_FIELDS: FieldName[] = ["Rule", "Violation", "Compliant", "Bad example", "Good example"];
 
@@ -44,6 +48,30 @@ function examples(lines: readonly string[]): string[] {
 	const body = lines.join("\n").trim();
 	const fenced = [...body.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map((match) => match[1]!.trim());
 	return fenced.length > 0 ? fenced : body ? [body] : [];
+}
+
+function globs(item: RubricItem): string[] | undefined {
+	const lines = item.fields["Applies to"]?.filter((line) => line.trim());
+	if (lines === undefined) {
+		return undefined;
+	}
+	if (lines.length === 0) {
+		throw new Error(`coding-style-gate: rubric item "${item.section} / ${item.title}" has an empty Applies to list`);
+	}
+	return lines.map((line) => {
+		const glob = GLOB_ITEM.exec(line)?.[1];
+		if (glob === undefined) {
+			throw new Error(`coding-style-gate: Applies to in "${item.section} / ${item.title}" must be a list of repository-relative globs`);
+		}
+		if (glob.startsWith("/") || glob.includes("\\") || glob.split("/").includes("..")) {
+			throw new Error(`coding-style-gate: Applies to glob ${glob} in "${item.section} / ${item.title}" must stay within the repository`);
+		}
+		return glob;
+	});
+}
+
+export function ruleAppliesTo(rule: StyleRule, file: string): boolean {
+	return rule.appliesTo === undefined || rule.appliesTo.some((glob) => posix.matchesGlob(file, glob));
 }
 
 function required(item: RubricItem, field: FieldName): string[] {
@@ -123,6 +151,7 @@ export function extractStyleRules(markdown: string): StyleRule[] {
 			throw new Error(`coding-style-gate: duplicate rubric rule id ${id}`);
 		}
 		ids.add(id);
+		const appliesTo = globs(rubricItem);
 		return [
 			{
 				id,
@@ -133,6 +162,7 @@ export function extractStyleRules(markdown: string): StyleRule[] {
 				compliant: prose(required(rubricItem, "Compliant")),
 				badExamples: examples(required(rubricItem, "Bad example")),
 				goodExamples: examples(required(rubricItem, "Good example")),
+				...(appliesTo === undefined ? {} : { appliesTo }),
 			},
 		];
 	});

@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 
 import { calibrationCases } from "../calibration/cases";
 import { commentCalibrationCases } from "../calibration/comment-cases";
 import { fitRuleThresholds } from "../calibration/fit";
 import { perRuleCases } from "../calibration/per-rule-cases";
-import { calibrationInput } from "../calibration/input";
+import { calibrationInput, outOfScopeFixtures } from "../calibration/input";
 import { loadConfig, validateRuleThresholds } from "../config";
-import { extractStyleRules } from "../rules";
+import { loadStyleRules } from "../policy";
+
+async function repositoryRules() {
+	return loadStyleRules(process.cwd(), (await loadConfig(process.cwd())).styleFiles);
+}
 
 describe("coding style calibration corpus", () => {
 
@@ -33,14 +36,14 @@ describe("coding style calibration corpus", () => {
 
 	test("repository configuration explicitly covers exactly the current rubric", async () => {
 		const config = await loadConfig(process.cwd());
-		const rules = extractStyleRules(await readFile(config.styleFile, "utf8"));
+		const rules = await loadStyleRules(process.cwd(), config.styleFiles);
 		validateRuleThresholds(config.ruleThresholds, rules);
 		expect(new Set(Object.keys(config.ruleThresholds))).toEqual(new Set(rules.map(rule => rule.id)));
 		expect(Object.hasOwn(config, "threshold")).toBeFalse();
 	});
 
 	test("covers every authoritative rule with separate training and validation labels", async () => {
-		const rules = extractStyleRules(await readFile("CODING_STYLE.md", "utf8"));
+		const rules = await repositoryRules();
 		expect(new Set(perRuleCases.map(sample => sample.name)).size).toBe(perRuleCases.length);
 		expect(new Set(perRuleCases.map(sample => sample.ruleId))).toEqual(new Set(rules.map(rule => rule.id)));
 		for (const rule of rules) {
@@ -57,6 +60,14 @@ describe("coding style calibration corpus", () => {
 		}
 	});
 
+
+	test("places every fixture inside its rule's Applies to scope", async () => {
+		const rules = await repositoryRules();
+		expect(outOfScopeFixtures(rules, [...perRuleCases, ...calibrationCases])).toEqual([]);
+		expect(outOfScopeFixtures(rules, [{ ...calibrationCases.find((sample) => sample.name === "parameter-order-bad")!, path: undefined }])).toEqual([
+			"parameter-order-bad (calibration/parameter-order-bad.rs is outside application-use-cases-and-ports-use-case-parameters Applies to)",
+		]);
+	});
 
 	test("reports overlapping score distributions and rejects invalid scores", () => {
 		const overlapping = [
@@ -96,14 +107,14 @@ describe("coding style calibration corpus", () => {
 		}
 	});
 	test("pairs labeled good and bad patches for known rubric rules", async () => {
-		const rules = extractStyleRules(await readFile("CODING_STYLE.md", "utf8"));
+		const rules = await repositoryRules();
 		const ruleIds = new Set(rules.map((rule) => rule.id));
 		const names = new Set(calibrationCases.map((calibrationCase) => calibrationCase.name));
 
 		expect(names.size).toBe(calibrationCases.length);
 		expect(calibrationCases.every((calibrationCase) => ruleIds.has(calibrationCase.ruleId))).toBeTrue();
 		expect(calibrationCases.filter((calibrationCase) => calibrationCase.expectedViolation)).toHaveLength(21);
-		expect(calibrationCases.filter((calibrationCase) => !calibrationCase.expectedViolation)).toHaveLength(26);
+		expect(calibrationCases.filter((calibrationCase) => !calibrationCase.expectedViolation)).toHaveLength(25);
 		for (const ruleId of new Set(calibrationCases.map((calibrationCase) => calibrationCase.ruleId))) {
 			const labels = calibrationCases.filter((calibrationCase) => calibrationCase.ruleId === ruleId);
 			expect(labels.some((calibrationCase) => calibrationCase.expectedViolation)).toBeTrue();

@@ -129,7 +129,7 @@ export default function codingStyleGate(pi: ExtensionAPI): void {
 		if (changes.length === 0) {
 			return undefined;
 		}
-		const rules = await loadStyleRules(root, config.styleFile);
+		const rules = await loadStyleRules(root, config.styleFiles);
 		validateRuleThresholds(config.ruleThresholds, rules);
 		const moduleReferences = new Map(
 			changes.map((change) => [change.path, findModuleReferencingFiles(after, change.path)]),

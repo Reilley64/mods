@@ -12,13 +12,27 @@ afterEach(async () => {
 });
 
 describe("coding style gate configuration", () => {
-	test("rejects a style file outside the project", async () => {
+	test("rejects style files outside the project, duplicates, and a non-list", async () => {
 		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
 		temporaryDirectories.push(root);
 		await mkdir(join(root, ".prime", "agent"), { recursive: true });
-		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ styleFile: "../SECRET.md" }));
+		const path = join(root, ".prime", "agent", "coding-style-gate.json");
 
-		await expect(loadConfig(root)).rejects.toThrow("within the project");
+		for (const styleFiles of [["../SECRET.md"], ["docs/a.md", join(root, "b.md")], [""], ["docs/a.md", "docs/./a.md"], "docs/a.md"]) {
+			await writeFile(path, JSON.stringify({ styleFiles }));
+			await expect(loadConfig(root)).rejects.toThrow("styleFiles must list distinct files that stay within the project");
+		}
+		await writeFile(path, JSON.stringify({ styleFiles: ["docs/a.md", "docs/b.md"] }));
+		expect((await loadConfig(root)).styleFiles).toEqual(["docs/a.md", "docs/b.md"]);
+	});
+
+	test("rejects the legacy styleFile setting with migration instructions", async () => {
+		const root = await mkdtemp(join(tmpdir(), "coding-style-gate-"));
+		temporaryDirectories.push(root);
+		await mkdir(join(root, ".prime", "agent"), { recursive: true });
+		await writeFile(join(root, ".prime", "agent", "coding-style-gate.json"), JSON.stringify({ styleFile: "CODING_STYLE.md" }));
+
+		await expect(loadConfig(root)).rejects.toThrow("legacy styleFile is unsupported; migrate to styleFiles");
 	});
 
 	test("defaults and confines the dispositions file", async () => {

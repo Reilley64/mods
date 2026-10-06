@@ -24,7 +24,7 @@ Domain documentation uses the single-context layout. See `docs/agents/domain.md`
 
 ### Coding style
 
-Rust implementation and review must follow `CODING_STYLE.md`.
+Before you write or review Rust, read `CODING_STYLE.md` and the area files it names for the diff.
 
 Coding-style gate dispositions live in `.prime/agent/coding-style-dispositions.json`, which is git-ignored and never committed. When a PR relies on dispositions, list each accepted finding in the PR description with its file, rule, and reason.
 
