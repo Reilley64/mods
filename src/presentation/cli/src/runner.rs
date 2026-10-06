@@ -1,18 +1,14 @@
 use crate::commands::Cli;
-use crate::commands::Command;
-use crate::commands::ConfigCommand;
-use crate::commands::ConflictsCommand;
-use crate::commands::SetCommand;
 use crate::conflict_output;
 use crate::diagnostics::DiagnosticSession;
 use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
 use crate::error;
 use crate::export_output;
-use crate::invocation::CommandDependencies;
 use crate::invocation::Composition;
 use crate::invocation::ExitStatusFamily;
 use crate::invocation::Invocation;
+use crate::invocation::PreparedCommand;
 use crate::invocation::invocation;
 use crate::json_conflicts;
 use crate::json_export;
@@ -174,7 +170,7 @@ pub(crate) async fn execute(
 		&EnvironmentRoot,
 		&Path,
 		Composition,
-	) -> RootResult<CommandDependencies, ErrorMarker>,
+	) -> RootResult<PreparedCommand, ErrorMarker>,
 ) -> RunOutcome {
 	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
 		Ok(root) => root,
@@ -206,7 +202,7 @@ pub(crate) async fn execute(
 		quiet_success,
 		exit_status_family,
 		composition,
-	} = invocation(&cli.command);
+	} = invocation(cli.command);
 	let (mut session, diagnostic_warning) =
 		match DiagnosticSession::start(root.as_path(), cli.log_level, operation_name) {
 			SessionStart::FileBacked(session) => (Some(session), String::new()),
@@ -216,8 +212,8 @@ pub(crate) async fn execute(
 
 	let session_id = session.as_ref().map(DiagnosticSession::id);
 	let diagnostic_log = session.as_ref().map(DiagnosticSession::path);
-	let dependencies = match dependency_factory(&root, &startup_directory, composition).await {
-		Ok(dependencies) => dependencies,
+	let prepared = match dependency_factory(&root, &startup_directory, composition).await {
+		Ok(prepared) => prepared,
 		Err(report) => {
 			let marker = report.current_context();
 			let status = match exit_status_family {
@@ -257,14 +253,7 @@ pub(crate) async fn execute(
 		}
 	};
 
-	let work = dispatch(
-		cli.command,
-		dependencies,
-		root,
-		startup_directory,
-		cli.log_level.to_string(),
-		cli.json,
-	);
+	let work = dispatch(prepared, root, startup_directory, cli.log_level.to_string(), cli.json);
 	let mut result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
@@ -316,15 +305,17 @@ pub(crate) async fn execute(
 }
 
 async fn dispatch(
-	command: Command,
-	dependencies: CommandDependencies,
+	prepared: PreparedCommand,
 	root: EnvironmentRoot,
 	startup: PathBuf,
 	log_level: String,
 	json_mode: bool,
 ) -> RunOutcome {
-	match (command, dependencies) {
-		(Command::Init { game_install }, CommandDependencies::InitializeEnvironment(dependencies)) => {
+	match prepared {
+		PreparedCommand::InitializeEnvironment {
+			dependencies,
+			game_install,
+		} => {
 			let game_install = match game_install
 				.map(|path| resolve_path(&path, &startup))
 				.map(GameInstallationPath::new)
@@ -361,27 +352,23 @@ async fn dispatch(
 				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
-		(
-			Command::Config {
-				command: ConfigCommand::List,
-			},
-			CommandDependencies::ListSettings { dependencies, settings },
-		) => match list_settings(dependencies, settings.settings).await {
-			Ok(output) => success(
-				output::settings(&output.settings),
-				String::new(),
-				json_mode,
-				json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
-				vec![],
-			),
-			Err(report) => report_outcome(&report, json_mode),
-		},
-		(
-			Command::Config {
-				command: ConfigCommand::Get { key },
-			},
-			CommandDependencies::GetSetting { dependencies, settings },
-		) => match get_setting(dependencies, settings.settings, key.into()).await {
+		PreparedCommand::ListSettings { dependencies, settings } => {
+			match list_settings(dependencies, settings.settings).await {
+				Ok(output) => success(
+					output::settings(&output.settings),
+					String::new(),
+					json_mode,
+					json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
+					vec![],
+				),
+				Err(report) => report_outcome(&report, json_mode),
+			}
+		}
+		PreparedCommand::GetSetting {
+			dependencies,
+			settings,
+			key,
+		} => match get_setting(dependencies, settings.settings, key.into()).await {
 			Ok(output) => success(
 				output::setting(&output.setting),
 				String::new(),
@@ -391,14 +378,7 @@ async fn dispatch(
 			),
 			Err(report) => report_outcome(&report, json_mode),
 		},
-		(
-			Command::Config {
-				command: ConfigCommand::Set {
-					command: SetCommand::GameDir { value },
-				},
-			},
-			CommandDependencies::SetGameDirectory(dependencies),
-		) => {
+		PreparedCommand::SetGameDirectory { dependencies, value } => {
 			let path = match GameInstallationPath::new(resolve_path(&value, &startup)) {
 				Ok(path) => path,
 				Err(report) => {
@@ -417,7 +397,10 @@ async fn dispatch(
 				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
-		(Command::Install(arguments), CommandDependencies::InstallMod(dependencies)) => {
+		PreparedCommand::InstallMod {
+			dependencies,
+			arguments,
+		} => {
 			let cancellation = operation::ctrl_c_token();
 
 			let source = if let Some(url) =
@@ -514,12 +497,10 @@ async fn dispatch(
 				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
-		(
-			Command::Conflicts {
-				command: ConflictsCommand::List { compare_content },
-			},
-			CommandDependencies::ListEffectiveConflicts(dependencies),
-		) => match list_effective_conflicts(dependencies, compare_content, operation::ctrl_c_token()).await {
+		PreparedCommand::ListEffectiveConflicts {
+			dependencies,
+			compare_content,
+		} => match list_effective_conflicts(dependencies, compare_content, operation::ctrl_c_token()).await {
 			Ok(output) => success(
 				conflict_output::list(&output),
 				String::new(),
@@ -529,15 +510,11 @@ async fn dispatch(
 			),
 			Err(report) => report_outcome(&report, json_mode),
 		},
-		(
-			Command::Conflicts {
-				command: ConflictsCommand::Inspect {
-					mod_name,
-					compare_content,
-				},
-			},
-			CommandDependencies::InspectModConflicts(dependencies),
-		) => {
+		PreparedCommand::InspectModConflicts {
+			dependencies,
+			mod_name,
+			compare_content,
+		} => {
 			let mod_name = match ModName::new(mod_name) {
 				Ok(mod_name) => mod_name,
 				Err(report) => {
@@ -561,12 +538,11 @@ async fn dispatch(
 				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
-		(
-			Command::Conflicts {
-				command: ConflictsCommand::Explain { path, compare_content },
-			},
-			CommandDependencies::ExplainPath(dependencies),
-		) => {
+		PreparedCommand::ExplainPath {
+			dependencies,
+			path,
+			compare_content,
+		} => {
 			let path = match DataRelativePath::new(path) {
 				Ok(path) => path,
 				Err(report) => {
@@ -588,7 +564,10 @@ async fn dispatch(
 				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
-		(Command::Export(arguments), CommandDependencies::ExportEnvironment(dependencies)) => {
+		PreparedCommand::ExportEnvironment {
+			dependencies,
+			arguments,
+		} => {
 			let output_path = resolve_path(&arguments.output, &startup);
 
 			match export_environment(
@@ -631,7 +610,11 @@ async fn dispatch(
 				}
 			}
 		}
-		(Command::Shortcut(arguments), CommandDependencies::CreateShortcut { dependencies, settings }) => {
+		PreparedCommand::CreateShortcut {
+			dependencies,
+			settings,
+			arguments,
+		} => {
 			let output_target = match arguments.output_target.map_or(Ok(OutputTarget::Overwrite), |name| {
 				ModName::new(name).map(OutputTarget::DataMod)
 			}) {
@@ -697,13 +680,11 @@ async fn dispatch(
 				Err(report) => report_outcome(&report, json_mode),
 			}
 		}
-		(
-			Command::Exec(arguments),
-			CommandDependencies::ExecuteProgram {
-				execute_program,
-				force_cancellation,
-			},
-		) => {
+		PreparedCommand::ExecuteProgram {
+			execute_program,
+			force_cancellation,
+			arguments,
+		} => {
 			if arguments.hidden && !cfg!(windows) {
 				let marker = ErrorMarker::program_unsupported();
 				return RunOutcome {
@@ -834,7 +815,6 @@ async fn dispatch(
 				}
 			}
 		}
-		_ => marker_outcome(ErrorMarker::environment_invalid(None), json_mode),
 	}
 }
 
@@ -939,7 +919,7 @@ pub(crate) async fn run_current_process(
 		&EnvironmentRoot,
 		&Path,
 		Composition,
-	) -> RootResult<CommandDependencies, ErrorMarker>,
+	) -> RootResult<PreparedCommand, ErrorMarker>,
 ) -> Result<RunOutcome, ClapError> {
 	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
@@ -950,12 +930,14 @@ pub(crate) async fn run_current_process(
 #[cfg(test)]
 mod tests {
 	use super::Cli;
-	use super::CommandDependencies;
+	use super::PreparedCommand;
 	use super::RunOutcome;
 	use super::execute;
 	use super::hidden_failure_dialog;
 	use super::parse_choices;
 	use super::run_current_process;
+	use crate::commands::Command;
+	use crate::commands::ConflictsCommand;
 	use crate::commands::parse_from;
 	use crate::diagnostics::SINK_WARNING;
 	use crate::invocation::compose;
@@ -1092,15 +1074,17 @@ mod tests {
 	}
 
 	async fn run(
-		arguments: impl IntoIterator<Item = OsString>,
+		arguments: Vec<OsString>,
 		startup_directory: PathBuf,
 		local_app_data: Option<PathBuf>,
-		dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<CommandDependencies, ErrorMarker>,
+		prepare: impl FnOnce(&EnvironmentRoot, Command) -> Result<PreparedCommand, ErrorMarker>,
 	) -> Result<RunOutcome, ClapError> {
-		let cli = parse_from(arguments)?;
+		let cli = parse_from(arguments.clone())?;
+		let command = parse_from(arguments)?.command;
+
 		Ok(
 			execute(cli, startup_directory, local_app_data, async move |root, _, _| {
-				dependency_factory(root).map_err(|marker| report!(marker))
+				prepare(root, command).map_err(|marker| report!(marker))
 			})
 			.await,
 		)
@@ -1286,18 +1270,135 @@ mod tests {
 		}
 	}
 
-	fn execution_dependencies(execute_program: ExecuteProgram) -> CommandDependencies {
-		CommandDependencies::ExecuteProgram {
-			execute_program,
-			force_cancellation: CancellationToken::new(),
-		}
+	fn prepared_initialize_environment(
+		command: Command,
+		dependencies: InitializeEnvironmentDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Init { game_install } = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::InitializeEnvironment {
+			dependencies,
+			game_install,
+		})
 	}
 
-	fn failing_execution_dependencies() -> CommandDependencies {
-		execution_dependencies(Box::new(|_, _, _, _, _, _| {
-			Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
-				as PortFuture<_, _>
-		}))
+	fn prepared_install_mod(
+		command: Command,
+		dependencies: InstallModDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Install(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::InstallMod {
+			dependencies,
+			arguments,
+		})
+	}
+
+	fn prepared_list_effective_conflicts(
+		command: Command,
+		dependencies: ListEffectiveConflictsDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Conflicts {
+			command: ConflictsCommand::List { compare_content },
+		} = command
+		else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ListEffectiveConflicts {
+			dependencies,
+			compare_content,
+		})
+	}
+
+	fn prepared_inspect_mod_conflicts(
+		command: Command,
+		dependencies: InspectModConflictsDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Conflicts {
+			command: ConflictsCommand::Inspect {
+				mod_name,
+				compare_content,
+			},
+		} = command
+		else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::InspectModConflicts {
+			dependencies,
+			mod_name,
+			compare_content,
+		})
+	}
+
+	fn prepared_explain_path(
+		command: Command,
+		dependencies: ExplainPathDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Conflicts {
+			command: ConflictsCommand::Explain { path, compare_content },
+		} = command
+		else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ExplainPath {
+			dependencies,
+			path,
+			compare_content,
+		})
+	}
+
+	fn prepared_export_environment(
+		command: Command,
+		dependencies: ExportEnvironmentDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Export(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ExportEnvironment {
+			dependencies,
+			arguments,
+		})
+	}
+
+	fn prepared_create_shortcut(
+		command: Command,
+		dependencies: CreateShortcutDependencies,
+		settings: ResolvedSettings,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Shortcut(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::CreateShortcut {
+			dependencies,
+			settings,
+			arguments,
+		})
+	}
+
+	fn prepared_execute_program(
+		command: Command,
+		execute_program: ExecuteProgram,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Exec(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ExecuteProgram {
+			execute_program,
+			force_cancellation: CancellationToken::new(),
+			arguments,
+		})
+	}
+
+	fn prepared_failing_execution(command: Command) -> Result<PreparedCommand, ErrorMarker> {
+		prepared_execute_program(
+			command,
+			Box::new(|_, _, _, _, _, _| {
+				Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
+					as PortFuture<_, _>
+			}),
+		)
 	}
 
 	/// Export ports that list one profile file and record whether it was written.
@@ -1397,8 +1498,8 @@ mod tests {
 		})
 	}
 
-	fn list_settings_dependencies(root: &Path) -> Result<CommandDependencies, ErrorMarker> {
-		Ok(CommandDependencies::ListSettings {
+	fn prepared_list_settings(root: &Path) -> Result<PreparedCommand, ErrorMarker> {
+		Ok(PreparedCommand::ListSettings {
 			dependencies: ListSettingsDependencies { report_progress: None },
 			settings: resolved_settings(root)?,
 		})
@@ -1586,9 +1687,12 @@ mod tests {
 				arguments.push(OsString::from("--dry-run"));
 			}
 
-			let result = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-				Ok(CommandDependencies::InstallMod(dependencies))
-			})
+			let result = run(
+				arguments,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_, command| prepared_install_mod(command, dependencies),
+			)
 			.await?;
 
 			if expected == "failed" {
@@ -1634,7 +1738,7 @@ mod tests {
 				arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe", "", "--", "雪"],
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				|_| Ok(execution_dependencies(execute_program)),
+				|_, command| prepared_execute_program(command, execute_program),
 			)
 			.await?;
 			assert_eq!(outcome.status, status);
@@ -1652,7 +1756,7 @@ mod tests {
 			arguments!["mods", "exec", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(failing_execution_dependencies()),
+			|_, command| prepared_failing_execution(command),
 		)
 		.await?;
 		let path = outcome.diagnostic_log.as_ref().ok_or("expected diagnostic log")?;
@@ -1720,7 +1824,7 @@ mod tests {
 				],
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				|_| Ok(execution_dependencies(execute_program)),
+				|_, command| prepared_execute_program(command, execute_program),
 			)
 			.await?;
 
@@ -1741,7 +1845,7 @@ mod tests {
 			arguments!["mods", "--log-level", "off", "exec", "--hidden", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(failing_execution_dependencies()),
+			|_, command| prepared_failing_execution(command),
 		)
 		.await?;
 		assert_eq!(outcome.status, 126);
@@ -1777,7 +1881,7 @@ mod tests {
 			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(execution_dependencies(execute_program)),
+			|_, command| prepared_execute_program(command, execute_program),
 		)
 		.await?;
 
@@ -1813,7 +1917,7 @@ mod tests {
 			],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(execution_dependencies(execute_program)),
+			|_, command| prepared_execute_program(command, execute_program),
 		)
 		.await?;
 		assert_eq!(outcome.status, 125);
@@ -1852,7 +1956,7 @@ mod tests {
 			],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(CommandDependencies::InstallMod(unavailable_install_mod_dependencies())),
+			|_, command| prepared_install_mod(command, unavailable_install_mod_dependencies()),
 		)
 		.await?;
 		let problem: Value = from_str(&outcome.stderr)?;
@@ -1926,9 +2030,9 @@ mod tests {
 			arguments,
 			startup_directory.to_owned(),
 			local_app_data.map(Path::to_owned),
-			|root| {
+			|root, _| {
 				selected = Some(root.as_path().to_owned());
-				list_settings_dependencies(startup_directory)
+				prepared_list_settings(startup_directory)
 			},
 		)
 		.await?;
@@ -2016,7 +2120,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| Ok(CommandDependencies::ListEffectiveConflicts(list)),
+			|_, command| prepared_list_effective_conflicts(command, list),
 		)
 		.await?;
 		assert_eq!(listed.status, 0);
@@ -2038,7 +2142,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| Ok(CommandDependencies::InspectModConflicts(inspect)),
+			|_, command| prepared_inspect_mod_conflicts(command, inspect),
 		)
 		.await?;
 		assert_eq!(inspected.status, 0);
@@ -2066,7 +2170,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| Ok(CommandDependencies::ExplainPath(explain)),
+			|_, command| prepared_explain_path(command, explain),
 		)
 		.await?;
 		assert_eq!(explained.status, 0);
@@ -2094,10 +2198,11 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| {
-				Ok(CommandDependencies::InspectModConflicts(
+			|_, command| {
+				prepared_inspect_mod_conflicts(
+					command,
 					unavailable_inspect_mod_conflicts_dependencies(),
-				))
+				)
 			},
 		)
 		.await?;
@@ -2117,7 +2222,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| Ok(CommandDependencies::ExplainPath(unavailable_explain_path_dependencies())),
+			|_, command| prepared_explain_path(command, unavailable_explain_path_dependencies()),
 		)
 		.await?;
 		assert_eq!(invalid_path.status, 1);
@@ -2145,14 +2250,14 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| list_settings_dependencies(&root),
+			|_, _| prepared_list_settings(&root),
 		)
 		.await?;
 		let result = run(
 			arguments!["mods", "--environment", root.as_os_str(), "config", "list"],
 			temp.path().to_path_buf(),
 			None,
-			|_| list_settings_dependencies(&root),
+			|_, _| prepared_list_settings(&root),
 		)
 		.await?;
 		assert_eq!(result.status, expected.status);
@@ -2170,7 +2275,7 @@ mod tests {
 			arguments!["mods", "--environment", root.as_os_str(), "install", "archive.zip",],
 			temp.path().to_path_buf(),
 			None,
-			|_| Ok(CommandDependencies::InstallMod(unavailable_install_mod_dependencies())),
+			|_, command| prepared_install_mod(command, unavailable_install_mod_dependencies()),
 		)
 		.await?;
 		let files = read_dir(root.join("logs"))?.collect::<Result<Vec<_>, _>>()?;
@@ -2194,7 +2299,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			None,
-			|_| Err(ErrorMarker::io_failure()),
+			|_, _| Err(ErrorMarker::io_failure()),
 		)
 		.await?;
 		let error: Value = from_str(&root_failure.stderr)?;
@@ -2207,7 +2312,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| list_settings_dependencies(temp.path()),
+			|_, _| prepared_list_settings(temp.path()),
 		)
 		.await?;
 		let document: Value = from_str(&settings.stdout)?;
@@ -2218,11 +2323,12 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "init", "--game-install", "game"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| {
-				test_binding(temp.path()).map(|binding| {
-					CommandDependencies::InitializeEnvironment(initialize_environment_dependencies(
-						binding,
-					))
+			|_, command| {
+				test_binding(temp.path()).and_then(|binding| {
+					prepared_initialize_environment(
+						command,
+						initialize_environment_dependencies(binding),
+					)
 				})
 			},
 		)
@@ -2249,7 +2355,7 @@ mod tests {
 				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				|_| Ok(execution_dependencies(execute_program)),
+				|_, command| prepared_execute_program(command, execute_program),
 			)
 			.await?;
 			assert_eq!(outcome.status, 125);
@@ -2272,7 +2378,7 @@ mod tests {
 			arguments!["mods", "--json", "--environment", root.as_os_str(), "config", "list"],
 			temp.path().to_owned(),
 			None,
-			|_| list_settings_dependencies(&root),
+			|_, _| prepared_list_settings(&root),
 		)
 		.await?;
 		let document: Value = from_str(&warned.stdout)?;
@@ -2294,7 +2400,7 @@ mod tests {
 			],
 			temp.path().to_owned(),
 			None,
-			|_| Ok(CommandDependencies::InstallMod(unavailable_install_mod_dependencies())),
+			|_, command| prepared_install_mod(command, unavailable_install_mod_dependencies()),
 		)
 		.await?;
 		let problem: Value = from_str(&failed.stderr)?;
@@ -2313,7 +2419,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			Some(Path::new("relative-root").to_owned()),
-			|_| Err(ErrorMarker::io_failure()),
+			|_, _| Err(ErrorMarker::io_failure()),
 		)
 		.await?;
 		assert_eq!(json.status, 2);
@@ -2324,7 +2430,7 @@ mod tests {
 			arguments!["mods", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			Some(Path::new("relative-root").to_owned()),
-			|_| Err(ErrorMarker::io_failure()),
+			|_, _| Err(ErrorMarker::io_failure()),
 		)
 		.await?;
 		assert_eq!(text.stderr, "error: environment root must be an absolute path\n");
@@ -2382,12 +2488,13 @@ mod tests {
 				arguments.push(OsString::from("--json"));
 			}
 			arguments.extend(arguments!["install", "https://www.nexusmods.com/newvegas/mods/42"]);
-			outcomes.push(
-				run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-					Ok(CommandDependencies::InstallMod(dependencies))
-				})
-				.await?,
-			);
+			outcomes.push(run(
+				arguments,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_, command| prepared_install_mod(command, dependencies),
+			)
+			.await?);
 		}
 
 		let problem: Value = from_str(&outcomes[0].stderr)?;
@@ -2568,8 +2675,8 @@ mod tests {
 				]);
 			}
 			values.extend(arguments!["--", "tool.exe", "", "a\"b", "雪", "--"]);
-			let outcome = run(values, temp.path().to_owned(), None, |_| {
-				Ok(CommandDependencies::CreateShortcut { dependencies, settings })
+			let outcome = run(values, temp.path().to_owned(), None, |_, command| {
+				prepared_create_shortcut(command, dependencies, settings)
 			})
 			.await?;
 
@@ -2620,7 +2727,7 @@ mod tests {
 				],
 				temp.path().to_owned(),
 				None,
-				|_| Ok(CommandDependencies::CreateShortcut { dependencies, settings }),
+				|_, command| prepared_create_shortcut(command, dependencies, settings),
 			)
 			.await?;
 
@@ -2648,12 +2755,12 @@ mod tests {
 			arguments!["mods", "--log-level", "off", "shortcut", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|root| {
+			|root, command| {
 				let dependencies = Resources::system(root.clone()).create_shortcut_dependencies(
 					settings.effective_binding.clone(),
 					temp.path().to_owned(),
 				);
-				Ok(CommandDependencies::CreateShortcut { dependencies, settings })
+				prepared_create_shortcut(command, dependencies, settings)
 			},
 		)
 		.await?;
@@ -2709,8 +2816,8 @@ mod tests {
 			dependencies.persist = Arc::new(|_| Box::pin(async { Ok(()) }));
 			let mut values = arguments!["mods", "--json", "--environment", temp.path().as_os_str()];
 			values.extend(command);
-			let outcome = run(values, temp.path().to_owned(), None, |_| {
-				Ok(CommandDependencies::CreateShortcut { dependencies, settings })
+			let outcome = run(values, temp.path().to_owned(), None, |_, command| {
+				prepared_create_shortcut(command, dependencies, settings)
 			})
 			.await?;
 
@@ -2798,7 +2905,7 @@ mod tests {
 			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(execution_dependencies(execute_program)),
+			|_, command| prepared_execute_program(command, execute_program),
 		)
 		.await?;
 		assert_eq!(outcome.status, 125);
@@ -2839,9 +2946,12 @@ mod tests {
 			} else {
 				arguments!["mods", "--log-level", "off", "export", "payload"]
 			};
-			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-				Ok(CommandDependencies::ExportEnvironment(dependencies))
-			})
+			let outcome = run(
+				arguments,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_, command| prepared_export_environment(command, dependencies),
+			)
 			.await?;
 			assert_eq!(outcome.status, 0);
 			assert!(outcome.stderr.starts_with("warning [stale_plugin_entry]"));
@@ -2876,9 +2986,12 @@ mod tests {
 				arguments.push(OsString::from("--dry-run"));
 			}
 
-			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-				Ok(CommandDependencies::ExportEnvironment(dependencies))
-			})
+			let outcome = run(
+				arguments,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_, command| prepared_export_environment(command, dependencies),
+			)
 			.await?;
 
 			assert_eq!(outcome.status, 0);
@@ -2923,7 +3036,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "export", "payload"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(CommandDependencies::ExportEnvironment(dependencies)),
+			|_, command| prepared_export_environment(command, dependencies),
 		)
 		.await?;
 
@@ -2974,7 +3087,7 @@ mod tests {
 				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				|_| Ok(execution_dependencies(execute_program)),
+				|_, command| prepared_execute_program(command, execute_program),
 			)
 			.await?;
 
