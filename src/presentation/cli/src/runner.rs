@@ -1,12 +1,14 @@
+use crate::command_outcome;
+use crate::command_outcome::CommandOutcome;
+use crate::command_outcome::CommandResult;
+use crate::command_outcome::OutcomeContext;
+use crate::command_outcome::STATUS_CONTROL_C_EXIT;
 use crate::commands::Cli;
 use crate::conflict_output;
 use crate::diagnostics::DiagnosticSession;
-use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
-use crate::error;
 use crate::export_output;
 use crate::invocation::Composition;
-use crate::invocation::ExitStatusFamily;
 use crate::invocation::Invocation;
 use crate::invocation::PreparedCommand;
 use crate::invocation::invocation;
@@ -49,11 +51,8 @@ use domain::OutputTarget;
 use domain::Program;
 use domain::ProgramArgument;
 use domain::WorkingDirectory;
-use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
-use serde_json::Map;
-use serde_json::Value;
 use serde_json::json;
 use std::env::current_dir;
 use std::env::var_os;
@@ -65,57 +64,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RunOutcome {
-	pub(crate) status: u32,
-	pub(crate) stdout: String,
-	pub(crate) stderr: String,
-	pub(crate) execution_failed: bool,
-	pub(crate) diagnostic_log: Option<PathBuf>,
-	pub(crate) presentation: Option<JsonPresentation>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum JsonPresentation {
-	Success(Value),
-	Problem(Value),
-}
-
-impl RunOutcome {
-	fn publish_json(mut self) -> Self {
-		if let Some(presentation) = self.presentation.take() {
-			match presentation {
-				JsonPresentation::Success(value) => {
-					self.stdout = json_output::document(&value);
-					self.stderr.clear();
-				}
-				JsonPresentation::Problem(value) => {
-					self.stdout.clear();
-					self.stderr = json_output::document(&value);
-				}
-			}
-		}
-
-		self
-	}
-}
-
-fn success(stdout: String, stderr: String, json_mode: bool, mut value: Value, warnings: Vec<Value>) -> RunOutcome {
-	let mut outcome = RunOutcome {
-		presentation: None,
-		execution_failed: false,
-		diagnostic_log: None,
-		status: 0,
-		stdout,
-		stderr,
-	};
-	if json_mode {
-		value["warnings"] = Value::Array(warnings);
-		outcome.presentation = Some(JsonPresentation::Success(value));
-	}
-	outcome
-}
 
 #[derive(Debug)]
 enum RootSelectionError {
@@ -167,98 +115,68 @@ pub(crate) async fn execute(
 	startup_directory: PathBuf,
 	local_app_data: Option<PathBuf>,
 	prepare_command: impl AsyncFnOnce(&EnvironmentRoot, &Path, Composition) -> RootResult<PreparedCommand, ErrorMarker>,
-) -> RunOutcome {
-	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
-		Ok(root) => root,
-		Err(selection_error) => {
-			let message = selection_error.message();
-			let presentation = cli.json.then(|| {
-				JsonPresentation::Problem(json_output::problem(
-					"environment_root_selection_failed",
-					"Environment Root selection failed",
-					message,
-					2,
-					json!({}),
-				))
-			});
-			return RunOutcome {
-				presentation,
-				execution_failed: true,
-				diagnostic_log: None,
-				status: 2,
-				stdout: String::new(),
-				stderr: format!("error: {message}\n"),
-			}
-			.publish_json();
-		}
-	};
-
+) -> CommandOutcome {
+	let root = select_environment_root(&cli, &startup_directory, local_app_data.as_deref());
 	let Invocation {
 		operation_name,
 		quiet_success,
-		exit_status_family,
+		command_family,
 		composition,
 	} = invocation(cli.command);
-	let (mut session, diagnostic_warning) =
-		match DiagnosticSession::start(root.as_path(), cli.log_level, operation_name) {
-			SessionStart::FileBacked(session) => (Some(session), String::new()),
-			SessionStart::Disabled => (None, String::new()),
-			SessionStart::SetupFailed => (None, format!("{SINK_WARNING}\n")),
-		};
 
-	let session_id = session.as_ref().map(DiagnosticSession::id);
-	let diagnostic_log = session.as_ref().map(DiagnosticSession::path);
+	let root = match root {
+		Ok(root) => root,
+		Err(selection_error) => {
+			return command_outcome::outcome(
+				CommandResult::RootSelectionFailed(selection_error.message()),
+				OutcomeContext {
+					family: command_family,
+					json: cli.json,
+					quiet_success,
+					diagnostic_logging_unavailable: false,
+					diagnostic_session: None,
+					diagnostic_log: None,
+				},
+			);
+		}
+	};
+
+	let (mut session, diagnostic_logging_unavailable) =
+		match DiagnosticSession::start(root.as_path(), cli.log_level, operation_name) {
+			SessionStart::FileBacked(session) => (Some(session), false),
+			SessionStart::Disabled => (None, false),
+			SessionStart::SetupFailed => (None, true),
+		};
+	let context = OutcomeContext {
+		family: command_family,
+		json: cli.json,
+		quiet_success,
+		diagnostic_logging_unavailable,
+		diagnostic_session: session.as_ref().map(DiagnosticSession::id),
+		diagnostic_log: session.as_ref().map(DiagnosticSession::path),
+	};
+
 	let prepared = match prepare_command(&root, &startup_directory, composition).await {
 		Ok(prepared) => prepared,
 		Err(report) => {
-			let marker = report.current_context();
-			let status = match exit_status_family {
-				ExitStatusFamily::Ordinary => error::exit_status(marker.code()),
-				ExitStatusFamily::Execution => error::execution_exit_status(marker.code()),
-			};
-			let mut stderr = error::application_error(&report);
-			stderr.push_str(&diagnostic_warning);
-			if let Some(id) = session_id {
-				stderr.push_str(&format!("diagnostic session: {id}\n"));
-			}
-
 			if let Some(session) = session.take() {
 				session.finish("failure");
 			}
 
-			let mut presentation = cli
-				.json
-				.then(|| JsonPresentation::Problem(json_output::marker_problem(marker, status)));
-			if let Some(JsonPresentation::Problem(problem)) = &mut presentation {
-				if !diagnostic_warning.is_empty() {
-					problem["warnings"] = json!([json_output::diagnostic_warning()]);
-				}
-				if let Some(id) = session_id {
-					problem["instance"] = json!(id.to_string());
-				}
-			}
-			return RunOutcome {
-				presentation,
-				execution_failed: true,
-				diagnostic_log,
-				status,
-				stdout: String::new(),
-				stderr,
-			}
-			.publish_json();
+			return command_outcome::outcome(CommandResult::Failed(report.into()), context);
 		}
 	};
 
-	let work = dispatch(prepared, root, startup_directory, cli.log_level.to_string(), cli.json);
-	let mut result = match session.as_ref() {
+	let work = dispatch(prepared, root, startup_directory, cli.log_level.to_string());
+	let result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
 	};
 
-	result.diagnostic_log = diagnostic_log;
-	let terminal = if result.status == 0 {
+	let outcome = command_outcome::outcome(result, context);
+	let terminal = if outcome.status == 0 {
 		"success"
-	} else if result.status == error::STATUS_CONTROL_C_EXIT {
+	} else if outcome.status == STATUS_CONTROL_C_EXIT {
 		"cancelled"
 	} else {
 		"failure"
@@ -268,36 +186,7 @@ pub(crate) async fn execute(
 		session.finish(terminal);
 	}
 
-	if let Some(presentation) = &mut result.presentation {
-		match presentation {
-			JsonPresentation::Success(value) => {
-				if !diagnostic_warning.is_empty()
-					&& let Some(warnings) = value["warnings"].as_array_mut()
-				{
-					warnings.push(json_output::diagnostic_warning());
-				}
-			}
-			JsonPresentation::Problem(problem) => {
-				if !diagnostic_warning.is_empty() {
-					problem["warnings"] = json!([json_output::diagnostic_warning()]);
-				}
-				if let Some(id) = session_id {
-					problem["instance"] = json!(id.to_string());
-				}
-			}
-		}
-	} else {
-		if !quiet_success || result.status != 0 {
-			result.stderr.push_str(&diagnostic_warning);
-		}
-		if result.status != 0
-			&& let Some(id) = session_id
-		{
-			result.stderr.push_str(&format!("diagnostic session: {id}\n"));
-		}
-	}
-
-	result.publish_json()
+	outcome
 }
 
 async fn dispatch(
@@ -305,8 +194,7 @@ async fn dispatch(
 	root: EnvironmentRoot,
 	startup: PathBuf,
 	log_level: String,
-	json_mode: bool,
-) -> RunOutcome {
+) -> CommandResult {
 	match prepared {
 		PreparedCommand::InitializeEnvironment {
 			dependencies,
@@ -319,9 +207,8 @@ async fn dispatch(
 			{
 				Ok(game_install) => game_install,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::game_install_invalid()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::game_install_invalid()).into(),
 					);
 				}
 			};
@@ -343,21 +230,25 @@ async fn dispatch(
 							}
 						})
 						.collect();
-					success(stdout, stderr, json_mode, json!({}), warnings)
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document: json!({}),
+						warnings,
+					}
 				}
-				Err(report) => report_outcome(&report, json_mode),
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 		PreparedCommand::ListSettings { dependencies, settings } => {
 			match list_settings(dependencies, settings.settings).await {
-				Ok(output) => success(
-					output::settings(&output.settings),
-					String::new(),
-					json_mode,
-					json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
-					vec![],
-				),
-				Err(report) => report_outcome(&report, json_mode),
+				Ok(output) => CommandResult::Succeeded {
+					stdout: output::settings(&output.settings),
+					stderr: String::new(),
+					document: json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 		PreparedCommand::GetSetting {
@@ -365,22 +256,20 @@ async fn dispatch(
 			settings,
 			key,
 		} => match get_setting(dependencies, settings.settings, key.into()).await {
-			Ok(output) => success(
-				output::setting(&output.setting),
-				String::new(),
-				json_mode,
-				json!({"setting": json_output::setting(&output.setting)}),
-				vec![],
-			),
-			Err(report) => report_outcome(&report, json_mode),
+			Ok(output) => CommandResult::Succeeded {
+				stdout: output::setting(&output.setting),
+				stderr: String::new(),
+				document: json!({"setting": json_output::setting(&output.setting)}),
+				warnings: Vec::new(),
+			},
+			Err(report) => CommandResult::Failed(report.into()),
 		},
 		PreparedCommand::SetGameDirectory { dependencies, value } => {
 			let path = match GameInstallationPath::new(resolve_path(&value, &startup)) {
 				Ok(path) => path,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::setting_value_invalid()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::setting_value_invalid()).into(),
 					);
 				}
 			};
@@ -388,9 +277,14 @@ async fn dispatch(
 			match set_game_directory(dependencies, path, operation::ctrl_c_token()).await {
 				Ok(output) => {
 					let (stdout, stderr) = output::set_game_directory(&output);
-					success(stdout, stderr, json_mode, json!({}), vec![])
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document: json!({}),
+						warnings: Vec::new(),
+					}
 				}
-				Err(report) => report_outcome(&report, json_mode),
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 		PreparedCommand::InstallMod {
@@ -408,14 +302,15 @@ async fn dispatch(
 				})
 			} else {
 				if arguments.file.is_some() {
-					return marker_outcome(ErrorMarker::nexus_source_invalid(), json_mode);
+					return CommandResult::Failed(
+						report!(ErrorMarker::nexus_source_invalid()).into(),
+					);
 				}
 				let archive = match ArchivePath::new(resolve_path(&arguments.archive, &startup)) {
 					Ok(archive) => archive,
 					Err(report) => {
-						return report_outcome(
-							&report.context(ErrorMarker::unsafe_archive()),
-							json_mode,
+						return CommandResult::Failed(
+							report.context(ErrorMarker::unsafe_archive()).into(),
 						);
 					}
 				};
@@ -425,15 +320,14 @@ async fn dispatch(
 			let mod_name = match arguments.name.map(ModName::new).transpose() {
 				Ok(mod_name) => mod_name,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::invalid_mod_name()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_mod_name()).into(),
 					);
 				}
 			};
 			let choices = match parse_choices(arguments.choice) {
 				Ok(choices) => choices,
-				Err(report) => return report_outcome(&report, json_mode),
+				Err(report) => return CommandResult::Failed(report.into()),
 			};
 
 			match install_mod(
@@ -448,63 +342,56 @@ async fn dispatch(
 			.await
 			{
 				Ok(InstallModOutput::SelectionRequired(files)) => {
-					let mut stderr = "error [nexus_file_selection_required]: Select a file with --file <id>.\n".to_owned();
-					for file in &files {
-						stderr.push_str(&format!(
-							"file_id = {}, name = {}, version = {}, category = {}\n",
-							file.file_id,
-							output::quote(&file.name),
-							output::quote(&file.version),
-							output::quote(&file.category)
-						));
-					}
-					RunOutcome {
-						presentation: json_mode.then(|| {
-							JsonPresentation::Problem(
-								json_install::file_selection_required(&files),
-							)
-						}),
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 2,
-						stdout: String::new(),
-						stderr,
-					}
+					CommandResult::FileSelectionRequired(files)
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::AdditionalSelectionsRequired(
 					output_value,
 				))) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
-					let value = json_install::additional(&output_value);
+					let document = json_install::additional(&output_value);
 					let warnings = json_install::warnings(&output_value.warnings);
-					success(stdout, stderr, json_mode, value, warnings)
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document,
+						warnings,
+					}
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::Preview(output_value))) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
-					let value = json_install::preview(&output_value);
+					let document = json_install::preview(&output_value);
 					let warnings = json_install::warnings(&output_value.plan.warnings);
-					success(stdout, stderr, json_mode, value, warnings)
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document,
+						warnings,
+					}
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::Installed(output_value))) => {
 					let stderr = output::install_warnings(&output_value.warnings);
 					let warnings = json_install::warnings(&output_value.warnings);
-					success(String::new(), stderr, json_mode, json_install::installed(), warnings)
+					CommandResult::Succeeded {
+						stdout: String::new(),
+						stderr,
+						document: json_install::installed(),
+						warnings,
+					}
 				}
-				Err(report) => report_outcome(&report, json_mode),
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 		PreparedCommand::ListEffectiveConflicts {
 			dependencies,
 			compare_content,
 		} => match list_effective_conflicts(dependencies, compare_content, operation::ctrl_c_token()).await {
-			Ok(output) => success(
-				conflict_output::list(&output),
-				String::new(),
-				json_mode,
-				json_conflicts::list(&output),
-				vec![],
-			),
-			Err(report) => report_outcome(&report, json_mode),
+			Ok(output) => CommandResult::Succeeded {
+				stdout: conflict_output::list(&output),
+				stderr: String::new(),
+				document: json_conflicts::list(&output),
+				warnings: Vec::new(),
+			},
+			Err(report) => CommandResult::Failed(report.into()),
 		},
 		PreparedCommand::InspectModConflicts {
 			dependencies,
@@ -514,9 +401,8 @@ async fn dispatch(
 			let mod_name = match ModName::new(mod_name) {
 				Ok(mod_name) => mod_name,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::invalid_mod_name()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_mod_name()).into(),
 					);
 				}
 			};
@@ -524,14 +410,13 @@ async fn dispatch(
 			match inspect_mod_conflicts(dependencies, mod_name, compare_content, operation::ctrl_c_token())
 				.await
 			{
-				Ok(output) => success(
-					conflict_output::inspection(&output),
-					String::new(),
-					json_mode,
-					json_conflicts::inspection(&output),
-					vec![],
-				),
-				Err(report) => report_outcome(&report, json_mode),
+				Ok(output) => CommandResult::Succeeded {
+					stdout: conflict_output::inspection(&output),
+					stderr: String::new(),
+					document: json_conflicts::inspection(&output),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 		PreparedCommand::ExplainPath {
@@ -542,22 +427,20 @@ async fn dispatch(
 			let path = match DataRelativePath::new(path) {
 				Ok(path) => path,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::invalid_data_path()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_data_path()).into(),
 					);
 				}
 			};
 
 			match explain_path(dependencies, path, compare_content, operation::ctrl_c_token()).await {
-				Ok(output) => success(
-					conflict_output::explanation(&output),
-					String::new(),
-					json_mode,
-					json_conflicts::explanation(&output),
-					vec![],
-				),
-				Err(report) => report_outcome(&report, json_mode),
+				Ok(output) => CommandResult::Succeeded {
+					stdout: conflict_output::explanation(&output),
+					stderr: String::new(),
+					document: json_conflicts::explanation(&output),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 		PreparedCommand::ExportEnvironment {
@@ -583,27 +466,19 @@ async fn dispatch(
 						String::new()
 					};
 					let stderr = result.warnings.iter().map(output::plugin_warning).collect();
-					let value = json_export::export(&output_path, &result);
+					let document = json_export::export(&output_path, &result);
 					let warnings = json_export::plugin_warnings(&result.warnings);
-					success(stdout, stderr, json_mode, value, warnings)
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document,
+						warnings,
+					}
 				}
-				Err(report) => {
-					let marker = error::application_marker(&report);
-					let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
-
-					let mut details = json_output::report_details(&report, "retained_export_stage");
-					details.insert("output".into(), json!(output_path.display().to_string()));
-
-					with_problem_details(
-						problem_outcome(
-							status,
-							error::export_error(&report, &output_path),
-							json_mode,
-							marker,
-						),
-						details,
-					)
-				}
+				Err(report) => CommandResult::ExportFailed {
+					report: report.into(),
+					output: output_path,
+				},
 			}
 		}
 		PreparedCommand::CreateShortcut {
@@ -616,9 +491,8 @@ async fn dispatch(
 			}) {
 				Ok(output_target) => output_target,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::invalid_output_target()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_output_target()).into(),
 					);
 				}
 			};
@@ -629,31 +503,28 @@ async fn dispatch(
 			{
 				Ok(working_directory) => working_directory,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::invalid_working_directory()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_working_directory()).into(),
 					);
 				}
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
-				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
+				return CommandResult::Failed(report!(ErrorMarker::program_not_found()).into());
 			};
 			let program = match Program::new(program) {
 				Ok(program) => program,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::program_not_found()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_not_found()).into(),
 					);
 				}
 			};
 			let program_arguments = match command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() {
 				Ok(program_arguments) => program_arguments,
 				Err(report) => {
-					return report_outcome(
-						&report.context(ErrorMarker::program_launch_failed()),
-						json_mode,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_launch_failed()).into(),
 					);
 				}
 			};
@@ -672,8 +543,13 @@ async fn dispatch(
 			)
 			.await
 			{
-				Ok(_) => success(String::new(), String::new(), json_mode, json!({}), vec![]),
-				Err(report) => report_outcome(&report, json_mode),
+				Ok(_) => CommandResult::Succeeded {
+					stdout: String::new(),
+					stderr: String::new(),
+					document: json!({}),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 		PreparedCommand::ExecuteProgram {
@@ -682,17 +558,7 @@ async fn dispatch(
 			arguments,
 		} => {
 			if arguments.hidden && !cfg!(windows) {
-				let marker = ErrorMarker::program_unsupported();
-				return RunOutcome {
-					execution_failed: true,
-					..problem_outcome(
-						error::execution_exit_status(marker.code()),
-						"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
-							.to_owned(),
-						json_mode,
-						Some(&marker),
-					)
-				};
+				return CommandResult::HiddenExecutionUnsupported;
 			}
 
 			let output_target = match arguments.output_target.map_or(Ok(OutputTarget::Overwrite), |name| {
@@ -700,10 +566,8 @@ async fn dispatch(
 			}) {
 				Ok(output_target) => output_target,
 				Err(report) => {
-					return execution_report_outcome(
-						&report.context(ErrorMarker::invalid_output_target()),
-						json_mode,
-						false,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_output_target()).into(),
 					);
 				}
 			};
@@ -718,38 +582,28 @@ async fn dispatch(
 			{
 				Ok(working_directory) => working_directory,
 				Err(report) => {
-					return execution_report_outcome(
-						&report.context(ErrorMarker::invalid_working_directory()),
-						json_mode,
-						false,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_working_directory()).into(),
 					);
 				}
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::program_not_found()),
-					json_mode,
-					false,
-				);
+				return CommandResult::Failed(report!(ErrorMarker::program_not_found()).into());
 			};
 			let program = match Program::new(program) {
 				Ok(program) => program,
 				Err(report) => {
-					return execution_report_outcome(
-						&report.context(ErrorMarker::program_not_found()),
-						json_mode,
-						false,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_not_found()).into(),
 					);
 				}
 			};
 			let program_arguments = match command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() {
 				Ok(program_arguments) => program_arguments,
 				Err(report) => {
-					return execution_report_outcome(
-						&report.context(ErrorMarker::program_launch_failed()),
-						json_mode,
-						false,
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_launch_failed()).into(),
 					);
 				}
 			};
@@ -797,60 +651,18 @@ async fn dispatch(
 							),
 						}
 					}
-					RunOutcome {
-						presentation: None,
-						execution_failed: false,
-						diagnostic_log: None,
+					CommandResult::ProgramExited {
 						status: output.status.value(),
-						stdout: String::new(),
 						stderr,
 					}
 				}
-				Err(report) => {
-					execution_report_outcome(&report, json_mode, launched.load(Ordering::Acquire))
+				Err(report) if launched.load(Ordering::Acquire) => {
+					CommandResult::FailedAfterLaunch(report.into())
 				}
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 	}
-}
-
-#[cfg(any(windows, test))]
-pub(crate) fn hidden_failure_dialog(outcome: &RunOutcome) -> Option<String> {
-	if !outcome.execution_failed {
-		return None;
-	}
-
-	let mut message = outcome.stderr.trim_end().to_owned();
-	if let Some(path) = &outcome.diagnostic_log {
-		message.push_str(&format!("\nDiagnostic log: {}", path.display()));
-	}
-	Some(message)
-}
-
-fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bool) -> RunOutcome {
-	let marker = error::application_marker(report);
-	let status = marker.map_or(125, |marker| error::execution_exit_status(marker.code()));
-	let outcome = RunOutcome {
-		execution_failed: true,
-		..problem_outcome(status, error::execution_error(report), json_mode && !launched, marker)
-	};
-	with_problem_details(outcome, json_output::report_details(report, "retained_execution_inis"))
-}
-
-fn with_problem_details(mut outcome: RunOutcome, details: Map<String, Value>) -> RunOutcome {
-	let Some(JsonPresentation::Problem(Value::Object(problem))) = &mut outcome.presentation else {
-		return outcome;
-	};
-	if details.is_empty() {
-		return outcome;
-	}
-
-	match problem.entry("details").or_insert_with(|| json!({})) {
-		Value::Object(existing) => existing.extend(details),
-		other => *other = Value::Object(details),
-	}
-
-	outcome
 }
 
 fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarker> {
@@ -873,46 +685,10 @@ fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarke
 		.collect()
 }
 
-fn marker_outcome(marker: ErrorMarker, json_mode: bool) -> RunOutcome {
-	let status = error::exit_status(marker.code());
-	problem_outcome(status, error::marker(&marker), json_mode, Some(&marker))
-}
-
-fn report_outcome<E>(report: &Report<E>, json_mode: bool) -> RunOutcome {
-	let marker = error::application_marker(report);
-	let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
-	problem_outcome(status, error::application_error(report), json_mode, marker)
-}
-
-fn problem_outcome(status: u32, stderr: String, json_mode: bool, marker: Option<&ErrorMarker>) -> RunOutcome {
-	let presentation = json_mode.then(|| {
-		JsonPresentation::Problem(marker.map_or_else(
-			|| {
-				json_output::problem(
-					"operation_failed",
-					"Operation failed",
-					"operation failed",
-					status,
-					json!({}),
-				)
-			},
-			|marker| json_output::marker_problem(marker, status),
-		))
-	});
-	RunOutcome {
-		presentation,
-		execution_failed: false,
-		diagnostic_log: None,
-		status,
-		stdout: String::new(),
-		stderr,
-	}
-}
-
 pub(crate) async fn run_current_process(
 	cli: Result<Cli, ClapError>,
 	prepare_command: impl AsyncFnOnce(&EnvironmentRoot, &Path, Composition) -> RootResult<PreparedCommand, ErrorMarker>,
-) -> Result<RunOutcome, ClapError> {
+) -> Result<CommandOutcome, ClapError> {
 	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
 	let cli = cli?;
@@ -923,11 +699,11 @@ pub(crate) async fn run_current_process(
 mod tests {
 	use super::Cli;
 	use super::PreparedCommand;
-	use super::RunOutcome;
 	use super::execute;
-	use super::hidden_failure_dialog;
 	use super::parse_choices;
 	use super::run_current_process;
+	use crate::command_outcome::CommandOutcome;
+	use crate::command_outcome::hidden_failure_dialog;
 	use crate::commands::Command;
 	use crate::commands::ConflictsCommand;
 	use crate::commands::parse_from;
@@ -974,13 +750,11 @@ mod tests {
 	use application::ports::InitializationTargetAssessment;
 	use application::ports::InstallationChange;
 	use application::ports::LaunchTarget;
-	use application::ports::LoadOrderFile;
 	use application::ports::PortFuture;
 	use application::ports::ProfileProjection;
 	use application::ports::ProfileWarning;
 	use application::ports::ProgressEvent;
 	use application::ports::ResolvedGameInstallation;
-	use application::ports::RetainedProfile;
 	use application::ports::StagedProfile;
 	use application::preparation::PluginWarning;
 	use application::settings::ListSettingsDependencies;
@@ -1037,28 +811,6 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn hidden_dialog_reports_failures_but_not_child_exit_codes() {
-		let failure = RunOutcome {
-			presentation: None,
-			status: 126,
-			stdout: String::new(),
-			stderr: "error [program_launch_failed]: launch failed\n".into(),
-			execution_failed: true,
-			diagnostic_log: Some("logs/session.jsonl".into()),
-		};
-		assert_eq!(
-			hidden_failure_dialog(&failure).as_deref(),
-			Some("error [program_launch_failed]: launch failed\nDiagnostic log: logs/session.jsonl")
-		);
-		let child_exit = RunOutcome {
-			status: 126,
-			execution_failed: false,
-			..failure
-		};
-		assert!(hidden_failure_dialog(&child_exit).is_none());
-	}
-
 	macro_rules! arguments {
 		($($value:expr),* $(,)?) => {
 			vec![$(OsString::from($value)),*]
@@ -1070,7 +822,7 @@ mod tests {
 		startup_directory: PathBuf,
 		local_app_data: Option<PathBuf>,
 		prepare: impl FnOnce(&EnvironmentRoot, Command) -> Result<PreparedCommand, ErrorMarker>,
-	) -> Result<RunOutcome, ClapError> {
+	) -> Result<CommandOutcome, ClapError> {
 		let cli = parse_from(arguments.clone())?;
 		let command = parse_from(arguments)?.command;
 
@@ -1736,7 +1488,7 @@ mod tests {
 			assert_eq!(outcome.status, status);
 			assert!(outcome.stdout.is_empty());
 			assert!(outcome.stderr.is_empty());
-			assert!(!outcome.execution_failed);
+			assert!(!outcome.command_failed);
 		}
 		Ok(())
 	}
@@ -1822,7 +1574,7 @@ mod tests {
 
 			assert!(called.load(Ordering::SeqCst));
 			assert_eq!(outcome.status, 125);
-			assert_eq!(outcome.execution_failed, failed);
+			assert_eq!(outcome.command_failed, failed);
 			assert_eq!(hidden_failure_dialog(&outcome).is_some(), failed);
 			assert!(outcome.diagnostic_log.is_none());
 		}
@@ -1845,7 +1597,7 @@ mod tests {
 			outcome.stderr,
 			"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
 		);
-		assert!(outcome.execution_failed);
+		assert!(outcome.command_failed);
 		Ok(())
 	}
 
@@ -2430,7 +2182,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn nexus_file_selection_is_a_problem_with_files_in_published_order() -> Result<(), Box<dyn Error>> {
+	async fn nexus_file_selection_reports_the_files_in_published_order() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let files = vec![
 			DownloadModFile {
@@ -2449,61 +2201,48 @@ mod tests {
 		let game_binding = GameBinding::new(
 			GameInstallationPath::new(temp.path().join("game")).map_err(|_| "game fixture")?,
 		);
-		let mut outcomes = Vec::new();
-		for json_flag in [true, false] {
-			let mut dependencies = unavailable_install_mod_dependencies();
-			dependencies.install_archive.load_installation_state = Arc::new({
+		let mut dependencies = unavailable_install_mod_dependencies();
+		dependencies.install_archive.load_installation_state = Arc::new({
+			let game_binding = game_binding.clone();
+			move |_, _| {
 				let game_binding = game_binding.clone();
-				move |_, _| {
-					let game_binding = game_binding.clone();
-					Box::pin(async move {
-						Ok(InstallationState {
-							game_binding,
-							installed_mods: Vec::new(),
-							unlisted_mod_names: Vec::new(),
-							current_winners: HashMap::new(),
-							file_dependencies: HashMap::new(),
-						})
-					}) as PortFuture<_>
-				}
-			});
-			dependencies.download_mod = Arc::new({
-				let files = files.clone();
-				move |_, _| {
-					let files = files.clone();
-					Box::pin(async move { Ok(DownloadModOutput::SelectionRequired(files)) })
-						as PortFuture<_>
-				}
-			});
-			let mut arguments = arguments!["mods", "--log-level", "off"];
-			if json_flag {
-				arguments.push(OsString::from("--json"));
+				Box::pin(async move {
+					Ok(InstallationState {
+						game_binding,
+						installed_mods: Vec::new(),
+						unlisted_mod_names: Vec::new(),
+						current_winners: HashMap::new(),
+						file_dependencies: HashMap::new(),
+					})
+				}) as PortFuture<_>
 			}
-			arguments.extend(arguments!["install", "https://www.nexusmods.com/newvegas/mods/42"]);
-			outcomes.push(run(
-				arguments,
-				temp.path().to_owned(),
-				Some(temp.path().to_owned()),
-				|_, command| prepared_install_mod(command, dependencies),
-			)
-			.await?);
-		}
+		});
+		dependencies.download_mod = Arc::new({
+			let files = files.clone();
+			move |_, _| {
+				let files = files.clone();
+				Box::pin(async move { Ok(DownloadModOutput::SelectionRequired(files)) })
+					as PortFuture<_>
+			}
+		});
+		let outcome = run(
+			arguments![
+				"mods",
+				"--log-level",
+				"off",
+				"install",
+				"https://www.nexusmods.com/newvegas/mods/42"
+			],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_, command| prepared_install_mod(command, dependencies),
+		)
+		.await?;
 
-		let problem: Value = from_str(&outcomes[0].stderr)?;
-		assert_eq!(outcomes[0].status, 2);
-		assert!(outcomes[0].stdout.is_empty());
-		assert_eq!(problem["code"], "nexus_file_selection_required");
-		assert_eq!(problem["exit_code"], 2);
+		assert_eq!(outcome.status, 2);
+		assert!(outcome.stdout.is_empty());
 		assert_eq!(
-			problem["details"]["files"],
-			json!([
-				{"file_id": 9, "name": "Optional", "version": "2.0", "category": "OPTIONAL"},
-				{"file_id": 7, "name": "Main", "version": "1.0", "category": "MAIN"},
-			])
-		);
-		assert_eq!(outcomes[1].status, 2);
-		assert_eq!(
-			outcomes[1].stderr,
+			outcome.stderr,
 			concat!(
 				"error [nexus_file_selection_required]: Select a file with --file <id>.\n",
 				"file_id = 9, name = \"Optional\", version = \"2.0\", category = \"OPTIONAL\"\n",
@@ -2879,38 +2618,6 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn exec_failure_keeps_status_and_reports_retained_ini_path_without_raw_report()
-	-> Result<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		let execute_program: ExecuteProgram = Box::new(|_, _, _, _, _, _| {
-			let mut failure =
-				report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"));
-			failure.children_mut().push(report!(RetainedProfile {
-				path: PathBuf::from("C:\\private\\inis")
-			})
-			.into_dynamic()
-			.into_cloneable());
-			Box::pin(async move { Err(failure.context(ExecuteProgramError)) }) as PortFuture<_, _>
-		});
-
-		let outcome = run(
-			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
-			temp.path().to_owned(),
-			Some(temp.path().to_owned()),
-			|_, command| prepared_execute_program(command, execute_program),
-		)
-		.await?;
-		assert_eq!(outcome.status, 125);
-		assert!(outcome.stdout.is_empty());
-		assert!(outcome
-			.stderr
-			.contains("retained_execution_inis = \"C:\\\\private\\\\inis\""));
-		assert!(outcome.stderr.contains("after all managed processes have stopped"));
-		assert!(!outcome.stderr.contains("ExecuteProgramError"));
-		Ok(())
-	}
-
-	#[tokio::test]
 	async fn export_dispatch_previews_without_publication_and_publishes_quietly() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let published = Arc::new(AtomicBool::new(false));
@@ -3045,56 +2752,6 @@ mod tests {
 				"output": temp.path().join("payload").display().to_string(),
 			})
 		);
-		Ok(())
-	}
-
-	#[tokio::test]
-	async fn json_exec_problem_names_the_load_order_file_and_unlisted_mod() -> Result<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		for with_file in [true, false] {
-			let execute_program: ExecuteProgram = Box::new(move |_, _, _, _, _, _| {
-				Box::pin(async move {
-					if !with_file {
-						let missing = ModName::new("Missing Mod".into()).map_err(|_| {
-							report!(ErrorMarker::invalid_mod_name())
-								.context(ExecuteProgramError)
-						})?;
-						return Err(report!(
-							ErrorMarker::environment_invalid(None).with_mod_name(missing)
-						)
-						.context(ExecuteProgramError));
-					}
-
-					let mut failure = report!(ErrorMarker::io_failure().with_phase("load_order"));
-					failure.children_mut().push(report!(LoadOrderFile {
-						path: PathBuf::from("Data/FalloutNV.esm"),
-					})
-					.into_dynamic()
-					.into_cloneable());
-					Err(failure.context(ExecuteProgramError))
-				}) as PortFuture<_, _>
-			});
-
-			let outcome = run(
-				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
-				temp.path().to_owned(),
-				Some(temp.path().to_owned()),
-				|_, command| prepared_execute_program(command, execute_program),
-			)
-			.await?;
-
-			let problem: Value = from_str(&outcome.stderr)?;
-			if with_file {
-				assert_eq!(problem["code"], "io_failure");
-				assert_eq!(
-					problem["details"],
-					json!({"phase": "load_order", "load_order_file": "Data/FalloutNV.esm"})
-				);
-			} else {
-				assert_eq!(problem["code"], "environment_invalid");
-				assert_eq!(problem["details"], json!({"mod_name": "Missing Mod"}));
-			}
-		}
 		Ok(())
 	}
 }

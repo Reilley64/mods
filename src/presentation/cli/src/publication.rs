@@ -1,4 +1,4 @@
-use crate::runner::RunOutcome;
+use crate::command_outcome::CommandOutcome;
 use std::io::Result;
 use std::io::Write;
 
@@ -6,7 +6,7 @@ use std::io::Write;
 // including broken pipes, must override success rather than silently losing that output.
 pub(crate) const OUTPUT_FAILURE_STATUS: i32 = 1;
 
-pub(crate) fn publish(outcome: &RunOutcome, stdout: &mut impl Write, stderr: &mut impl Write) -> Result<()> {
+pub(crate) fn publish(outcome: &CommandOutcome, stdout: &mut impl Write, stderr: &mut impl Write) -> Result<()> {
 	stdout.write_all(outcome.stdout.as_bytes())?;
 	stderr.write_all(outcome.stderr.as_bytes())?;
 
@@ -29,7 +29,7 @@ pub(crate) fn exit_status(command_status: i32, publication_result: &Result<()>) 
 mod tests {
 	use super::exit_status;
 	use super::publish;
-	use crate::runner::RunOutcome;
+	use crate::command_outcome::CommandOutcome;
 	use std::io::Error;
 	use std::io::ErrorKind;
 	use std::io::Result;
@@ -67,14 +67,13 @@ mod tests {
 		}
 	}
 
-	fn required_output() -> RunOutcome {
-		RunOutcome {
-			presentation: None,
-			execution_failed: false,
-			diagnostic_log: None,
+	fn required_output() -> CommandOutcome {
+		CommandOutcome {
 			status: 0,
 			stdout: "outcome = \"additional_selections_required\"\n".to_owned(),
 			stderr: "warning: review required\n".to_owned(),
+			command_failed: false,
+			diagnostic_log: None,
 		}
 	}
 
