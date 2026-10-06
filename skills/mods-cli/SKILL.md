@@ -2,14 +2,14 @@
 name: mods-cli
 description: Use the released mods Windows CLI to set up Fallout New Vegas Mod Environments, configure Game Bindings, install Data Mods with FOMOD Choices, preview Install Plans, inspect File Conflicts, export resolved files and Profile State, and run games or tools with an Output Target. Use when a user asks for mods CLI commands or troubleshooting.
 license: GPL-3.0-or-later
-compatibility: Windows 11 x64; mods with its matching bundled usvfs runtime and both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables. Reference v0.1.0; minor and patch differences are allowed after installed-help checks. # x-release-please-version
+compatibility: Windows 11 x64; mods with its matching bundled usvfs runtime and both x86 and x64 Microsoft Visual C++ 2015–2022 Redistributables. Reference v0.2.0; minor and patch differences are allowed after installed-help checks. # x-release-please-version
 metadata:
-  reference-version: v0.1.0 # x-release-please-version
+  reference-version: v0.2.0 # x-release-please-version
 ---
 
 # mods CLI
 
-Reference: published **v0.1.0**. This is a user CLI reference, not a contributor guide. <!-- x-release-please-version -->
+Reference: published **v0.2.0**. This is a user CLI reference, not a contributor guide. <!-- x-release-please-version -->
 
 1. Check `mods --version`, `mods --help`, and the relevant subcommand's `--help` before constructing a command. Minor and patch version differences within the same major version are allowed when installed help confirms the requested command and options; do not reject a version solely because it differs from the reference. Version numbers alone do not guarantee behavioral compatibility, especially for `0.x` releases. For a major-version change or conflicting behavior, verify version-specific documentation before proceeding. Stop and report unsupported behavior rather than assume unreleased features exist.
 2. Identify the intended Environment Root and use explicit `--environment` when ambiguity matters. For missing CLI/runtime files, installation, initialization, or Game Binding issues, read [setup](references/setup.md).
