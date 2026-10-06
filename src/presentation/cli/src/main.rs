@@ -1,10 +1,10 @@
 #![feature(fn_traits)]
 #![forbid(unsafe_code)]
 
+mod command_outcome;
 mod commands;
 mod conflict_output;
 mod diagnostics;
-mod error;
 mod export_output;
 mod install_warning;
 mod invocation;
@@ -95,7 +95,7 @@ async fn main() {
 
 	#[cfg(windows)]
 	if hidden {
-		if let Some(message) = runner::hidden_failure_dialog(&outcome)
+		if let Some(message) = command_outcome::hidden_failure_dialog(&outcome)
 			&& show_error(&message).is_err()
 		{
 			// The execution log is retained, but no interactive reporting channel remains.

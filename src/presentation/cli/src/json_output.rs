@@ -1,15 +1,8 @@
-use application::ErrorMarker;
-use application::export::CompletedExport;
-use application::export::RetainedExport;
-use application::ports::LoadOrderFile;
-use application::ports::RetainedProfile;
 use application::settings::SettingRecord;
 use application::settings::SettingSource;
 use application::settings::SettingValue;
 use clap::Error as ClapError;
 use clap::error::ErrorKind;
-use rootcause::Report;
-use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
 
@@ -27,67 +20,6 @@ pub(crate) fn problem(code: &str, title: &str, detail: &str, status: u32, detail
 		result["details"] = details;
 	}
 	result
-}
-
-pub(crate) fn marker_problem(marker: &ErrorMarker, status: u32) -> Value {
-	let mut details = Map::new();
-	if let Some(value) = marker.phase() {
-		details.insert("phase".into(), json!(value));
-	}
-	if let Some(value) = marker.field() {
-		details.insert("field".into(), json!(value));
-	}
-	if let Some(value) = marker.group_id() {
-		details.insert("group_id".into(), json!(value));
-	}
-	if let Some(value) = marker.option_id() {
-		details.insert("option_id".into(), json!(value));
-	}
-	if let Some(value) = marker.supplied_sequence() {
-		details.insert("sequence".into(), json!(value));
-	}
-	if let Some(value) = marker.mod_name() {
-		details.insert("mod_name".into(), json!(value.as_str()));
-	}
-	let code = marker.code().as_str();
-	let mut title = code.replace('_', " ");
-	if let Some(first) = title.get_mut(..1) {
-		first.make_ascii_uppercase();
-	}
-
-	problem(code, &title, marker.message(), status, Value::Object(details))
-}
-
-pub(crate) fn report_details<C>(report: &Report<C>, retained_profile: &str) -> Map<String, Value> {
-	let mut details = Map::new();
-	if let Some(file) = report
-		.iter_reports()
-		.find_map(|entry| entry.downcast_current_context::<LoadOrderFile>())
-	{
-		details.insert("load_order_file".into(), json!(file.path.display().to_string()));
-	}
-	if let Some(retained) = report
-		.iter_reports()
-		.find_map(|entry| entry.downcast_current_context::<RetainedProfile>())
-	{
-		details.insert(retained_profile.into(), json!(retained.path.display().to_string()));
-	}
-	if let Some(retained) = report
-		.iter_reports()
-		.find_map(|entry| entry.downcast_current_context::<RetainedExport>())
-	{
-		details.insert(
-			"retained_partial_output".into(),
-			json!(retained.path.display().to_string()),
-		);
-	}
-	if report
-		.iter_reports()
-		.any(|entry| entry.downcast_current_context::<CompletedExport>().is_some())
-	{
-		details.insert("output_complete".into(), json!(true));
-	}
-	details
 }
 
 pub(crate) fn clap_document(error: &ClapError) -> Value {
@@ -139,33 +71,16 @@ pub(crate) fn warning(code: &str, message: &str, details: Value) -> Value {
 	json!({ "code": code, "message": message, "details": details })
 }
 
-pub(crate) fn diagnostic_warning() -> Value {
-	warning(
-		"diagnostic_logging_unavailable",
-		"diagnostic session logging is unavailable",
-		json!({}),
-	)
-}
-
 #[cfg(test)]
 mod tests {
 	use super::clap_document;
-	use super::marker_problem;
-	use super::report_details;
 	use super::setting;
 	use crate::commands::parse_from;
 	use application::ErrorCode;
-	use application::ErrorMarker;
-	use application::export::CompletedExport;
-	use application::export::RetainedExport;
-	use application::ports::LoadOrderFile;
-	use application::ports::RetainedProfile;
 	use application::settings::SettingKey;
 	use application::settings::SettingRecord;
 	use application::settings::SettingSource;
 	use application::settings::SettingValue;
-	use domain::ModName;
-	use rootcause::report;
 	use serde_json::json;
 	use std::error::Error;
 
@@ -192,26 +107,6 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn problem_type_and_allowlisted_details_do_not_include_internal_cause() {
-		let marker = ErrorMarker::invalid_selection(
-			"choices",
-			Some("group".to_owned()),
-			Some("option".to_owned()),
-			Some(2),
-		);
-		let value = marker_problem(&marker, 2);
-		assert_eq!(
-			value["type"],
-			"https://github.com/Reilley64/mods/blob/main/docs/cli/problems.md#invalid_selection"
-		);
-		assert_eq!(value["title"], "Invalid selection");
-		assert_eq!(
-			value["details"],
-			json!({"field": "choices", "group_id": "group", "option_id": "option", "sequence": 2})
-		);
-		assert!(value.get("status").is_none());
-	}
 	#[test]
 	fn help_version_and_argument_failure_have_one_structured_document() -> Result<(), Box<dyn Error>> {
 		for (arguments, key) in [
@@ -358,39 +253,5 @@ mod tests {
 				"{code}"
 			);
 		}
-	}
-
-	#[test]
-	fn every_problem_detail_is_documented() -> Result<(), Box<dyn Error>> {
-		let problems = include_str!("../../../../docs/cli/problems.md").replace("\r\n", "\n");
-		let mut report = report!(ErrorMarker::io_failure().with_phase("load_order"));
-		for attachment in [
-			report!(LoadOrderFile { path: "a.esp".into() }).into_dynamic(),
-			report!(RetainedProfile { path: "stage".into() }).into_dynamic(),
-			report!(RetainedExport { path: "output".into() }).into_dynamic(),
-			report!(CompletedExport { path: "output".into() }).into_dynamic(),
-		] {
-			report.children_mut().push(attachment.into_cloneable());
-		}
-		let marker = ErrorMarker::environment_invalid(Some("profile"))
-			.with_mod_name(ModName::new("Mod".into()).map_err(|_| "mod name fixture")?);
-
-		let mut keys: Vec<String> = ["retained_execution_inis", "retained_export_stage"]
-			.into_iter()
-			.flat_map(|retained| report_details(&report, retained).into_iter().map(|(key, _)| key))
-			.collect();
-		if let Some(details) = marker_problem(&marker, 1)["details"].as_object() {
-			keys.extend(details.keys().cloned());
-		}
-		keys.extend(["output", "files"].map(str::to_owned));
-
-		assert!(keys.len() > 6);
-		for key in keys {
-			assert!(
-				problems.contains(&format!("- `{key}`")) || problems.contains(&format!(", `{key}`")),
-				"{key}"
-			);
-		}
-		Ok(())
 	}
 }

@@ -1,3 +1,4 @@
+use crate::command_outcome::CommandFamily;
 use crate::commands::Command;
 use crate::commands::ConfigCommand;
 use crate::commands::ConflictsCommand;
@@ -33,14 +34,8 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct Invocation {
 	pub(crate) operation_name: &'static str,
 	pub(crate) quiet_success: bool,
-	pub(crate) exit_status_family: ExitStatusFamily,
+	pub(crate) command_family: CommandFamily,
 	pub(crate) composition: Composition,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExitStatusFamily {
-	Ordinary,
-	Execution,
 }
 
 pub(crate) enum Composition {
@@ -109,7 +104,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		Command::Init { game_install } => Invocation {
 			operation_name: "initialize",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::NewEnvironment(Box::new(|resources| {
 				PreparedCommand::InitializeEnvironment {
 					dependencies: resources.initialize_environment_dependencies(),
@@ -122,7 +117,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		} => Invocation {
 			operation_name: "config.list",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::ReadOnly,
 				Box::new(|resources, loaded, _| PreparedCommand::ListSettings {
@@ -136,7 +131,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		} => Invocation {
 			operation_name: "config.get",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::ReadOnly,
 				Box::new(move |resources, loaded, _| PreparedCommand::GetSetting {
@@ -153,7 +148,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		} => Invocation {
 			operation_name: "config.set.game_dir",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::Mutation,
 				Box::new(|resources, loaded, _| PreparedCommand::SetGameDirectory {
@@ -165,7 +160,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		Command::Install(arguments) => Invocation {
 			operation_name: "install",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				if arguments.dry_run {
 					SettingsLoadMode::Inspection
@@ -183,7 +178,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		} => Invocation {
 			operation_name: "conflicts.list",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::Inspection,
 				Box::new(move |resources, loaded, _| PreparedCommand::ListEffectiveConflicts {
@@ -202,7 +197,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		} => Invocation {
 			operation_name: "conflicts.inspect",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::Inspection,
 				Box::new(move |resources, loaded, _| PreparedCommand::InspectModConflicts {
@@ -218,7 +213,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		} => Invocation {
 			operation_name: "conflicts.explain",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::Inspection,
 				Box::new(move |resources, loaded, _| PreparedCommand::ExplainPath {
@@ -232,7 +227,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		Command::Export(arguments) => Invocation {
 			operation_name: "export",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::Execution,
 				Box::new(|resources, loaded, _| PreparedCommand::ExportEnvironment {
@@ -245,7 +240,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		Command::Exec(arguments) => Invocation {
 			operation_name: "exec",
 			quiet_success: false,
-			exit_status_family: ExitStatusFamily::Execution,
+			command_family: CommandFamily::Execution,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::Execution,
 				Box::new(|resources, loaded, startup| {
@@ -278,7 +273,7 @@ pub(crate) fn invocation(command: Command) -> Invocation {
 		Command::Shortcut(arguments) => Invocation {
 			operation_name: "shortcut",
 			quiet_success: true,
-			exit_status_family: ExitStatusFamily::Ordinary,
+			command_family: CommandFamily::Ordinary,
 			composition: Composition::ExistingEnvironment(
 				SettingsLoadMode::Execution,
 				Box::new(|resources, loaded, startup| PreparedCommand::CreateShortcut {
