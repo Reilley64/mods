@@ -80,16 +80,16 @@ impl VirtualGameView {
 	/// Returns input, artifact, concurrent-session, or native setup failures.
 	pub fn configure(configuration: &ViewConfiguration) -> Result<Self, ExecutionError> {
 		let executable = current_exe().context(ExecutionError)?;
-		let Some(parent) = executable.parent() else {
-			return Err(report!(ExecutionError));
-		};
+		let parent = executable.parent().ok_or_else(|| report!(ExecutionError))?;
 		let mut view = Self::load(&parent.join("usvfs"))?;
+
 		if let Err(mut failure) = configuration.apply(&mut view) {
 			if let Err(cleanup) = view.close() {
 				failure.children_mut().push(cleanup.into_dynamic().into_cloneable());
 			}
 			return Err(failure);
 		}
+
 		Ok(view)
 	}
 
@@ -97,6 +97,7 @@ impl VirtualGameView {
 		if !directory.is_absolute() {
 			return Err(report!(ExecutionError));
 		}
+
 		for (name, expected) in ARTIFACTS {
 			let bytes = read(directory.join(name)).context(ExecutionError)?;
 			let actual: [u8; 32] = Sha256::digest(bytes).into();
@@ -104,6 +105,7 @@ impl VirtualGameView {
 				return Err(report!(ExecutionError));
 			}
 		}
+
 		let name = if cfg!(target_pointer_width = "64") {
 			"usvfs_x64.dll"
 		} else {
@@ -111,6 +113,7 @@ impl VirtualGameView {
 		};
 		let library = wide(directory.join(name).as_os_str())?;
 		let instance = CString::new(format!("mods-{}", id())).context(ExecutionError)?;
+
 		if SESSION_ACTIVE
 			.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
 			.is_err()
@@ -129,9 +132,7 @@ impl VirtualGameView {
 			}
 			check(result)?;
 		}
-		let Some(native) = NonNull::new(native) else {
-			return Err(report!(ExecutionError));
-		};
+		let native = NonNull::new(native).ok_or_else(|| report!(ExecutionError))?;
 		Ok(Self { native: Some(native) })
 	}
 
@@ -147,15 +148,15 @@ impl VirtualGameView {
 		if !application.is_absolute() || !directory.is_absolute() {
 			return Err(report!(ExecutionError));
 		}
+
 		let application = physical_path_wide(application.as_os_str())?;
 		let mut command = wide(command)?;
 		let directory = physical_path_wide(directory.as_os_str())?;
 		if command.len() > 32767 {
 			return Err(report!(ExecutionError));
 		}
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		let mut output = PROCESS_INFORMATION::default();
 		// SAFETY: this session exclusively owns the live controller. Buffers are
 		// terminated and outlive the call; command is writable. Startup has the SDK
@@ -213,9 +214,7 @@ impl Drop for VirtualGameView {
 
 impl ConfigureView for VirtualGameView {
 	fn clear_bypasses(&mut self) -> Result<(), ExecutionError> {
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session, exception-contained call, no borrowed buffers.
 		check(unsafe { mods_usvfs_clear_bypasses(native.as_ptr()) })
 	}
@@ -223,9 +222,7 @@ impl ConfigureView for VirtualGameView {
 		let source = physical_path_wide(mapping.source.as_os_str())?;
 		let destination = native_path_wide(mapping.destination.as_os_str())?;
 		let flags = LINKFLAG_CREATETARGET | if recursive { LINKFLAG_RECURSIVE } else { 0 };
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session and checked terminated buffers live for the
 		// call. Flags come from the pinned upstream header, not handwritten ABI values.
 		check(unsafe {
@@ -236,9 +233,7 @@ impl ConfigureView for VirtualGameView {
 		let source = physical_path_wide(mapping.source.as_os_str())?;
 		let destination = native_path_wide(mapping.destination.as_os_str())?;
 		let flags = if recursive { LINKFLAG_RECURSIVE } else { 0 };
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session; checked terminated buffers live through the
 		// call. Flags come from the pinned header and never mark a creation target.
 		check(unsafe {
@@ -248,9 +243,7 @@ impl ConfigureView for VirtualGameView {
 	fn link_file(&mut self, mapping: &PathMapping) -> Result<(), ExecutionError> {
 		let source = physical_path_wide(mapping.source.as_os_str())?;
 		let destination = native_path_wide(mapping.destination.as_os_str())?;
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session; checked terminated buffers remain live and
 		// the native boundary does not retain their addresses.
 		check(unsafe { mods_usvfs_link_file(native.as_ptr(), source.as_ptr(), destination.as_ptr()) })

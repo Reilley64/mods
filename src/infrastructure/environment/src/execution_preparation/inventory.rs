@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::snapshot::INVENTORY_IO;
 use crate::snapshot::check_listed_mod_folders;
 use crate::snapshot::parse_metadata;
 use crate::snapshot::parse_modlist;
@@ -115,7 +117,7 @@ impl ExecutionInventory {
 
 		let tombstones = if let Some(bytes) = bytes {
 			#[cfg(test)]
-			crate::snapshot::INVENTORY_IO.with(|count| {
+			INVENTORY_IO.with(|count| {
 				let (walks, reads) = count.get();
 				count.set((walks, reads + 1));
 			});
@@ -181,7 +183,7 @@ impl ExecutionInventory {
 		}
 
 		#[cfg(test)]
-		crate::snapshot::INVENTORY_IO.with(|count| {
+		INVENTORY_IO.with(|count| {
 			let (walks, reads) = count.get();
 			count.set((walks + 1, reads));
 		});

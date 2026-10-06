@@ -8,9 +8,11 @@ use application::ports::RetainedProfile;
 use rootcause::Report;
 use std::path::Path;
 
+pub(crate) const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+
 pub(crate) fn exit_status(code: ErrorCode) -> u32 {
 	match code {
-		ErrorCode::OperationCancelled => 0xC000_013A,
+		ErrorCode::OperationCancelled => STATUS_CONTROL_C_EXIT,
 		ErrorCode::InvalidSelection => 2,
 		_ => 1,
 	}
@@ -18,7 +20,7 @@ pub(crate) fn exit_status(code: ErrorCode) -> u32 {
 
 pub(crate) fn execution_exit_status(code: ErrorCode) -> u32 {
 	match code {
-		ErrorCode::OperationCancelled => 0xC000_013A,
+		ErrorCode::OperationCancelled => STATUS_CONTROL_C_EXIT,
 		ErrorCode::ProgramNotFound => 127,
 		ErrorCode::ProgramUnsupported | ErrorCode::ProgramLaunchFailed | ErrorCode::InvalidWorkingDirectory => {
 			126
@@ -93,23 +95,21 @@ pub(crate) fn export_error<C>(report: &Report<C>, output: &Path) -> String {
 		);
 	}
 
-	if let Some(marker) = application_marker(report) {
-		let advice = match marker.code() {
-			ErrorCode::EnvironmentAlreadyInitialized => {
-				Some("Choose a new output folder; even an empty existing folder is refused.")
-			}
-			ErrorCode::EnvironmentRootUnsafe => Some(
-				"Check that the destination is outside the Environment Root and that source paths are ordinary files.",
-			),
-			ErrorCode::InvalidDataPath => {
-				Some("Choose a safe output folder name and inspect the source paths.")
-			}
-			_ => None,
-		};
-		if let Some(advice) = advice {
-			text.push_str(advice);
-			text.push('\n');
+	let advice = match application_marker(report).map(ErrorMarker::code) {
+		Some(ErrorCode::EnvironmentAlreadyInitialized) => {
+			Some("Choose a new output folder; even an empty existing folder is refused.")
 		}
+		Some(ErrorCode::EnvironmentRootUnsafe) => Some(
+			"Check that the destination is outside the Environment Root and that source paths are ordinary files.",
+		),
+		Some(ErrorCode::InvalidDataPath) => {
+			Some("Choose a safe output folder name and inspect the source paths.")
+		}
+		_ => None,
+	};
+	if let Some(advice) = advice {
+		text.push_str(advice);
+		text.push('\n');
 	}
 
 	text

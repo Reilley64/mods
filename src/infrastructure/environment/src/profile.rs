@@ -379,13 +379,12 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Encoding), ErrorMarker> {
 			.map(|text| (text, Encoding::Utf16Le))
 			.context(ErrorMarker::game_install_invalid());
 	}
-	match String::from_utf8(bytes.to_vec()) {
-		Ok(text) => Ok((text, Encoding::Utf8)),
-		Err(_) => {
+	Ok(String::from_utf8(bytes.to_vec())
+		.map(|text| (text, Encoding::Utf8))
+		.unwrap_or_else(|_| {
 			let (text, _, _) = WINDOWS_1252.decode(bytes);
-			Ok((text.into_owned(), Encoding::Windows1252))
-		}
-	}
+			(text.into_owned(), Encoding::Windows1252)
+		}))
 }
 
 pub(crate) fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, ErrorMarker> {

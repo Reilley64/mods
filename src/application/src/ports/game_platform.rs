@@ -20,16 +20,8 @@ pub struct ResolvedGameInstallation {
 	pub source: GameInstallationSource,
 }
 
-pub type ResolveGameInstallation = Arc<
-	dyn Fn(
-			Option<GameInstallationPath>,
-			Option<GameInstallationPath>,
-			EnvironmentRoot,
-			CancellationToken,
-		) -> PortFuture<ResolvedGameInstallation>
-		+ Send
-		+ Sync,
->;
+pub type DiscoverGameInstallation =
+	Arc<dyn Fn(CancellationToken) -> PortFuture<ResolvedGameInstallation> + Send + Sync>;
 pub type ValidateGameInstallation =
 	Arc<dyn Fn(GameInstallationPath, EnvironmentRoot) -> PortFuture<GameBinding> + Send + Sync>;
 pub type ValidateGameDirectory =

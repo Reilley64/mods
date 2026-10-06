@@ -40,6 +40,8 @@ const BUILD_COMMIT: &str = env!("BUILD_COMMIT");
 #[tokio::main]
 async fn main() {
 	let arguments: Vec<OsString> = args_os().collect();
+	// A clap error, including help and version output, carries no parsed flags, so
+	// the global `--json` flag is read from the raw arguments to format that error.
 	let json_requested = arguments
 		.iter()
 		.skip(1)
@@ -79,6 +81,7 @@ async fn main() {
 			_ => SettingsLoadMode::Mutation,
 		};
 		let loaded = resources.load_settings(mode, &operation::ctrl_c_token()).await?;
+
 		let binding = loaded.resolved.effective_binding.clone();
 		let execution_force_cancellation = CancellationToken::new();
 		let execute_program = if hidden {

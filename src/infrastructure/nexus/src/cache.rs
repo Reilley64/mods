@@ -118,6 +118,7 @@ pub(crate) async fn read(
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	let name = identity_name(request)?;
 	let Some(directory) = directory(root, false).await? else {
 		return Ok(None);

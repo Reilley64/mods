@@ -97,14 +97,12 @@ pub async fn install_archive(
 			Some(downloaded.suggested_name),
 		),
 	};
-	let mod_name = if let Some(name) = mod_name {
-		Some(name)
-	} else if let Some(name) = suggested_name {
-		Some(ModName::new(name)
+	let mod_name = match (mod_name, suggested_name) {
+		(Some(name), _) => Some(name),
+		(None, Some(suggested)) => Some(ModName::new(suggested)
 			.context(ErrorMarker::invalid_mod_name())
-			.context(InstallArchiveError)?)
-	} else {
-		None
+			.context(InstallArchiveError)?),
+		(None, None) => None,
 	};
 
 	if cancellation.is_cancelled() {
@@ -138,9 +136,6 @@ pub async fn install_archive(
 
 	if let Some(progress) = &dependencies.report_progress {
 		progress.call((ProgressEvent::SettingsLoaded,)).await;
-	}
-
-	if let Some(progress) = &dependencies.report_progress {
 		progress.call((ProgressEvent::ScanningArchive,)).await;
 	}
 
@@ -169,13 +164,12 @@ pub async fn install_archive(
 		progress.call((ProgressEvent::ArchiveIndexed,)).await;
 	}
 
-	let requested_name = if let Some(name) = mod_name {
-		name
-	} else {
-		archive.derived_mod_name()
-			.context(ErrorMarker::invalid_mod_name())
-			.context(InstallArchiveError)?
-	};
+	let requested_name = mod_name
+		.map_or_else(
+			|| archive.derived_mod_name().context(ErrorMarker::invalid_mod_name()),
+			Ok,
+		)
+		.context(InstallArchiveError)?;
 
 	let existing = state
 		.installed_mods
@@ -423,9 +417,6 @@ pub async fn install_archive(
 
 	if let Some(progress) = &dependencies.report_progress {
 		progress.call((ProgressEvent::InstallationPlanned,)).await;
-	}
-
-	if let Some(progress) = &dependencies.report_progress {
 		progress.call((ProgressEvent::ScanningConflicts,)).await;
 	}
 

@@ -72,15 +72,6 @@ pub(crate) async fn load(
 	access: InstallationStateAccess,
 	cancellation: &CancellationToken,
 ) -> Result<EnvironmentSnapshotData, ErrorMarker> {
-	load_inner(root_path, binding, access, cancellation).await
-}
-
-async fn load_inner(
-	root_path: &Path,
-	binding: &GameBinding,
-	access: InstallationStateAccess,
-	cancellation: &CancellationToken,
-) -> Result<EnvironmentSnapshotData, ErrorMarker> {
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
@@ -437,9 +428,11 @@ pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMa
 	let table = value
 		.as_table()
 		.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
+
 	if table.get("schema_version").and_then(Value::as_integer) != Some(1) {
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
+
 	let metadata_identity = case_fold_key("meta.toml");
 	let invalidation_archive_identity = case_fold_key(INVALIDATION_ARCHIVE);
 	let mut result = Vec::new();
@@ -456,6 +449,7 @@ pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMa
 	{
 		return Err(report!(ErrorMarker::environment_invalid(None)));
 	}
+
 	let mut seen = HashSet::new();
 	for (key, directory) in [("files", false), ("directories", true)] {
 		let Some(values) = tombstones.get(key) else {
@@ -481,6 +475,7 @@ pub(crate) fn parse_metadata(bytes: Vec<u8>) -> Result<ProviderMetadata, ErrorMa
 			result.push((canonical, directory));
 		}
 	}
+
 	Ok(ProviderMetadata { tombstones: result })
 }
 
@@ -495,6 +490,7 @@ pub(crate) async fn validate_prospective_namespace(
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;
 	let installed = parse_modlist(&modlist)?;
+
 	let mods = root.join("mods");
 	let mut namespace = HashMap::new();
 	let mut winners = HashMap::new();
@@ -511,6 +507,7 @@ pub(crate) async fn validate_prospective_namespace(
 		)
 		.await?;
 	}
+
 	for installed_mod in installed.iter().filter(|installed_mod| installed_mod.enabled) {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
@@ -530,6 +527,7 @@ pub(crate) async fn validate_prospective_namespace(
 		)
 		.await?;
 	}
+
 	apply_provider(
 		staged_mod,
 		ProviderClass::DataMod,
@@ -540,6 +538,7 @@ pub(crate) async fn validate_prospective_namespace(
 		cancellation,
 	)
 	.await?;
+
 	apply_provider(
 		&root.join("overwrite"),
 		ProviderClass::Overwrite,
@@ -550,6 +549,7 @@ pub(crate) async fn validate_prospective_namespace(
 		cancellation,
 	)
 	.await?;
+
 	Ok(())
 }
 
@@ -849,9 +849,10 @@ fn plugin_is_active(
 	if activation.is_active(path) {
 		return Ok(true);
 	}
-	let Some((stem, _)) = path.as_str().rsplit_once('.') else {
-		return Err(report!(ErrorMarker::environment_invalid(None)));
-	};
+	let (stem, _) = path
+		.as_str()
+		.rsplit_once('.')
+		.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 	let nam = DataRelativePath::new(format!("{stem}.nam")).context(ErrorMarker::environment_invalid(None))?;
 	Ok(matches!(winners.get(&nam), Some(EffectiveResult::File(_))))
 }
@@ -1122,11 +1123,13 @@ pub(crate) async fn visible_plugins(
 		.await
 		.context(ErrorMarker::environment_invalid(None))?;
 	let modlist = parse_modlist(&modlist)?;
+
 	let mods = root.join("mods");
 	let mut visible = HashMap::new();
 	if let Some(data) = game_data(binding).await? {
 		add_root_plugins(&data, &mut visible, cancellation).await?;
 	}
+
 	for installed in modlist.into_iter().filter(|installed| installed.enabled) {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
@@ -1134,7 +1137,9 @@ pub(crate) async fn visible_plugins(
 
 		add_root_plugins(&mods.join(installed.name.as_str()), &mut visible, cancellation).await?;
 	}
+
 	add_root_plugins(&root.join("overwrite"), &mut visible, cancellation).await?;
+
 	Ok(visible)
 }
 
@@ -1280,16 +1285,17 @@ fn last_separator(bytes: &[u8]) -> Option<&'static [u8]> {
 	reason = "test fixture failures should report their exact setup step"
 )]
 mod tests {
-	use super::ProviderKind;
+	use super::EnvironmentSnapshotData;
 	use super::assess_installation;
 	use super::insert_disabled_mod;
 	use super::load;
 	use super::parse_modlist;
-	use super::validate_provider;
+	use super::validate_staged_provider;
 	use super::visible_plugins;
 	use crate::EnvironmentAdapter;
 	use crate::profile::PROFILE_FILES;
 	use application::ErrorCode;
+	use application::ErrorMarker;
 	use application::installation::CandidateDecision;
 	use application::installation::EffectiveResult;
 	use application::installation::FileDependencyFact;
@@ -1320,10 +1326,12 @@ mod tests {
 	use domain::ParticipationReason;
 	use domain::ProviderReference;
 	use domain::Sha256Digest;
+	use rootcause::Result;
 	use std::env::current_dir;
 	use std::error::Error;
 	use std::fs;
 	use std::path::Path;
+	use std::path::PathBuf;
 	use std::result::Result as StdResult;
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
@@ -1357,14 +1365,14 @@ mod tests {
 			("files", "Fallout - Invalidation.bsa"),
 			("directories", "Fallout - Invalidation.bſa"),
 		] {
-			let temp = TempDir::new()?;
+			let (_fixture, root, game) = published_environment().await?;
+			let overwrite = root.as_path().join("overwrite");
 			fs::write(
-				temp.path().join("meta.toml"),
+				overwrite.join("meta.toml"),
 				format!("schema_version = 1\n[tombstones]\n{scope} = [\"{path}\"]\n"),
 			)?;
-			let directory = temp.path().canonicalize()?;
 
-			let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+			let error = load_published(&root, &game, &CancellationToken::new())
 				.await
 				.expect_err("reserved tombstone path must be rejected");
 
@@ -1376,11 +1384,11 @@ mod tests {
 	#[tokio::test]
 	async fn provider_validation_rejects_case_folded_reserved_root_entries() -> StdResult<(), Box<dyn Error>> {
 		for name in ["META.TOML", "Fallout - Invalidation.bſa"] {
-			let temp = TempDir::new()?;
-			fs::write(temp.path().join(name), b"reserved")?;
-			let directory = temp.path().canonicalize()?;
+			let (_fixture, root, game) = published_environment().await?;
+			let overwrite = root.as_path().join("overwrite");
+			fs::write(overwrite.join(name), b"reserved")?;
 
-			let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+			let error = load_published(&root, &game, &CancellationToken::new())
 				.await
 				.expect_err("reserved root entry must be rejected");
 
@@ -1395,7 +1403,7 @@ mod tests {
 		fs::write(temp.path().join("ordinary.dds"), b"content")?;
 		let directory = temp.path().canonicalize()?;
 
-		validate_provider(&directory, ProviderKind::DataMod, &CancellationToken::new())
+		validate_staged_provider(&directory, &CancellationToken::new())
 			.await
 			.map_err(|_| "missing metadata must mean empty tombstones")?;
 		Ok(())
@@ -1407,7 +1415,7 @@ mod tests {
 		fs::write(temp.path().join("meta.toml"), b"schema_version = 1\n")?;
 		let directory = temp.path().canonicalize()?;
 
-		validate_provider(&directory, ProviderKind::DataMod, &CancellationToken::new())
+		validate_staged_provider(&directory, &CancellationToken::new())
 			.await
 			.map_err(|_| "canonical mod metadata must be allowed")?;
 		Ok(())
@@ -1430,15 +1438,15 @@ mod tests {
 				),
 			),
 		] {
-			let temp = TempDir::new()?;
+			let (_fixture, root, game) = published_environment().await?;
+			let overwrite = root.as_path().join("overwrite");
 			if let Some(path) = physical_path {
-				fs::create_dir(temp.path().join("nested"))?;
-				fs::write(temp.path().join(path), b"physical")?;
+				fs::create_dir(overwrite.join("nested"))?;
+				fs::write(overwrite.join(path), b"physical")?;
 			}
-			fs::write(temp.path().join("meta.toml"), metadata)?;
-			let directory = temp.path().canonicalize()?;
+			fs::write(overwrite.join("meta.toml"), metadata)?;
 
-			let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+			let error = load_published(&root, &game, &CancellationToken::new())
 				.await
 				.expect_err("nested provider path must be rejected");
 
@@ -1449,20 +1457,20 @@ mod tests {
 
 	#[tokio::test]
 	async fn provider_validation_distinguishes_component_boundaries() -> StdResult<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		fs::create_dir(temp.path().join("foobar"))?;
-		fs::write(temp.path().join("foobar/physical.dds"), b"physical")?;
+		let (_fixture, root, game) = published_environment().await?;
+		let overwrite = root.as_path().join("overwrite");
+		fs::create_dir(overwrite.join("foobar"))?;
+		fs::write(overwrite.join("foobar/physical.dds"), b"physical")?;
 		fs::write(
-			temp.path().join("meta.toml"),
+			overwrite.join("meta.toml"),
 			concat!(
 				"schema_version = 1\n[tombstones]\n",
 				"directories = [\"foo\"]\n",
 				"files = [\"foobar/deleted.dds\"]\n",
 			),
 		)?;
-		let directory = temp.path().canonicalize()?;
 
-		validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+		load_published(&root, &game, &CancellationToken::new())
 			.await
 			.map_err(|_| "non-boundary prefixes must not overlap")?;
 		Ok(())
@@ -1470,18 +1478,18 @@ mod tests {
 
 	#[tokio::test]
 	async fn provider_validation_uses_folded_unicode_for_tombstone_ancestry() -> StdResult<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
+		let (_fixture, root, game) = published_environment().await?;
+		let overwrite = root.as_path().join("overwrite");
 		fs::write(
-			temp.path().join("meta.toml"),
+			overwrite.join("meta.toml"),
 			concat!(
 				"schema_version = 1\n[tombstones]\n",
 				"directories = [\"ÉΣ\"]\n",
 				"files = [\"éς/deleted.dds\"]\n",
 			),
 		)?;
-		let directory = temp.path().canonicalize()?;
 
-		let error = validate_provider(&directory, ProviderKind::Overwrite, &CancellationToken::new())
+		let error = load_published(&root, &game, &CancellationToken::new())
 			.await
 			.expect_err("folded Unicode ancestor must be rejected");
 
@@ -1491,18 +1499,45 @@ mod tests {
 
 	#[tokio::test]
 	async fn provider_validation_honors_pre_cancelled_tokens() -> StdResult<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		fs::write(temp.path().join("meta.toml"), b"schema_version = 1\n")?;
-		let directory = temp.path().canonicalize()?;
+		let (_fixture, root, game) = published_environment().await?;
+		let overwrite = root.as_path().join("overwrite");
+		fs::write(overwrite.join("meta.toml"), b"schema_version = 1\n")?;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 
-		let error = validate_provider(&directory, ProviderKind::Overwrite, &cancellation)
+		let error = load_published(&root, &game, &cancellation)
 			.await
 			.expect_err("pre-cancelled provider validation must stop");
 
 		assert_eq!(error.current_context().code(), ErrorCode::OperationCancelled);
 		Ok(())
+	}
+
+	async fn published_environment() -> StdResult<(TempDir, EnvironmentRoot, PathBuf), Box<dyn Error>> {
+		let fixture = TempDir::new_in(current_dir()?)?;
+		let game = fixture.path().join("game");
+		fs::create_dir_all(game.join("Data"))?;
+		let root = EnvironmentRoot::new(fixture.path().join("environment"))
+			.expect("fixture environment root must be valid");
+		EnvironmentAdapter
+			.publish(&root, initialization_plan(&game), &CancellationToken::new())
+			.await
+			.expect("fixture environment must initialize");
+		Ok((fixture, root, game))
+	}
+
+	async fn load_published(
+		root: &EnvironmentRoot,
+		game: &Path,
+		cancellation: &CancellationToken,
+	) -> Result<EnvironmentSnapshotData, ErrorMarker> {
+		load(
+			root.as_path(),
+			&initialization_plan(game).game_binding,
+			InstallationStateAccess::Preview,
+			cancellation,
+		)
+		.await
 	}
 
 	#[tokio::test]

@@ -198,9 +198,7 @@ fn preflight_metadata(file: &mut File, cancellation: &CancellationToken, started
 	let (entries_on_disk, total_entries, central_size, central_offset, metadata_boundary) = if needs_zip64
 		|| has_zip64_locator
 	{
-		let Some(locator_offset) = locator_offset else {
-			return Err(report!(ArchiveError::InvalidArchive));
-		};
+		let locator_offset = locator_offset.ok_or_else(|| report!(ArchiveError::InvalidArchive))?;
 		if !has_zip64_locator {
 			return Err(report!(ArchiveError::InvalidArchive));
 		}
@@ -408,6 +406,7 @@ mod tests {
 	use crate::error::ArchiveError;
 	use crate::limits::MAX_ARCHIVE_MEMBERS;
 	use crate::limits::MAX_ARCHIVE_METADATA_BYTES;
+	use rootcause::compat::boxed_error::IntoBoxedError;
 	use std::error::Error;
 	use std::fs::File;
 	use std::io::Error as IoError;
@@ -428,15 +427,13 @@ mod tests {
 	#[test]
 	fn normal_zip_is_indexed_and_reopened_for_extraction() -> TestResult {
 		let cancellation = CancellationToken::new();
-		let Ok(members) = index(archive_with_entry()?, &cancellation, Instant::now()) else {
-			return Err(IoError::other("normal ZIP fixture was rejected").into());
-		};
+		let members = index(archive_with_entry()?, &cancellation, Instant::now())
+			.map_err(|report| -> Box<dyn Error> { report.into_boxed_error() })?;
 		assert_eq!(members.len(), 1);
 		assert_eq!(members[0].path.as_str(), "Data/file.bin");
 
-		let Ok(mut archive) = open(archive_with_entry()?, &cancellation, Instant::now()) else {
-			return Err(IoError::other("normal ZIP fixture could not be reopened").into());
-		};
+		let mut archive = open(archive_with_entry()?, &cancellation, Instant::now())
+			.map_err(|report| -> Box<dyn Error> { report.into_boxed_error() })?;
 		let mut entry = archive.by_index(0)?;
 		let mut contents = Vec::new();
 		entry.read_to_end(&mut contents)?;
@@ -447,9 +444,8 @@ mod tests {
 	#[test]
 	fn zip64_metadata_is_accepted_before_parser_construction() -> TestResult {
 		let bytes = zip64_archive_bytes()?;
-		let Ok(members) = index(file_from_bytes(&bytes)?, &CancellationToken::new(), Instant::now()) else {
-			return Err(IoError::other("valid ZIP64 fixture was rejected").into());
-		};
+		let members = index(file_from_bytes(&bytes)?, &CancellationToken::new(), Instant::now())
+			.map_err(|report| -> Box<dyn Error> { report.into_boxed_error() })?;
 		assert_eq!(members.len(), 1);
 		assert_eq!(members[0].path.as_str(), "Data/file.bin");
 		Ok(())
@@ -573,9 +569,8 @@ mod tests {
 	#[test]
 	fn extraction_rechecks_compression_before_constructing_a_decoder() -> TestResult {
 		let file = archive_with_compression(93)?;
-		let Ok(mut archive) = open(file, &CancellationToken::new(), Instant::now()) else {
-			return Err(IoError::other("valid ZIP fixture was rejected").into());
-		};
+		let mut archive = open(file, &CancellationToken::new(), Instant::now())
+			.map_err(|report| -> Box<dyn Error> { report.into_boxed_error() })?;
 		let Err(error) = archive.by_index(0) else {
 			return Err(IoError::other("unsupported ZIP compression reached a decoder").into());
 		};

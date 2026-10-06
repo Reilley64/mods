@@ -1250,6 +1250,7 @@ mod tests {
 	use crate::limits::MAX_COMPRESSION_RATIO;
 	use crate::limits::MAX_DICTIONARY_BYTES;
 	use crc32fast::hash as crc32_hash;
+	use rootcause::compat::boxed_error::IntoBoxedError;
 	use sevenz_rust2::ArchiveEntry;
 	use sevenz_rust2::ArchiveWriter;
 	use sevenz_rust2::SourceReader;
@@ -1467,9 +1468,8 @@ mod tests {
 		assert_eq!(marker[0], K_HEADER);
 
 		file.seek(SeekFrom::Start(0))?;
-		let Ok(members) = index(file, &CancellationToken::new(), Instant::now()) else {
-			return Err(IoError::other("ordinary plain-header fixture was rejected").into());
-		};
+		let members = index(file, &CancellationToken::new(), Instant::now())
+			.map_err(|report| -> Box<dyn StdError> { report.into_boxed_error() })?;
 		assert_eq!(members.len(), 1);
 		assert_eq!(members[0].path.as_str(), "a");
 		Ok(())
@@ -1492,18 +1492,16 @@ mod tests {
 		)?;
 		let mut file = writer.finish()?;
 
-		let Ok(parsed) = open_controlled(file.try_clone()?, &CancellationToken::new(), Instant::now()) else {
-			return Err(IoError::other("solid 7z fixture was rejected while parsing").into());
-		};
+		let parsed = open_controlled(file.try_clone()?, &CancellationToken::new(), Instant::now())
+			.map_err(|report| -> Box<dyn StdError> { report.into_boxed_error() })?;
 		assert_eq!(parsed.archive().blocks.len(), 1);
 		assert_eq!(parsed.archive().files.len(), 2);
 		assert_eq!(parsed.archive().files[1].compressed_size, 0);
 		drop(parsed);
 
 		file.seek(SeekFrom::Start(0))?;
-		let Ok(members) = index(file, &CancellationToken::new(), Instant::now()) else {
-			return Err(IoError::other("solid 7z fixture was rejected while indexing").into());
-		};
+		let members = index(file, &CancellationToken::new(), Instant::now())
+			.map_err(|report| -> Box<dyn StdError> { report.into_boxed_error() })?;
 		assert_eq!(members.len(), 2);
 		assert_eq!(members[0].path.as_str(), "Data/first.txt");
 		assert_eq!(members[1].path.as_str(), "Data/second.txt");
@@ -1533,9 +1531,8 @@ mod tests {
 		assert_eq!(marker[0], K_ENCODED_HEADER);
 
 		file.seek(SeekFrom::Start(0))?;
-		let Ok(members) = index(file, &CancellationToken::new(), Instant::now()) else {
-			return Err(IoError::other("ordinary encoded-header 7z fixture was rejected").into());
-		};
+		let members = index(file, &CancellationToken::new(), Instant::now())
+			.map_err(|report| -> Box<dyn StdError> { report.into_boxed_error() })?;
 		assert_eq!(members.len(), 64);
 		assert_eq!(members[0].path.as_str(), "Data/shared-prefix/member-000.txt");
 		assert_eq!(members[63].path.as_str(), "Data/shared-prefix/member-063.txt");
