@@ -35,9 +35,7 @@ impl ArchivePath {
 		self.0
 	}
 	pub fn derived_mod_name(&self) -> Result<ModName, InvalidModName> {
-		let Some(text) = self.0.to_str() else {
-			return Err(report!(InvalidModName));
-		};
+		let text = self.0.to_str().ok_or_else(|| report!(InvalidModName))?;
 
 		let leaf = text.rsplit(['/', '\\']).next().unwrap_or_default();
 		let stem = leaf.rsplit_once('.').map_or(leaf, |(stem, _)| stem);

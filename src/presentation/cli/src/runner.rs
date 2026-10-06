@@ -308,19 +308,13 @@ pub(crate) async fn execute(
 	let log_level = cli.log_level.to_string();
 	let work = async move {
 		match dependencies {
-			CommandDependencies::Initialize(dependencies) => match cli.command {
-				Command::Init { game_install } => {
-					dispatch_initialization(
-						dependencies,
-						root,
-						game_install,
-						&startup_directory,
-						json_mode,
-					)
+			CommandDependencies::Initialize(dependencies) => {
+				let Command::Init { game_install } = cli.command else {
+					return marker_outcome(ErrorMarker::environment_invalid(None), json_mode);
+				};
+				dispatch_initialization(dependencies, root, game_install, &startup_directory, json_mode)
 					.await
-				}
-				_ => marker_outcome(ErrorMarker::environment_invalid(None), json_mode),
-			},
+			}
 			CommandDependencies::Existing(dependencies) => {
 				dispatch(
 					cli.command,
@@ -342,7 +336,7 @@ pub(crate) async fn execute(
 	result.diagnostic_log = diagnostic_log;
 	let terminal = if result.status == 0 {
 		"success"
-	} else if result.status == 0xC000_013A {
+	} else if result.status == error::STATUS_CONTROL_C_EXIT {
 		"cancelled"
 	} else {
 		"failure"
@@ -391,13 +385,15 @@ async fn dispatch_initialization(
 	startup: &Path,
 	json_mode: bool,
 ) -> RunOutcome {
-	let Ok(game_install) = game_install
+	let game_install = match game_install
 		.map(|path| resolve_path(&path, startup))
 		.map(GameInstallationPath::new)
 		.transpose()
-	else {
-		return marker_outcome(ErrorMarker::game_install_invalid(), json_mode);
+	{
+		Ok(game_install) => game_install,
+		Err(report) => return report_outcome(&report.context(ErrorMarker::game_install_invalid()), json_mode),
 	};
+
 	match initialize_environment(dependencies, root, game_install, operation::ctrl_c_token()).await {
 		Ok(output) => {
 			let (stdout, stderr) = output::initialization(&output);
@@ -469,9 +465,16 @@ async fn dispatch(
 			ConfigCommand::Set {
 				command: SetCommand::GameDir { value },
 			} => {
-				let Ok(path) = GameInstallationPath::new(resolve_path(&value, &startup)) else {
-					return marker_outcome(ErrorMarker::setting_value_invalid(), json_mode);
+				let path = match GameInstallationPath::new(resolve_path(&value, &startup)) {
+					Ok(path) => path,
+					Err(report) => {
+						return report_outcome(
+							&report.context(ErrorMarker::setting_value_invalid()),
+							json_mode,
+						);
+					}
 				};
+
 				match set_game_directory(
 					dependencies.set_game_directory,
 					path,
@@ -501,19 +504,26 @@ async fn dispatch(
 				if arguments.file.is_some() {
 					return marker_outcome(ErrorMarker::nexus_source_invalid(), json_mode);
 				}
-				let Ok(archive) = ArchivePath::new(resolve_path(&arguments.archive, &startup)) else {
-					return marker_outcome(ErrorMarker::unsafe_archive(), json_mode);
+				let archive = match ArchivePath::new(resolve_path(&arguments.archive, &startup)) {
+					Ok(archive) => archive,
+					Err(report) => {
+						return report_outcome(
+							&report.context(ErrorMarker::unsafe_archive()),
+							json_mode,
+						);
+					}
 				};
 				ModSource::Local(archive)
 			};
 
-			let mod_name = if let Some(value) = arguments.name {
-				let Ok(value) = ModName::new(value) else {
-					return marker_outcome(ErrorMarker::invalid_mod_name(), json_mode);
-				};
-				Some(value)
-			} else {
-				None
+			let mod_name = match arguments.name.map(ModName::new).transpose() {
+				Ok(mod_name) => mod_name,
+				Err(report) => {
+					return report_outcome(
+						&report.context(ErrorMarker::invalid_mod_name()),
+						json_mode,
+					);
+				}
 			};
 			let choices = match parse_choices(arguments.choice) {
 				Ok(choices) => choices,
@@ -700,31 +710,51 @@ async fn dispatch(
 			}
 		}
 		Command::Shortcut(arguments) => {
-			let output_target = if let Some(name) = arguments.output_target {
-				let Ok(name) = ModName::new(name) else {
-					return marker_outcome(ErrorMarker::invalid_output_target(), json_mode);
-				};
-				OutputTarget::DataMod(name)
-			} else {
-				OutputTarget::Overwrite
+			let output_target = match arguments.output_target.map_or(Ok(OutputTarget::Overwrite), |name| {
+				ModName::new(name).map(OutputTarget::DataMod)
+			}) {
+				Ok(output_target) => output_target,
+				Err(report) => {
+					return report_outcome(
+						&report.context(ErrorMarker::invalid_output_target()),
+						json_mode,
+					);
+				}
 			};
-			let Ok(working_directory) = arguments
+			let working_directory = match arguments
 				.cwd
 				.map(|path| WorkingDirectory::new(resolve_path(&path, &startup)))
 				.transpose()
-			else {
-				return marker_outcome(ErrorMarker::invalid_working_directory(), json_mode);
+			{
+				Ok(working_directory) => working_directory,
+				Err(report) => {
+					return report_outcome(
+						&report.context(ErrorMarker::invalid_working_directory()),
+						json_mode,
+					);
+				}
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
 				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
 			};
-			let Ok(program) = Program::new(program) else {
-				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
+			let program = match Program::new(program) {
+				Ok(program) => program,
+				Err(report) => {
+					return report_outcome(
+						&report.context(ErrorMarker::program_not_found()),
+						json_mode,
+					);
+				}
 			};
-			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
-			else {
-				return marker_outcome(ErrorMarker::program_launch_failed(), json_mode);
+			let program_arguments = match command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() {
+				Ok(program_arguments) => program_arguments,
+				Err(report) => {
+					return report_outcome(
+						&report.context(ErrorMarker::program_launch_failed()),
+						json_mode,
+					);
+				}
 			};
 
 			match create_shortcut(
@@ -760,19 +790,19 @@ async fn dispatch(
 				};
 			}
 
-			let output_target = if let Some(name) = arguments.output_target {
-				let Ok(name) = ModName::new(name) else {
+			let output_target = match arguments.output_target.map_or(Ok(OutputTarget::Overwrite), |name| {
+				ModName::new(name).map(OutputTarget::DataMod)
+			}) {
+				Ok(output_target) => output_target,
+				Err(report) => {
 					return execution_report_outcome(
-						&report!(ErrorMarker::invalid_output_target()),
+						&report.context(ErrorMarker::invalid_output_target()),
 						json_mode,
 						false,
 					);
-				};
-				OutputTarget::DataMod(name)
-			} else {
-				OutputTarget::Overwrite
+				}
 			};
-			let Ok(working_directory) = arguments
+			let working_directory = match arguments
 				.cwd
 				.map(|path| {
 					WorkingDirectory::new(path).and_then(|path| {
@@ -780,12 +810,15 @@ async fn dispatch(
 					})
 				})
 				.transpose()
-			else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::invalid_working_directory()),
-					json_mode,
-					false,
-				);
+			{
+				Ok(working_directory) => working_directory,
+				Err(report) => {
+					return execution_report_outcome(
+						&report.context(ErrorMarker::invalid_working_directory()),
+						json_mode,
+						false,
+					);
+				}
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
@@ -795,20 +828,25 @@ async fn dispatch(
 					false,
 				);
 			};
-			let Ok(program) = Program::new(program) else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::program_not_found()),
-					json_mode,
-					false,
-				);
+			let program = match Program::new(program) {
+				Ok(program) => program,
+				Err(report) => {
+					return execution_report_outcome(
+						&report.context(ErrorMarker::program_not_found()),
+						json_mode,
+						false,
+					);
+				}
 			};
-			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
-			else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::program_launch_failed()),
-					json_mode,
-					false,
-				);
+			let program_arguments = match command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() {
+				Ok(program_arguments) => program_arguments,
+				Err(report) => {
+					return execution_report_outcome(
+						&report.context(ErrorMarker::program_launch_failed()),
+						json_mode,
+						false,
+					);
+				}
 			};
 
 			let launched = Arc::new(AtomicBool::new(false));
@@ -917,14 +955,14 @@ fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarke
 	values.into_iter()
 		.enumerate()
 		.map(|(sequence, value)| {
-			let Some((group_id, option_id)) = value.split_once('=') else {
-				return Err(report!(ErrorMarker::invalid_selection(
+			let (group_id, option_id) = value.split_once('=').ok_or_else(|| {
+				report!(ErrorMarker::invalid_selection(
 					"choices",
 					None,
 					None,
 					Some(sequence as u64),
-				)));
-			};
+				))
+			})?;
 			Ok(FomodChoice {
 				group_id: group_id.to_owned(),
 				option_id: option_id.to_owned(),
@@ -1012,12 +1050,12 @@ mod tests {
 	use super::CommandDependencies;
 	use super::Dependencies;
 	use super::RunOutcome;
+	use super::execute;
 	use super::hidden_failure_dialog;
 	use super::parse_choices;
 	use super::run;
-	use super::select_environment_root;
+	use super::run_current_process;
 	use crate::diagnostics::SINK_WARNING;
-	use application::ErrorCode;
 	use application::ErrorMarker;
 	use application::conflicts::ConflictContentRead;
 	use application::conflicts::EnvironmentConflictScan;
@@ -1321,14 +1359,21 @@ mod tests {
 						as PortFuture<_>
 				}),
 				read_game_override: Arc::new(|| Box::pin(async { Ok(None) }) as PortFuture<_>),
-				resolve_game_installation: Arc::new({
+				validate_game_directory: Arc::new({
 					let binding = binding.clone();
-					move |_, _, _, _| {
+					move |_, _| {
+						let binding = binding.clone();
+						Box::pin(async move { Ok(binding) }) as PortFuture<_>
+					}
+				}),
+				discover_game_installation: Arc::new({
+					let binding = binding.clone();
+					move |_| {
 						let binding = binding.clone();
 						Box::pin(async move {
 							Ok(ResolvedGameInstallation {
 								binding,
-								source: GameInstallationSource::Explicit,
+								source: GameInstallationSource::Steam,
 							})
 						}) as PortFuture<_>
 					}
@@ -1940,9 +1985,8 @@ mod tests {
 
 	#[test]
 	fn direct_choices_preserve_occurrence_order_and_whitespace() -> Result<(), Box<dyn Error>> {
-		let Ok(choices) = parse_choices(vec![" first = one ".to_owned(), "second=two=parts".to_owned()]) else {
-			return Err("valid direct choices must parse".into());
-		};
+		let choices = parse_choices(vec![" first = one ".to_owned(), "second=two=parts".to_owned()])
+			.map_err(|report| -> Box<dyn Error> { report.into_boxed_error() })?;
 
 		assert_eq!(choices[0].group_id, " first ");
 		assert_eq!(choices[0].option_id, " one ");
@@ -1951,58 +1995,105 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn malformed_direct_choice_reports_its_total_sequence() -> Result<(), Box<dyn Error>> {
-		let result = parse_choices(vec!["valid=choice".to_owned(), "malformed".to_owned()]);
-		let Err(report) = result else {
-			return Err("malformed direct choice must fail".into());
-		};
-		let marker = report.current_context();
+	#[tokio::test]
+	async fn malformed_direct_choice_reports_its_total_sequence() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let outcome = run(
+			arguments![
+				"mods",
+				"--json",
+				"--log-level",
+				"off",
+				"install",
+				"archive.zip",
+				"--choice",
+				"valid=choice",
+				"--choice",
+				"malformed",
+			],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_| successful_dependencies(temp.path()),
+		)
+		.await?;
+		let problem: Value = from_str(&outcome.stderr)?;
 
-		assert_eq!(marker.code(), ErrorCode::InvalidSelection);
-		assert_eq!(marker.field(), Some("choices"));
-		assert_eq!(marker.supplied_sequence(), Some(1));
+		assert_eq!(outcome.status, 2);
+		assert_eq!(problem["code"], "invalid_selection");
+		assert_eq!(problem["details"]["field"], "choices");
+		assert_eq!(problem["details"]["sequence"], 1);
 		Ok(())
 	}
 
-	#[test]
-	fn default_and_relative_explicit_roots_resolve_against_fixed_bases() -> Result<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn default_and_relative_explicit_roots_resolve_against_fixed_bases() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let default = Cli::try_parse_from(["mods", "--log-level", "off", "config", "list"])?;
 		assert_eq!(
-			select_environment_root(&default, temp.path(), Some(temp.path()))?.as_path(),
+			selected_root(
+				arguments!["mods", "--log-level", "off", "config", "list"],
+				temp.path(),
+				Some(temp.path())
+			)
+			.await?,
 			temp.path().join("mods/environments/default")
 		);
-		let explicit = Cli::try_parse_from([
-			"mods",
-			"--environment",
-			"portable",
-			"--log-level",
-			"off",
-			"config",
-			"list",
-		])?;
 		assert_eq!(
-			select_environment_root(&explicit, temp.path(), Some(Path::new("/ignored")))?.as_path(),
+			selected_root(
+				arguments![
+					"mods",
+					"--environment",
+					"portable",
+					"--log-level",
+					"off",
+					"config",
+					"list"
+				],
+				temp.path(),
+				Some(Path::new("/ignored")),
+			)
+			.await?,
 			temp.path().join("portable")
 		);
-		let parent_relative = Cli::try_parse_from([
-			"mods",
-			"--environment",
-			"../portable",
-			"--log-level",
-			"off",
-			"config",
-			"list",
-		])?;
 		assert_eq!(
-			select_environment_root(&parent_relative, temp.path(), None)?.as_path(),
+			selected_root(
+				arguments![
+					"mods",
+					"--environment",
+					"../portable",
+					"--log-level",
+					"off",
+					"config",
+					"list"
+				],
+				temp.path(),
+				None,
+			)
+			.await?,
 			temp.path()
 				.parent()
 				.ok_or("temporary directory must have a parent")?
 				.join("portable")
 		);
 		Ok(())
+	}
+
+	async fn selected_root(
+		arguments: Vec<OsString>,
+		startup_directory: &Path,
+		local_app_data: Option<&Path>,
+	) -> Result<PathBuf, Box<dyn Error>> {
+		let mut selected = None;
+		run(
+			arguments,
+			startup_directory.to_owned(),
+			local_app_data.map(Path::to_owned),
+			|root| {
+				selected = Some(root.as_path().to_owned());
+				successful_dependencies(startup_directory)
+			},
+		)
+		.await?;
+		Ok(selected.ok_or("the dependency factory must receive the selected root")?)
 	}
 
 	fn dependencies_with_conflict_scan(
@@ -2574,7 +2665,7 @@ mod tests {
 						arguments.push(OsString::from("--json"));
 					}
 					arguments.extend(command.clone());
-					let outcome = super::execute(
+					let outcome = execute(
 						Cli::try_parse_from(arguments)?,
 						root.clone(),
 						None,
@@ -2858,7 +2949,7 @@ mod tests {
 	async fn help_and_version_never_construct_or_load_command_resources() {
 		for argument in ["--help", "--version"] {
 			let called = AtomicBool::new(false);
-			let result = super::run_current_process(arguments!["mods", argument], async |_, _, _| {
+			let result = run_current_process(arguments!["mods", argument], async |_, _, _| {
 				called.store(true, Ordering::SeqCst);
 				Err(report!(ErrorMarker::environment_invalid(None)))
 			})
@@ -2873,15 +2964,13 @@ mod tests {
 		let temp = TempDir::new()?;
 		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let cli = Cli::try_parse_from(arguments!["mods", "--log-level", "off", "init"])?;
-		let result = super::execute(
+		let result = execute(
 			cli,
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
 			async move |_, command| {
-				assert!(matches!(command, super::Command::Init { .. }));
-				Ok(super::CommandDependencies::Initialize(
-					dependencies.initialize_environment,
-				))
+				assert!(matches!(command, Command::Init { .. }));
+				Ok(CommandDependencies::Initialize(dependencies.initialize_environment))
 			},
 		)
 		.await;
@@ -2905,7 +2994,7 @@ mod tests {
 				"--",
 				"tool.exe"
 			])?;
-			let result = super::execute(
+			let result = execute(
 				cli,
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),

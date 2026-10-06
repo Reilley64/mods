@@ -1,6 +1,6 @@
 # Contributing
 
-Use the pinned Rust toolchain. Follow `CODING_STYLE.md` and the area files under `docs/coding-style/` that it names for your change. Install the pinned Rust test runner and repository tools once:
+Use the pinned Rust toolchain. Follow `CODING_STANDARDS.md` and the area files under `docs/coding-standards/` that it names for your change. Install the pinned Rust test runner and repository tools once:
 
 ```text
 cargo install cargo-nextest --locked --version 0.9.145

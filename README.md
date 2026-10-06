@@ -70,7 +70,7 @@ The skill uses `v0.1.0` as its tested reference. It allows minor and patch versi
 
 ## AI in development
 
-We use AI agents to research changes, write code and tests, update documentation, and review code. Maintainers set the scope and remain responsible for what ships. Agents follow the repository's [coding standards](CODING_STYLE.md) and task instructions in [AGENTS.md](AGENTS.md).
+We use AI agents to research changes, write code and tests, update documentation, and review code. Maintainers set the scope and remain responsible for what ships. Agents follow the repository's [coding standards](CODING_STANDARDS.md) and task instructions in [AGENTS.md](AGENTS.md).
 
 We check changes through human code reviews, compiler checks, formatting, linting, and tests. An AI-assisted style check reviews Rust changes against the coding standards. These checks and agent reviews can miss bugs. They do not replace testing with the game. Agents must report checks they could not run and limits in what they tested.
 

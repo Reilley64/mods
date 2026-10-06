@@ -273,6 +273,7 @@ impl EnvironmentAdapter {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::snapshot::INVENTORY_IO;
 	use application::ErrorCode;
 	use application::ports::InitializationPlan;
 	use application::ports::InitializationProfileSources;
@@ -616,12 +617,12 @@ mod tests {
 		}
 		fs::write(root.as_path().join("profile/modlist.txt"), b"+Enabled\r\n-Disabled\r\n")
 			.context(ErrorMarker::io_failure())?;
-		crate::snapshot::INVENTORY_IO.with(|count| count.set((0, 0)));
+		INVENTORY_IO.with(|count| count.set((0, 0)));
 		let started = Instant::now();
 		let prepared = EnvironmentAdapter
 			.prepare_launch(&root, &binding, &CancellationToken::new())
 			.await?;
-		let counts = crate::snapshot::INVENTORY_IO.with(|count| count.get());
+		let counts = INVENTORY_IO.with(|count| count.get());
 		eprintln!("provider inventory: {counts:?}, elapsed {:?}", started.elapsed());
 		assert_eq!(prepared.winners.len(), 2);
 		assert_eq!(counts, (3, 1));

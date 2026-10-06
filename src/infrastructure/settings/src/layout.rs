@@ -168,9 +168,9 @@ fn parse_modlist(bytes: &[u8]) -> Result<Vec<ModName>, ErrorMarker> {
 		if line.is_empty() || line.starts_with('#') {
 			continue;
 		}
-		let Some((state, name)) = line.split_at_checked(1) else {
-			return Err(report!(ErrorMarker::environment_invalid(None)));
-		};
+		let (state, name) = line
+			.split_at_checked(1)
+			.ok_or_else(|| report!(ErrorMarker::environment_invalid(None)))?;
 		if !matches!(state, "+" | "-") || !valid_windows_component(name) || !keys.insert(case_fold_key(name)) {
 			return Err(report!(ErrorMarker::environment_invalid(None)));
 		}
@@ -248,13 +248,10 @@ fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
 		}
 		return String::from_utf16(&values).context(ErrorMarker::environment_invalid(None));
 	}
-	match String::from_utf8(bytes.to_vec()) {
-		Ok(text) => Ok(text),
-		Err(_) => {
-			let (text, _, _) = WINDOWS_1252.decode(bytes);
-			Ok(text.into_owned())
-		}
-	}
+	Ok(String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| {
+		let (text, _, _) = WINDOWS_1252.decode(bytes);
+		text.into_owned()
+	}))
 }
 
 fn validate_plugin_list(bytes: &[u8]) -> Result<(), ErrorMarker> {

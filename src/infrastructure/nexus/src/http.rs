@@ -247,9 +247,11 @@ async fn download_with(
 	write(temporary.path().join("provenance.toml"), metadata)
 		.await
 		.context(ErrorMarker::io_failure())?;
+
 	if cancellation.is_cancelled() {
 		return Err(report!(ErrorMarker::operation_cancelled()));
 	}
+
 	rename(temporary.path(), &destination)
 		.await
 		.context(ErrorMarker::io_failure())?;

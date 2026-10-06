@@ -1,22 +1,21 @@
 use crate::GamePlatformAdapter;
 use application::ErrorMarker;
+use application::ports::DiscoverGameInstallation;
 use application::ports::LoadProfileSources;
 use application::ports::PortFuture;
 use application::ports::ReadGameVersion;
 use application::ports::ReadXnvseVersion;
-use application::ports::ResolveGameInstallation;
 use application::ports::ValidateEffectiveBinding;
 use application::ports::ValidateGameDirectory;
 use rootcause::report;
 use std::sync::Arc;
 
 impl GamePlatformAdapter {
-	pub fn resolve_port(&self) -> ResolveGameInstallation {
+	pub fn discover_port(&self) -> DiscoverGameInstallation {
 		let adapter = self.clone();
-		Arc::new(move |explicit, environment, _root, cancellation| {
+		Arc::new(move |cancellation| {
 			let adapter = adapter.clone();
-			Box::pin(async move { adapter.resolve(explicit, environment, &cancellation).await })
-				as PortFuture<_>
+			Box::pin(async move { adapter.discover(&cancellation).await }) as PortFuture<_>
 		})
 	}
 

@@ -321,11 +321,7 @@ mod tests {
 			"--choice",
 			"second=two",
 		]);
-		let Ok(Cli {
-			command: Command::Install(arguments),
-			..
-		}) = parsed
-		else {
+		let Command::Install(arguments) = parsed?.command else {
 			return Err("install command must parse".into());
 		};
 		assert_eq!(arguments.choice, [" group = option ", "second=two"]);
@@ -459,7 +455,7 @@ mod tests {
 		let Command::Export(arguments) = parsed.command else {
 			return Err("export command must parse".into());
 		};
-		assert_eq!(arguments.output, std::path::PathBuf::from("output"));
+		assert_eq!(arguments.output, Path::new("output"));
 		assert!(arguments.include_saves && arguments.include_game_data && arguments.dry_run);
 		let Command::Export(defaults) = parse_from(["mods", "export", "output"])?.command else {
 			return Err("export command must parse".into());

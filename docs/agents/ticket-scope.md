@@ -43,8 +43,8 @@ Run one repair and re-review cycle for the collected blockers. If the re-review 
 
 At each progress update, state whether scope changed. Completion requires the in-scope checks to pass, unavailable checks to be listed explicitly, and follow-up work to remain separate.
 
-## Style-only repairs
+## Coding-standards repairs
 
-Fix valid coding-style-gate suggestions and documented coding-style violations without explicit user approval, including those found after the repair cycle. Keep these repairs behavior-preserving and within the accepted scope, then recheck the affected code.
+Fix documented coding-standards violations without explicit user approval, including those found after the repair cycle. Keep these repairs behavior-preserving and within the accepted scope, then recheck the affected code.
 
-Leave compliant code unchanged when a finding is a false positive. Record it in the dispositions file described in `AGENTS.md`, and list its file, rule, and reason in the PR description. Scope changes and a gate override still require explicit user approval.
+Leave compliant code unchanged when a review finding is a false positive, and list its file, rule, and reason in the PR description. Scope changes still require explicit user approval.

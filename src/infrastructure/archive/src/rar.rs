@@ -1370,9 +1370,10 @@ mod tests {
 	fn stored_rar50_ignores_invalid_compression_field_shape() -> TestResult {
 		let name = b"Data/stored.txt";
 		let mut bytes = stored_rar50(name, b"stored")?;
-		let Some(name_start) = bytes.windows(name.len()).position(|window| window == name) else {
-			return Err("RAR 5 fixture name was not found".into());
-		};
+		let name_start = bytes
+			.windows(name.len())
+			.position(|window| window == name)
+			.ok_or("RAR 5 fixture name was not found")?;
 		let compression_info = name_start
 			.checked_sub(3)
 			.ok_or("RAR 5 fixture compression field was not found")?;
@@ -1388,9 +1389,7 @@ mod tests {
 		let Archive::Rar50Plus(parsed) = ArchiveReader::read(&bytes)? else {
 			return Err("RAR 5 fixture parsed as another archive family".into());
 		};
-		let Some(file) = parsed.files().next() else {
-			return Err("RAR 5 fixture has no file".into());
-		};
+		let file = parsed.files().next().ok_or("RAR 5 fixture has no file")?;
 		assert!(file.is_stored());
 		assert!(file.decoded_compression_info().is_err());
 
@@ -1483,9 +1482,7 @@ mod tests {
 		assert_eq!(members[0].path.as_str(), "Data/original.txt");
 
 		let archive = open(&source, sha256, &cancellation, Instant::now())?;
-		let Some(contents) = archive.read_member_at(0, None)? else {
-			return Err("snapshot member was missing".into());
-		};
+		let contents = archive.read_member_at(0, None)?.ok_or("snapshot member was missing")?;
 		assert_eq!(contents, b"original");
 		Ok(())
 	}

@@ -73,19 +73,21 @@ impl ViewConfiguration {
 			}
 		}
 
-		let target = providers.iter().find(|provider| {
-			if !provider.enabled {
-				return false;
-			}
-			match (&provider.identity, &output_target) {
-				(ProviderIdentity::Overwrite, None) => true,
-				(ProviderIdentity::DataMod { mod_name, .. }, Some(selected)) => mod_name == selected,
-				_ => false,
-			}
-		});
-		let Some(target) = target else {
-			return Err(report!(ExecutionError));
-		};
+		let target = providers
+			.iter()
+			.find(|provider| {
+				if !provider.enabled {
+					return false;
+				}
+				match (&provider.identity, &output_target) {
+					(ProviderIdentity::Overwrite, None) => true,
+					(ProviderIdentity::DataMod { mod_name, .. }, Some(selected)) => {
+						mod_name == selected
+					}
+					_ => false,
+				}
+			})
+			.ok_or_else(|| report!(ExecutionError))?;
 
 		let target_identity = target.identity.clone();
 		let mut enabled_providers: Vec<_> = providers
@@ -109,12 +111,10 @@ impl ViewConfiguration {
 		let mut keys = HashSet::new();
 		for winner in winners {
 			let identity = winner.identity();
-			let Some(provider) = providers
+			let provider = providers
 				.iter()
 				.find(|provider| provider.identity == identity && provider.enabled)
-			else {
-				return Err(report!(ExecutionError));
-			};
+				.ok_or_else(|| report!(ExecutionError))?;
 			if !keys.insert(winner.original_path().comparison_key().to_owned()) {
 				return Err(report!(ExecutionError));
 			}

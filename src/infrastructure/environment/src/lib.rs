@@ -28,8 +28,6 @@ use crate::transactions::InstallationTransaction;
 use application::ErrorCode;
 use application::ErrorMarker;
 use application::installation::ApprovedInstallation;
-use application::installation::InstallPlan;
-use application::installation::InstallationAssessment;
 use application::installation::InstallationState;
 use application::ports::AssessInitializationTarget;
 use application::ports::AssessInstallation;
@@ -133,7 +131,7 @@ impl EnvironmentAdapter {
 		// `mods.toml` goes last, so a partial layout is never mistaken for an initialized environment.
 		write_manifest(root_dir, &plan).await?;
 
-		validate_layout(root_dir, &CancellationToken::new())
+		validate_initialized_layout(root_dir, &CancellationToken::new())
 			.await
 			.map_err(|report| {
 				if report.current_context().code() == ErrorCode::EnvironmentInvalid {
@@ -160,16 +158,6 @@ impl EnvironmentAdapter {
 			current_winners: snapshot.current_winners,
 			file_dependencies: snapshot.file_dependencies,
 		})
-	}
-
-	async fn assess_installation(
-		&self,
-		root: &EnvironmentRoot,
-		binding: &GameBinding,
-		plan: &InstallPlan,
-		cancellation: &CancellationToken,
-	) -> Result<InstallationAssessment, ErrorMarker> {
-		assess_installation_snapshot(root.as_path(), binding, plan, cancellation).await
 	}
 
 	async fn begin_installation(
@@ -349,14 +337,12 @@ impl EnvironmentAdapter {
 	}
 
 	pub fn assess_installation_port(&self, root: EnvironmentRoot, binding: GameBinding) -> AssessInstallation {
-		let adapter = self.clone();
 		Arc::new(move |plan, cancellation| {
-			let adapter = adapter.clone();
 			let root = root.clone();
 			let binding = binding.clone();
-			Box::pin(
-				async move { adapter.assess_installation(&root, &binding, &plan, &cancellation).await },
-			) as PortFuture<_>
+			Box::pin(async move {
+				assess_installation_snapshot(root.as_path(), &binding, &plan, &cancellation).await
+			}) as PortFuture<_>
 		})
 	}
 
@@ -468,9 +454,7 @@ const INVALIDATION_ARCHIVE_BYTES: [u8; 83] = [
 	0x64, 0x75, 0x6D, 0x6D, 0x79, 0x2E, 0x64, 0x64, 0x73, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-/// Checks a freshly initialized environment: the exact layout, empty providers, the profile, the manifest,
-/// and the generated archive.
-async fn validate_layout(directory: &Path, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
+async fn validate_initialized_layout(directory: &Path, cancellation: &CancellationToken) -> Result<(), ErrorMarker> {
 	validate_exact_entries(
 		directory,
 		&["mods", "profile", "overwrite", "cache", "mods.toml", "temp", "logs"],
