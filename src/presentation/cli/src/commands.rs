@@ -24,6 +24,12 @@ pub(crate) struct Cli {
 	pub(crate) command: Command,
 }
 
+impl Cli {
+	pub(crate) fn hides_console(&self) -> bool {
+		matches!(&self.command, Command::Exec(exec) if exec.hidden)
+	}
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
 	Init {
@@ -188,7 +194,7 @@ where
 	T: Into<OsString> + Clone,
 {
 	let cli = Cli::try_parse_from(arguments)?;
-	if cli.json && matches!(&cli.command, Command::Exec(exec) if exec.hidden) {
+	if cli.json && cli.hides_console() {
 		return Err(Cli::command().error(
 			ErrorKind::ArgumentConflict,
 			"the argument '--hidden' cannot be used with '--json'",

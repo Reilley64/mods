@@ -7,6 +7,7 @@ mod diagnostics;
 mod error;
 mod export_output;
 mod install_warning;
+mod invocation;
 mod json_conflicts;
 mod json_export;
 mod json_install;
@@ -18,11 +19,9 @@ mod path_resolution;
 mod publication;
 mod runner;
 
-use commands::Command;
-use commands::ConfigCommand;
+#[cfg(windows)]
+use commands::Cli;
 use commands::parse_from;
-use infrastructure_dependencies::Resources;
-use infrastructure_dependencies::SettingsLoadMode;
 #[cfg(windows)]
 use infrastructure_dependencies::detach_console;
 #[cfg(windows)]
@@ -33,7 +32,6 @@ use std::io::Write;
 use std::io::stderr;
 use std::io::stdout;
 use std::process::exit;
-use tokio_util::sync::CancellationToken;
 
 const BUILD_COMMIT: &str = env!("BUILD_COMMIT");
 
@@ -47,9 +45,9 @@ async fn main() {
 		.skip(1)
 		.take_while(|value| value != &&OsString::from("--"))
 		.any(|value| value == "--json");
-	let hidden = parse_from(arguments.clone())
-		.ok()
-		.is_some_and(|cli| matches!(cli.command, Command::Exec(exec) if exec.hidden));
+	let cli = parse_from(arguments);
+	#[cfg(windows)]
+	let hidden = cli.as_ref().is_ok_and(Cli::hides_console);
 
 	#[cfg(windows)]
 	if hidden && detach_console().is_err() {
@@ -61,62 +59,7 @@ async fn main() {
 		exit(125);
 	}
 
-	let result = runner::run_current_process(arguments, async |root, startup, command| {
-		let resources = Resources::system(root.clone());
-		if matches!(command, Command::Init { .. }) {
-			return Ok(runner::CommandDependencies::Initialize(
-				resources.initialize_environment_dependencies(),
-			));
-		}
-
-		let mode = match command {
-			Command::Config {
-				command: ConfigCommand::List | ConfigCommand::Get { .. },
-			} => SettingsLoadMode::ReadOnly,
-			Command::Conflicts { .. } => SettingsLoadMode::Inspection,
-			Command::Install(arguments) if arguments.dry_run => SettingsLoadMode::Inspection,
-			Command::Exec(_) | Command::Export(_) | Command::Install(_) | Command::Shortcut(_) => {
-				SettingsLoadMode::Execution
-			}
-			_ => SettingsLoadMode::Mutation,
-		};
-		let loaded = resources.load_settings(mode, &operation::ctrl_c_token()).await?;
-
-		let binding = loaded.resolved.effective_binding.clone();
-		let execution_force_cancellation = CancellationToken::new();
-		let execute_program = if hidden {
-			resources
-				.captured_execute_program(
-					binding.clone(),
-					startup.to_owned(),
-					execution_force_cancellation.clone(),
-				)
-				.0
-		} else {
-			resources.execute_program(
-				binding.clone(),
-				startup.to_owned(),
-				execution_force_cancellation.clone(),
-			)
-		};
-
-		Ok(runner::CommandDependencies::Existing(Box::new(runner::Dependencies {
-			settings: loaded.resolved.clone(),
-			create_shortcut: resources.create_shortcut_dependencies(binding.clone(), startup.to_owned()),
-			execute_program,
-			execution_force_cancellation,
-			initialize_environment: resources.initialize_environment_dependencies(),
-			list_settings: resources.list_settings_dependencies(),
-			get_setting: resources.get_setting_dependencies(),
-			set_game_directory: resources.set_game_directory_dependencies(loaded.clone()),
-			install_mod: resources.install_mod_dependencies(&loaded),
-			export_environment: resources.export_environment_dependencies(binding.clone()),
-			list_effective_conflicts: resources.list_effective_conflicts_dependencies(binding.clone()),
-			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(binding.clone()),
-			explain_path: resources.explain_path_dependencies(binding),
-		})))
-	})
-	.await;
+	let result = runner::run_current_process(cli, invocation::compose).await;
 	let outcome = match result {
 		Ok(outcome) => outcome,
 		Err(error) => {
