@@ -88,6 +88,7 @@ and the removal of partial downloads on cancel.
   accepted some gate findings locally, and those records are not kept.
 - `CODING_STYLE.md` is now `CODING_STANDARDS.md`, the area files moved to
   `docs/coding-standards/`, and the skill is now `improve-coding-standards`.
+- The `subagent-router` skill, which routed subagent spawns through Jev, is removed.
 - `AGENTS.md` points at `CODING_STANDARDS.md` and no longer has the Herdr session-naming
   section.
 
