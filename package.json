@@ -13,17 +13,12 @@
     "dependency:check": "bun scripts/check-dependency-graph.ts",
     "test": "bun run test:rust && bun run test:tools",
     "test:rust": "cargo nextest run --workspace --all-targets",
-    "test:tools": "bun test tests ./.prime/agent/extensions/coding-style-gate/tests ./.prime/agent/extensions/codex-discovery-version/tests",
+    "test:tools": "bun test tests ./.prime/agent/extensions/codex-discovery-version/tests",
     "check:pr-title": "bun scripts/validate-pr-title.ts"
-  },
-  "dependencies": {
-    "@typesafe-ai/sdk": "0.6.0",
-    "diff": "9.0.0"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.2",
-    "@commitlint/config-conventional": "21.2.2",
-    "msw": "2.15.0"
+    "@commitlint/config-conventional": "21.2.2"
   },
   "packageManager": "bun@1.4.2"
 }

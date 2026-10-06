@@ -2,7 +2,7 @@
 
 Base: `c99c9023122e5a14de9e1b7bb7928c1667e47494`.
 
-This pass checks Rust code that existed before two rubric items were added on 2026-09-30.
+This pass checks Rust code that existed before two coding standards were added on 2026-09-30.
 The items are "Prefer Option and Result combinators" and "Reusable capability ports".
 The previous full cleanup used base `8e8ba7afe5a5b512dae498800e509e4186dde6ee`.
 
@@ -80,36 +80,22 @@ and the removal of partial downloads on cancel.
 - Three files repeat the UTF-8 then Windows-1252 decode fallback.
 - `usvfs/mod.rs` and `launch_inputs.rs` repeat the bare `CreateProcessW` limit `32767`.
 
-## Gate dispositions
+## Repository changes in the same pull request
 
-The gate reported use-case parameter and declaration-order findings on 20 files. None of
-them is an application use-case entry point, or the entry-point signature did not change.
-Other accepted findings:
-
-| File | Rule | Reason |
-| --- | --- | --- |
-| `presentation/cli/src/runner.rs` | combinators, narrow conditional form, match only for multi-way logic | The `match` binds the domain report to keep its cause. `let ... else` cannot bind it, and `?` is unavailable. |
-| `presentation/cli/src/runner.rs` | phase spacing | Input conversions in a dispatch arm are one validation phase. |
-| `presentation/cli/src/runner.rs` | test public behavior | The whitespace test stays on `parse_choices` (see above). |
-| `application/src/installation/install_archive.rs` | combinators, narrow conditional form | The three-way name choice; the combinator form was less readable. |
-| `application/src/installation/install_archive.rs` | phase spacing | Name selection is one operation. |
-| `environment/src/profile.rs`, `profile_activation.rs`, `settings/src/layout.rs` | preserve causes | The decode fallback returns success and builds no error. |
-| `environment/src/profile_activation.rs` | language-neutral review priorities | The closure keeps the named decode binding. |
-| `environment/src/snapshot.rs` | phase spacing, import placement, dependency direction | Phases now have blank lines. Imports are at test-module scope. No dependency changes. |
-| `archive/src/seven_zip.rs` | import placement | `IntoBoxedError` is imported once at test-module scope. |
-| `dependencies/src/initialize_environment.rs` | phase spacing | One struct literal with no statements. |
-| `execution/src/launch_inputs/windows_inputs.rs` | four rules | Restoring the file made the gate treat old code as new. Only one line changed. |
-| `application/src/environment/initialize_environment.rs` | phase spacing, import placement | One test statement; imports are at module scope. |
-
-A final Jev review of the branch diff (`c99c902..HEAD`, 35 files) found 31 likely violations.
-29 matched the dispositions above. The other two were the `layout.rs` decode fallback and a
-use-case parameter finding in `execution_preparation.rs`, which is not a use case. Neither
-needed a code change.
+- The Jev-based coding-style gate is removed: the Prime Agent extension, its calibration
+  and tests, `.prime/agent/coding-style-gate.json`, the dispositions file convention, and
+  the `@typesafe-ai/sdk`, `diff`, and `msw` packages that only it used. This cleanup
+  accepted some gate findings locally, and those records are not kept.
+- `CODING_STYLE.md` is now `CODING_STANDARDS.md`, the area files moved to
+  `docs/coding-standards/`, and the skill is now `improve-coding-standards`.
+- `AGENTS.md` points at `CODING_STANDARDS.md` and no longer has the Herdr session-naming
+  section.
 
 ## Validation
 
 - `bun run check` passed on macOS: formatting, Clippy with warnings denied, the dependency
-  graph, release-version tests, 520 Rust tests (1 skipped), and 137 tooling tests.
+  graph, release-version tests, 520 Rust tests (1 skipped), and 40 tooling tests
+  after the gate tests were removed.
 - `cargo check --target x86_64-pc-windows-msvc` is blocked on macOS. `ring` cannot compile
   its C code for MSVC, and `usvfs-sys` needs the Windows SDK header `Windows.h`. CI must
   check the Windows-only edits in `usvfs/mod.rs`, `windows_inputs.rs`, and
