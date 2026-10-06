@@ -2478,8 +2478,7 @@ mod tests {
 		Ok(())
 	}
 	#[tokio::test]
-	async fn shortcut_forwards_startup_relative_paths_and_stays_quiet_without_execution()
-	-> Result<(), Box<dyn Error>> {
+	async fn shortcut_forwards_startup_relative_paths_and_publishes_quietly() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		for custom in [false, true] {
 			let expected_root = temp.path().join("environment");

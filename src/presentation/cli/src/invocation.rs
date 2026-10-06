@@ -269,6 +269,7 @@ pub(crate) async fn compose(
 			let loaded = resources
 				.load_settings(settings_load_mode, &operation::ctrl_c_token())
 				.await?;
+
 			Ok(compose_dependencies(&resources, loaded, startup))
 		}
 	}
