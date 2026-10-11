@@ -47,12 +47,10 @@ impl EvaluationBudget {
 	}
 
 	fn spend(&mut self) -> Result<(), ErrorMarker> {
-		let Some(remaining) = self.remaining.checked_sub(1) else {
-			return Err(report!(
-				ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")
-			));
-		};
-		self.remaining = remaining;
+		self.remaining = self
+			.remaining
+			.checked_sub(1)
+			.ok_or_else(|| report!(ErrorMarker::unsupported_installer().with_phase("fomod_evaluation")))?;
 		Ok(())
 	}
 }
@@ -239,14 +237,14 @@ pub(super) fn evaluate(
 				break;
 			}
 		}
-		let Some((group_index, group)) = matched_group else {
-			return Err(report!(ErrorMarker::invalid_selection(
+		let (group_index, group) = matched_group.ok_or_else(|| {
+			report!(ErrorMarker::invalid_selection(
 				"choices",
 				Some(choice.group_id.clone()),
 				Some(choice.option_id.clone()),
 				Some(supplied_sequence),
-			)));
-		};
+			))
+		})?;
 		if !condition_matches(&group.condition, &flags, &facts, &mut budget, cancellation)? {
 			return Err(report!(ErrorMarker::invalid_selection(
 				"choices",
@@ -316,14 +314,14 @@ pub(super) fn evaluate(
 					break;
 				}
 			}
-			let Some((option_index, option)) = matched_option else {
-				return Err(report!(ErrorMarker::invalid_selection(
+			let (option_index, option) = matched_option.ok_or_else(|| {
+				report!(ErrorMarker::invalid_selection(
 					"choices",
 					Some(group.id.clone()),
 					Some(choice.option_id.clone()),
 					Some(supplied_sequence),
-				)));
-			};
+				))
+			})?;
 			let mut already_selected = false;
 			for item in &selected {
 				if cancellation.is_cancelled() {
@@ -513,20 +511,21 @@ pub(super) fn evaluate(
 				continue;
 			}
 			let resolved_type = resolve_option_type(option, &flags, &facts, &mut budget, cancellation)?;
-			let selection_state = if let Some(selection) = selected.iter().find(|selection| {
-				selection.group_index == group_index
-					&& group.options[selection.option_index].id == option.id
-			}) {
-				if !selection.automatic {
-					OptionSelectionState::Supplied
-				} else if resolved_type == ResolvedOptionType::Required {
-					OptionSelectionState::AutomaticRequired
-				} else {
-					OptionSelectionState::AutomaticSelectAll
-				}
-			} else {
-				OptionSelectionState::Unselected
-			};
+			let selection_state = selected
+				.iter()
+				.find(|selection| {
+					selection.group_index == group_index
+						&& group.options[selection.option_index].id == option.id
+				})
+				.map_or(OptionSelectionState::Unselected, |selection| {
+					if !selection.automatic {
+						OptionSelectionState::Supplied
+					} else if resolved_type == ResolvedOptionType::Required {
+						OptionSelectionState::AutomaticRequired
+					} else {
+						OptionSelectionState::AutomaticSelectAll
+					}
+				});
 			options.push(VisibleOption {
 				condition: option.condition.clone(),
 				condition_evaluation: condition_evaluation(
@@ -1140,14 +1139,14 @@ fn validate_supplied_selections(
 				break;
 			}
 		}
-		let Some((group_index, group)) = matched_group else {
-			return Err(report!(ErrorMarker::invalid_selection(
+		let (group_index, group) = matched_group.ok_or_else(|| {
+			report!(ErrorMarker::invalid_selection(
 				"choices",
 				Some(supplied_event.group_id.clone()),
 				Some(supplied_event.option_id.clone()),
 				Some(supplied_event.sequence),
-			)));
-		};
+			))
+		})?;
 		if !condition_matches(&group.condition, &flags, dependency_facts, budget, cancellation)? {
 			return Err(report!(ErrorMarker::invalid_selection(
 				"choices",
@@ -1190,14 +1189,14 @@ fn validate_supplied_selections(
 				break;
 			}
 		}
-		let Some(option) = matched_option else {
-			return Err(report!(ErrorMarker::invalid_selection(
+		let option = matched_option.ok_or_else(|| {
+			report!(ErrorMarker::invalid_selection(
 				"choices",
 				Some(supplied_event.group_id.clone()),
 				Some(supplied_event.option_id.clone()),
 				Some(supplied_event.sequence),
-			)));
-		};
+			))
+		})?;
 		if !option_is_selectable(option, &flags, dependency_facts, budget, cancellation)? {
 			return Err(report!(ErrorMarker::invalid_selection(
 				"choices",

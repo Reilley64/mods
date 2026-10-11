@@ -1,0 +1,19 @@
+{
+  "mod_name": "Visuals",
+  "participation": "active",
+  "resolution_status": "exact",
+  "provider_summary": {
+    "ordinary_file_count": 0,
+    "effective_file_count": 0,
+    "file_conflict_win_count": 0,
+    "file_conflict_loss_count": 0,
+    "owned_file_tombstone_count": 0,
+    "owned_directory_tombstone_count": 0,
+    "lower_file_entries_suppressed_count": 0,
+    "own_file_entries_suppressed_count": 0,
+    "state": "uncontested"
+  },
+  "rows": [],
+  "problems": [],
+  "warnings": []
+}

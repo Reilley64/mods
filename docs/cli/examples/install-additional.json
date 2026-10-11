@@ -1,0 +1,31 @@
+{
+  "outcome": "additional_selections_required",
+  "archive_identity": {
+    "kind": "fomod",
+    "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "package_root": "",
+    "config_member": "fomod/ModuleConfig.xml",
+    "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "mod_name": "Visuals",
+  "accepted_choices": [],
+  "groups": [
+    {
+      "id": "look",
+      "label": "Look",
+      "description": "Choose a look",
+      "cardinality": "select_exactly_one",
+      "options": [
+        {
+          "id": "warm",
+          "label": "Warm",
+          "description": "Warm colors",
+          "resolved_type": "optional",
+          "selectable": true,
+          "synthetic": false
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

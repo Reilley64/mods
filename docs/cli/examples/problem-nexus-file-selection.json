@@ -1,0 +1,23 @@
+{
+  "type": "https://github.com/Reilley64/mods/blob/main/docs/cli/problems.md#nexus_file_selection_required",
+  "title": "Nexus file selection required",
+  "detail": "Select a file with --file <id>.",
+  "exit_code": 2,
+  "code": "nexus_file_selection_required",
+  "details": {
+    "files": [
+      {
+        "file_id": 1001,
+        "name": "Main File",
+        "version": "1.2",
+        "category": "MAIN"
+      },
+      {
+        "file_id": 1002,
+        "name": "Optional Textures",
+        "version": "1.2",
+        "category": "OPTIONAL"
+      }
+    ]
+  }
+}

@@ -1,0 +1,878 @@
+# Streamlined exec preparation
+
+## Final bounded review checkpoint
+
+The [spec recheck](streamline-exec-spec-recheck.md) confirms the INI safe-open regression is repaired. The [standards recheck](streamline-exec-standards-recheck.md) confirms all three required spacing repairs and finds no new blocker within the repair diff. Full local validation passes with 438 Rust tests and 119 tooling tests; 158 focused tests pass. Reviewers inspected code and saved red/green logs; they did not rerun the full suite.
+
+The parent accepts the remaining findings individually for the file/rule/reasons recorded below and in the [95-pair standards audit](streamline-exec-standards-review.md). Its pre-repair spacing findings are superseded by the linked recheck. The latest gate still reports 94 likely findings; this is not a clean gate and no enforce override has been supplied. The user later approved the archive-list fallback described below; it replaces the temporary refusal. Windows compilation/native and JIP timing remain unverified. No commit, push, PR, installation or game launch was performed for this change.
+
+## User acceptance of documented findings
+
+The user stated that every finding with a documented file, rule, and reason should clear the gate. The parent treats this as the user's acceptance of the recorded dispositions for this change, and proceeds with commit, Windows packaging, and installation. The gate tool itself still reports the findings, because it does not read this report. This is not a clean review.
+
+## Status and scope
+
+This work starts at `5eb0f192d2a7c5346d66280c4a46fe6c6a894b7b`. The approved scope is in [the exec discussion](../exec-performance-discussion.md). No game was launched. No installation or real environment was changed. Test writes stayed inside temporary fixtures.
+
+Exec selects the archive list in this order:
+
+1. The canonical FalloutCustom.ini `sArchiveList`, if present. An explicit empty value counts as present.
+2. Otherwise the canonical Fallout.ini `sArchiveList`, if present. An explicit empty value counts as present.
+3. Otherwise the embedded `FALLOUT_NEW_VEGAS_DEFAULT_ARCHIVE_LIST` constant in `derived_profile.rs`.
+
+The derivation then appends `Fallout - Invalidation.bsa` once, with the existing transform. The constant copies `SArchiveList` from line 706 of the user's installed Steam `Fallout_default.ini` (SHA-256 `A701C3A96AF26F83BA6399B4A579AF59FA075868949519F4DEC45BF47BF7F95D`). It lists six archives in the source order and keeps the source's double space before `Fallout - Misc.bsa`. The transform trims each entry. Exec does not read `Fallout_default.ini` or enumerate BSAs. Export keeps its existing `Fallout_default.ini` fallback. The `profile_archive_list_missing` refusal and its marker are removed; no other code used the marker.
+
+Localization caveat: only the English Steam copy was checked. Localized editions may use different archive names, such as localized voice archives. On those editions, a profile without an `sArchiveList` gets the English list.
+
+The user later approved ignoring unrelated root, cache, and profile entries and removing generated-BSA validation from launch preparation. The new regression accepts extra directories and a corrupt fixture BSA. This does not establish that a game can use a corrupt BSA. Pending-operation and owned-temp-directory rules remain.
+
+## Implementation
+
+- `execution_preparation.rs` retains strict `prepare_execution` and `PreparedExecution` for export. Native exec calls `prepare_launch`, consumes `PreparedLaunch`, and performs its postrun check through `check_launch_with_spool`. The launch DTO has no asset size, modification time, or freshness state.
+- `execution_preparation/inventory.rs` parses the full modlist once before scanning. It builds the enabled-name set before entering the top-level mods loop. That loop records every folder, including empty and disabled folders, and compares exact names against the full modlist. Disabled contents are never traversed or read.
+- The inventory updates case-insensitive winners during recursive traversal. Each winner stores a domain provider reference with identity and priority. Base Data is lowest and Overwrite is highest. Priority comparisons, not directory enumeration order, select winners. Namespace types remain separate from winners, so suppression does not hide file/directory collisions.
+- Tombstones suppress already-seen lower-priority winners. The retained tombstone index suppresses lower-priority files encountered later. Exact and subtree scopes retain independent maximum ranks. Higher-priority files can reinstate a subtree path. Own-provider tombstone overlaps remain invalid.
+- Ordinary enumeration and file types replace ancestry walks and validation-only asset opens. Linked files and directory links are allowed. Directory recursion still consumes the existing entry and depth budgets. Native usvfs traversal is separate and was not changed.
+- Enabled-mod metadata requests create `schema_version = 1` only when the file is absent. The safe create-new writer never overwrites an existing or concurrently created file. The implementation rereads and validates the resulting metadata. Disabled mods, base Data, and Overwrite never receive default metadata.
+- Exec uses whole-file reads for configuration. It has no configuration byte caps or custom chunk loops. Export retains its bounded reads and strict snapshot checks. Cancellation checkpoints surround synchronous work, but cannot interrupt a synchronous whole-file read.
+- CLI composition resolves the existing binding once and supplies it to native exec. It does not validate Steam layout, required executable/default INI, appmanifest, build freshness, or game/environment separation. The adapter no longer compares a second binding or performs prelaunch snapshot/INI revalidation.
+- Unlisted plugins retain the input collection order. Explicit listed order remains. No timestamp order or discovery-order tracking was added.
+- Windows launch lookup retains caller PATH, cwd, argument quoting, and NUL checks. It no longer retains validation handles or rejects extensions. Lookup skips missing candidates. Other candidate lookup errors defer to Windows process creation instead of selecting a later PATH entry.
+
+An intermediate version mistakenly routed export through the lightweight inventory. Export fault-injection tests exposed changed source ordering. The final design restores the original strict preparation and DTO for export. Export tests were not changed to accept that regression.
+
+## Application composes exec through ports
+
+The user chose option A in the [exec discussion](../exec-performance-discussion.md#proposed-redesign-application-composes-exec-through-ports). The user then asked to keep the existing port shape. This is a behavior-preserving refactor. CLI syntax, output, warnings, progress events, error markers, phases, exit codes, cancellation, INI retention, the post-run warning, export, and settings loading do not change.
+
+The application `execute_program` use case now composes these ports. All ports have the usual `Arc<dyn Fn(...) -> PortFuture<T> + Send + Sync>` shape and are invoked with `.call(...)`:
+
+1. `ResolveLaunchTarget`: caller PATH/cwd lookup and argument encoding. It also duplicates the inherited standard streams when output is not captured.
+2. `PrepareLaunchPlan`: modlist, providers, and streaming winner resolution. Conflict resolution stays inside this port.
+3. `ProjectExecutionProfile`: platform profile directories, `build_profile_configuration`, and advisory plugin logging.
+4. `StageExecutionProfile`: temporary INIs.
+5. `CreateVirtualFileSystem`: view configuration and usvfs setup. It keeps the existing cancellation checkpoint between validation and native setup.
+6. `LaunchProgram`: private stream setup, hooked launch, and native error mapping.
+7. `SuperviseProgram`: supervision, the Job drain query, and release of the process.
+8. `PreserveExecutionProfile`: INI preservation.
+9. `FinishProgramOutput`: joins private output drains.
+10. `CheckProfileState`: the post-run check.
+
+A later change removed the `CloseVirtualFileSystem` port. When cancellation arrives after the file system is created, the use case drops the handle and returns `operation_cancelled` as before. `VirtualGameView` closes its session in `Drop`. The one accepted behavior change: a native teardown failure on this path is no longer reported as `vfs_failed` with phase `cleanup`. As before, a failed teardown keeps the session gate set and the native code loaded.
+
+`RunManagedProgram` is removed. The use case owns the step order, the output-target rule (the Data mod must exist and be enabled), the mapping from `ProfileWarning` to `ExecutionWarning`, progress events, cancellation checks between steps, retention of the staged profile on failure, and forced-cancellation mapping. `ProfileWarning` moved from `infrastructure-execution` into application ports, so infrastructure builds the application type and the use case maps it. Native error-to-marker mapping stays in the adapters.
+
+Handles that the application passes between steps (`LaunchTarget`, `LaunchPlan`, `ExecutionProfile`, `StagedExecutionProfile`, `VirtualFileSystem`, `RunningProgram`, `ProgramOutput`) are opaque. Each wraps `AdapterState`, a `Box<dyn Any + Send>`. Handles are `Send` but not `Sync`. Each port consumes or borrows a handle for one step, so native state is never used concurrently. A handle from another adapter fails with `execution_supervision_failed`.
+
+### Working directory default
+
+A later approved change sets the child's default working directory. When `mods exec` has no `--cwd`, the use case passes the bound game directory to `ResolveLaunchTarget`, which now takes a required `WorkingDirectory`. New Vegas and its script-extender loaders resolve `Data\` from the working directory. Program lookup keeps the caller's startup directory and PATH. An explicit `--cwd` is unchanged. The use case now receives the `GameBinding` from composition. The test `child_defaults_to_the_game_directory_unless_a_directory_is_given` covers both cases. The skill reference `execution.md` describes the new default.
+
+Gate dispositions for this change:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `src/application/src/execution/execute_program.rs` | Import placement and use | Accepted as a false positive. The new test imports (`temp_dir`, `GameBinding`, `GameInstallationPath`, `WorkingDirectory`) are at test-module scope. |
+| `src/application/src/execution/execute_program.rs` | Focused use-case orchestration | Accepted. The default is a five-line, single-use business rule, kept inline in the use case. |
+| `src/application/src/execution/execute_program.rs` | Dependency direction and composition roots | Accepted as a false positive. `GameBinding` is a domain type. Composition supplies it, and no infrastructure type enters the application. |
+| `src/application/src/execution/execute_program.rs`, `ports/execution.rs`, `native.rs`, `execution_adapter.rs` | Use-case parameters; Narrow custom implementations; Use-case declaration order | Accepted. Dependencies stay first, the supplied binding and requested values are typed arguments, and cancellation stays last. No new facility is added. |
+
+### Execution thread and usvfs `Send`
+
+Composition runs the whole use case on one `spawn_blocking` thread with a current-thread Tokio runtime. `ExecutionAdapter::into_execute_program` builds the ports and calls the use case on that thread. It keeps the tracing dispatcher and span handoff that the old adapter wrapper used. A cancelled request returns `operation_cancelled` before the thread starts. Non-Windows builds still return `program_unsupported` right after that cancellation check. That now happens before the use case runs, so before any `PreparingExecution` event. The CLI passes no progress reporter, so its output does not change. The CLI holds this entry point as `application::execution::ExecuteProgram`, a `Send` boxed `FnOnce`.
+
+`VirtualGameView` is now `Send` but not `Sync` (`unsafe impl Send` in `usvfs/mod.rs`). As a result, `HookedProcess` is also `Send`. Evidence from the pinned `usvfs-rs@c23705c` source:
+
+- `usvfsConnectVFS` and `usvfsDisconnectVFS` store and delete the process-global static `context` and `manager` (`src/usvfs_dll/usvfs.cpp`).
+- The controller exports that the shim calls use that global `context` without a lock. These include `usvfsVirtualLinkFile`, `usvfsVirtualLinkDirectoryStatic`, `usvfsCreateProcessHooked`, and the clear functions. `READ_CONTEXT`/`WRITE_CONTEXT` locking appears only in `src/usvfs_dll/hooks/kernel32.cpp` and `hooks/ntdll.cpp`, which run inside injected children.
+- No controller state is thread-local. `src/` has no `thread_local`, `DllMain` ignores thread attach and detach (`usvfs.cpp` ~948-965), and the shim (`rust/usvfs-sys/native/barrier.cpp`) keeps no thread or lock state. The hook manager exists only inside injected children.
+
+So the caller's thread does not matter, but upstream calls are unsynchronized and must never overlap. Overlap is prevented by `SESSION_ACTIVE` (one session per process), by the view staying `!Sync`, by every native call taking `&mut self` or `self`, and by the single execution thread. Moving the value between threads transfers ownership, which also orders every earlier call before any later one. An earlier version of this proof claimed that controller calls lock `HookContext`; the standards review found that claim wrong, and the repair corrected it.
+
+The Windows-only test `session_moves_between_threads_for_configure_launch_and_close` checks this at run time. It configures a real view on one thread, launches a hooked `cmd.exe` on a second thread that reads a mapped file, and finishes the process and closes the session on a third thread. It runs three cycles, then closes an unlaunched view on another thread. The test cannot run on macOS. The parent ran `cargo test --package infrastructure-execution` on Windows for i686 and x86_64, and it passed after commit `c5e040f` changed the fixture to a recursive directory link. Residual risk: the source reading and three cycles in one test do not rule out a race under different timing. The single execution thread still prevents overlap in production. The test and the existing session test share a lock, because `SESSION_ACTIVE` is process-global.
+
+### Windows-only code touched
+
+None of this code compiles on macOS. It was checked by reading only.
+
+- `src/infrastructure/dependencies/src/execution_adapter/native.rs`: rewritten. `ExecutionAdapter::dependencies(&self) -> ExecuteProgramDependencies` replaces `ExecutionAdapter::execute`. New private step functions, plus `NativeLaunchTarget` and `NativeProgram`.
+- `src/infrastructure/dependencies/src/execution_adapter.rs`: the `#[cfg(windows)]` branch of `into_execute_program` (replaces `run_port`).
+- `src/infrastructure/execution/src/usvfs/mod.rs`: `unsafe impl Send for VirtualGameView`. The `_thread: PhantomData<Rc<()>>` field is removed. New cross-thread test and a shared session test lock.
+- `src/infrastructure/execution/src/launch_inputs.rs` and `lib.rs`: `ResolvedLaunch` is re-exported under `cfg(windows)`.
+
+### Validation
+
+- The application use-case tests use fake ports. They cover step order and progress events, warning mapping, Overwrite and Data mod output targets, missing and disabled output targets, cancellation before start and after VFS creation (handle dropped, no launch, retained INIs), an undrained Job, an unknown drain state, and a failed undrained supervision (all retained). They also cover a drained supervision failure (preserved first, not retained), failed preservation (retained), forced cancellation (after preserve and finish, with the caller's token cancelled while the post-run check receives an uncancelled token), and cause preservation. 9 tests.
+- CLI runner tests use the new entry point.
+- Focused run (use case and CLI exec tests): 16 passed, `/tmp/exec-ports-focused.log`. Full `bun run check` passed with 451 Rust tests, 2 release-version tests, and 119 tool tests, `/tmp/exec-ports-check.log`. `git diff --check` passed. Windows compilation and the new Windows test remain unverified here.
+
+### Standards review repair
+
+The standards review of `a449b66` (`/tmp/exec-ports-standards-review.md`) found these issues. One repair change fixes them:
+
+- H1: the `unsafe impl Send` SAFETY proof and this section now state the actual upstream facts: unlocked controller exports, no thread-local state, and exclusive ownership that prevents overlap.
+- H2: `CheckProfileState` keeps its unlinked token as a documented exception, with a code comment. The forced-cancellation test now cancels the caller's token inside the supervise fake and asserts it afterwards, so the check fake's uncancelled-token assertion proves the exception.
+- H3: `native.rs` no longer keeps inherited stream duplicates until output finishes. Process creation gives the child its own copies, so the duplicates now close when `launch_program` returns. A reason comment replaces the history comment. `ProgramOutput` now carries only the private streams. This lifetime change is not observable.
+- The dispositions for Cancellation propagation, Capability modules, the usvfs test, and the carried-over environment rows are corrected. The non-Windows `program_unsupported` wording and the residual-risk statement now match what actually happens.
+- J1: the `ExecuteProgram` entry-point alias is defined once, in `application::execution`, and used by composition and the CLI.
+
+Gate findings on the repair diff: `execution/types.rs` Use-case parameters and Use-case declaration order, and `execution/mod.rs` Use-case declaration order. Accepted as inapplicable: `ExecuteProgram` is an entry-point type alias whose cancellation argument comes last. It is not a use-case function, and `execute_program.rs` keeps the Dependencies, Output, Error, function order. The Cancellation propagation finding on `execute_program.rs` is the documented `CheckProfileState` exception in the table below.
+
+### Coding-style gate dispositions
+
+The gate remains non-clean. The CLI crate now enables `fn_traits`, so `runner.rs` calls the exec entry point with `.call_once(...)`.
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `src/application/src/execution/execute_program.rs` | Cancellation state preservation | Accepted. An unlaunched view is dropped on cancellation, which releases the native session the same way the old explicit close did; the user approved not reporting its teardown error. Forced cancellation reports `cleanup` after preservation and the post-run check. The staged profile is retained, not removed. |
+| `src/application/src/execution/execute_program.rs` | Cancellation propagation and checkpoints | Accepted, with one documented exception. The parent contract assigns checks between steps to the use case. Each is an inline `is_cancelled()` guard. The caller's token goes to `PrepareLaunchPlan`, `StageExecutionProfile`, `CreateVirtualFileSystem`, and `SuperviseProgram`. The other ports take no token, as before. Exception: `CheckProfileState` gets an unlinked `CancellationToken::new()` so that the post-run check still runs after the caller cancels. That is frozen behavior, moved from the old adapter, and a code comment records it. |
+| `src/application/src/execution/execute_program.rs` | Test public behavior | Accepted. Tests call the public use case with fake ports. They assert project-owned order, retention, and warning policy, not dependency internals. |
+| `src/application/src/execution/execute_program.rs` | Phase spacing; Narrow custom implementations; Use-case declaration order | Phase spacing fixed between resolve, prepare, projection, and warning mapping. The rest is accepted: the file declares Dependencies, Output, Error, then the instrumented function, and it adds no general-purpose facility. |
+| `src/application/src/ports/execution.rs` | Capability modules and public APIs | Accepted. The ports module is the existing capability interface. The handle fields and `AdapterState::downcast`/`downcast_ref` are `pub`, so adapters can build and read handles. The state is opaque only because its type is erased. Production application code never downcasts it; only the use-case test fakes do. |
+| `src/application/src/ports/execution.rs` | Narrow custom implementations | Accepted. `AdapterState` only wraps `Box<dyn Any + Send>` so application signatures carry no infrastructure types. It is not a runtime primitive. |
+| `src/application/src/ports/execution.rs`, `ports/mod.rs` | Use-case parameters | Accepted as inapplicable. These are port type declarations. Every port that takes cancellation takes it last. |
+| `src/infrastructure/dependencies/src/execution_adapter/native.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure adapter functions. Cancellation is last where present. |
+| `src/infrastructure/dependencies/src/execution_adapter/native.rs` | Cancellation propagation and checkpoints | Accepted. The checkpoint between view validation and native setup is the existing infrastructure checkpoint, moved unchanged. |
+| `src/infrastructure/dependencies/src/execution_adapter/native.rs` | Phase spacing; Narrow custom implementations | Phase spacing fixed around projection input, view configuration, and the drain query. The rest is accepted: the code moved from the old adapter and adds no new facility. |
+| `src/infrastructure/dependencies/src/execution_adapter.rs`, `execute_program.rs` | Use-case parameters; Use-case declaration order; Phase spacing | Accepted as inapplicable. These are composition methods, not application use cases. The thread entry keeps the old wrapper's order. |
+| `src/infrastructure/execution/src/usvfs/mod.rs` | Rustdoc format | Accepted as a false positive. The `// SAFETY:` comment before `unsafe impl Send` is the proof format that CODING_STYLE requires, not item documentation. |
+| `src/infrastructure/execution/src/usvfs/mod.rs` | Test public behavior; Phase spacing | Accepted. The Windows test exercises the native session's thread contract, which is a project boundary. Like the existing session test, it uses the private `VirtualGameView::load`, `ConfigureView::link_directory`, and the `SESSION_ACTIVE` static, because the public `configure` path needs a packaged executable layout. Setup, each thread step, and the assertions are separate blocks. |
+| `src/presentation/cli/src/main.rs` | Callable port invocation | Accepted as a false positive. `resources.execute_program(...)` is an inherent composition factory, not an application port call. |
+| `src/presentation/cli/src/runner.rs`, `main.rs` | Use-case parameters; Use-case declaration order; Narrow custom implementations | Accepted as inapplicable. The runner holds a presentation-owned entry-point type and passes cancellation last. |
+| `src/infrastructure/environment/src/execution_preparation.rs`, `export.rs` | Phase spacing; Use-case parameters | Unchanged here. The INI-fix table (commit `1e37225`) records `execution_preparation.rs` Phase spacing and both files' Use-case parameters. `export.rs` Phase spacing is recorded as unchanged baseline in the parent gate reconciliation table above. |
+| `src/application/src/execution/execute_program.rs` | Cancellation propagation and checkpoints; Test public behavior; Use-case parameters | Close-port removal: accepted. The checkpoint after file-system creation is still an inline guard owned by the use case, as the parent contract requires. The test fixture's drop recorder shows that the use case drops the handle; it does not inspect adapter internals. Dependencies stay first and cancellation stays last. |
+| `src/application/src/ports/execution.rs`, `native.rs` | Use-case parameters | Close-port removal: accepted as inapplicable. Only a port type and its adapter were removed. |
+
+## MO2 modlist order
+
+The user approved reading `profile/modlist.txt` in Mod Organizer 2 order. The first listed mod has the highest Mod Priority and the last has priority 0. Overwrite stays implicitly highest and game Data lowest. There is no migration: an existing list written in the old low-to-high order now reads with the order reversed. The skill references and `CONTEXT.md` say so, and tell users to reverse the mod entries by hand.
+
+- `snapshot::parse_modlist` (strict preparation, installation state, export) and `conflict_scan::parse_modlist` (conflict list, inspect, explain, and installation previews) collect entries in file order. They then return them lowest priority first, with priority = rank from the end of the file. Exec's inventory uses the strict parser. Every caller that iterates installed mods therefore keeps its low-to-high order.
+- `insert_disabled_mod` (renamed from `append_disabled_mod`) puts a new disabled mod before the first non-comment line, after any leading `#` lines. It keeps the BOM and reuses the file's last separator. New installs still get priority = number of installed mods, which is now the highest.
+- `ProjectedModState.list_position` now counts mod entries from the top of `modlist.txt`; comment lines are not counted. A new install is at 0, and a replacement keeps its current entry position. Transaction intent validation computes the replacement position with checked arithmetic and rejects an inconsistent plan as `transaction_failure`. The installation use case and transaction intent validation both use this meaning. The install preview prints this field.
+- `CONTEXT.md` (Mod Priority) and the skill references `execution.md` and `installation.md` describe the new order.
+- New tests:
+  - `first_listed_mod_wins_in_an_mo2_ordered_modlist`: a comment header, `+High` first, `+Base` last, and a conflicting `shared.txt`. `High` wins in both launch and strict preparation.
+  - `modlist_lists_the_highest_priority_first`: conflict scan priorities.
+  - `new_mods_are_inserted_at_the_top_after_leading_comments`: BOM, LF and CRLF, comment-only, and empty lists.
+  - `new_install_takes_the_top_of_an_mo2_ordered_modlist`: publication.
+  - `list_position_counts_from_the_top_of_the_mo2_modlist`: new and replacement previews.
+- Test fixtures with more than one mod now list the higher-priority mods first. They keep the same resulting priorities.
+- Gate findings on this diff: Use-case parameters (≤0.10) in `conflict_scan.rs`, `transactions.rs`, and `execution_preparation.rs`. Accepted as inapplicable: the changes are infrastructure parsers, a writer, intent validation, and test functions, and no signature changed apart from the `insert_disabled_mod` rename. A transient Phase spacing finding on `snapshot.rs` cleared after the parser was split into collection and priority-assignment blocks.
+
+## SafeDir removal and tokio::fs
+
+The user decided to drop `SafeDir` (cap-std) and use `tokio::fs` throughout. The decision is in [the exec discussion](../exec-performance-discussion.md#decision-drop-safedir-use-tokiofs-everywhere). The planned git rollback ticket covers recovery from bad writes. The change lands in two commits: first settings and game platform, then environment and its callers.
+
+### Part 1: settings and game platform
+
+- `infrastructure-settings` no longer uses cap-std or `libc`. `fs_access.rs` is deleted. Every settings read, layout check, and manifest write is async `tokio::fs`. `load_command`, readiness, and store are async, so the CLI dependency factory is now an async closure (`AsyncFnOnce`).
+- Settings manifest writes go directly to `mods.toml` after validation. The staged `temp/operation` copy, flushes, rename, and the compare-before-publish source check are gone, as is `SettingsAdapter::verify_source` (`settings_source_changed`). Pending work in `temp` still blocks a write. Export no longer compares settings source bytes or re-validates the binding before publication.
+- The layout check keeps entry names, entry types, required files, and content validation. It no longer walks trees to reject links, reparse points, or special files. Links are followed like ordinary entries.
+- `infrastructure-game-platform` no longer uses cap-std or `libc`. `fs_access/` and `separation.rs` are deleted. Steam validation checks directories and files by path, canonicalizes the game directory, and returns the canonical path instead of an open handle. It keeps the Steam structure, executable and default-INI checks, the reserved-archive check, and the appmanifest check. The same-directory identity check and the game/environment containment proof (an ancestry check) are removed. The validation ports no longer take the environment root.
+- Version reads and profile-source reads use `tokio::fs::read`. `read_file_version` now parses bytes.
+- A Steam root path that is a regular file is now treated like a missing root on Windows. Reading `<root>/steamapps/libraryfolders.vdf` through a file fails with `ERROR_PATH_NOT_FOUND`, which maps to `NotFound`, so the root has no libraries. On macOS the same read fails with `ENOTDIR` and the root is invalid. The old handle-based open rejected a non-directory root on both platforms. This behavior is accepted. `invalid_root_does_not_mask_later_library_discovery_cancellation` now makes the invalid root with a malformed `libraryfolders.vdf`, which fails on every platform. A check of the other tests converted in this branch found no other case where a file stands in for a directory and an error is expected.
+- Tests removed because they asserted dropped protections:
+  - settings: `failed_manifest_stage_blocks_a_later_store_and_preserves_all_artifacts`, `mutation_snapshot_refuses_changed_source_without_overwriting_it`, `nested_provider_symlink_is_rejected_as_unsafe`, `unsafe_disposable_entries_never_change_settings_behavior`, `manifest_symlink_is_rejected_without_reading_its_target`, `symlinked_root_ancestor_is_rejected`, and `root_directory_symlink_is_rejected`
+  - manifest writer: `failed_staged_validation_preserves_operation_state`, `edit_after_staging_is_not_overwritten`, `final_cancellation_preserves_the_validated_stage`, and `cleanup_failure_after_commit_returns_success_and_leaves_refusal_state`
+  - Steam validation: `rejects_symlinked_game_files_directories_and_manifest` and `rejects_symlinked_game_ancestor_and_directory`
+  - profile sources: `symlinked_profile_source_is_rejected`
+  - containment: the five separation tests
+- The remaining tests run on a Tokio test runtime. The manifest-writer replacement test now asserts only the direct write.
+
+Part 1 gate dispositions:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `settings/src/manifest_writer.rs`, `settings/src/layout.rs`, `game_platform/src/steam/libraries.rs` | Language-neutral review priorities | Accepted. Removing staging, flushes, source comparison, and link/reparse rejection is the user's explicit decision. Git rollback covers recovery. It is not a terseness trade. |
+| `settings/src/*`, `game_platform/src/*`, `dependencies/src/export_environment.rs`, `cli/src/runner.rs`, `cli/src/main.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure adapters, ports, and composition. Cancellation stays last where present. |
+| `dependencies/src/set_game_directory.rs` | Callable port invocation | Accepted as a false positive. It calls inherent adapter factory methods, not an application port. |
+| `settings/src/lib.rs`, `settings/src/layout.rs`, `game_platform/src/steam/validation.rs`, `game_platform/src/profile_sources.rs` | Narrow custom implementations | Accepted. The checks are direct `tokio::fs` calls grouped per validation step. No general-purpose facility is added. Phase spacing in these files is fixed; see the `exec --cwd` help section. |
+
+### Part 2: environment and callers
+
+Scope: `infrastructure-environment` (all modules), `infrastructure-dependencies` (`execution_adapter/native.rs`, Windows only), `mods` CLI (`error.rs` export advice), workspace `Cargo.toml` and `Cargo.lock`, and the `mods-cli` skill export and troubleshooting references.
+
+- `safe_fs.rs` (`SafeDir`, `SafeFile`, `EntryBudget`, `read_bounded`, `sync_tree`) and `export_publication.rs` (`MoveFileExW` no-replace publication) are deleted. `cap-std`, `cap-fs-ext`, and `same-file` leave the environment crate. `cap-std` and `libc` leave the workspace dependency table. Tokio gets the `fs`, `io-util`, and `rt` features. The environment crate no longer needs the Windows `Win32_Storage_FileSystem` feature.
+- The new `files.rs` has two helpers: `read_optional` (a missing file is `None`) and `validate_exact_entries` (the directory holds only allowed names).
+- Every environment read, walk, and write uses `tokio::fs`. The adapter methods and their ports are async: initialization assessment and publication, installation state, assessment and transactions, conflict scan and content reads, export, `prepare_execution`, `prepare_launch`, `derive_execution_inis`, `ExecutionInis::preserve`, `check_launch`, and `check_launch_with_spool`.
+- Walks follow links like ordinary entries. The no-follow opens, reparse-point and hard-link rejection, containment (ancestry) checks, byte caps, entry budgets, and depth limits are gone. A link cycle now stops only when the operating system reports a path or link-depth error. The conflict scan no longer reports `ReparsePoint`, `HardLink`, or `ContainmentEscape` problems.
+- Directory and file fsyncs are gone everywhere. Initialization and installation kept their stage-and-rename structure in this part; the next section removes it.
+- `meta.toml` default creation is the only `create_new` open (`OpenOptions::create_new`, then write and flush). Installation files are staged with `File::create`; the transaction already refuses a path that repeats.
+- Execution INIs: the compare-before-publish check (`profile_changed`) and the `preserved/` stage are gone. Preservation writes each changed INI directly to the canonical profile. A canonical INI edited while the game runs is overwritten.
+- Export: staging, source fingerprints, the second capture, the per-file hash check, and the Windows no-replace rename are gone. Export creates the new output folder and writes files into it directly, then sets each source modification time. Export now also runs on non-Windows hosts. `validate_destination` keeps two rules: the output must not exist, and its canonical parent must not be inside the canonical Environment Root. The Game Installation rule is gone. On failure the output folder is reported as `retained_partial_output`.
+- `native.rs` (Windows only, checked by reading): `prepare_launch_plan`, `stage_execution_profile`, `check_profile_state`, and `preserve_execution_profile` are async. The stage port borrows `&LaunchPlan`, so it clones the `PreparedLaunch` before the future starts. The other ports are unchanged.
+- Tests removed because they asserted dropped protections:
+  - `safe_fs.rs`: all tests (six cross-platform and four Windows-only)
+  - `export_publication.rs`: `publication_never_replaces_a_racing_destination` (Windows only)
+  - `derived_profile.rs`: `later_publication_failure_keeps_earlier_edit_and_retains_remaining_inis`, and the `concurrent` case of `uncertain_drain_deletion_and_concurrent_edits_retain_temporary_files`
+  - `execution_preparation.rs`: `preservation_rejects_hard_linked_inis_and_retains_child_edits` and `launch_rejects_a_symlinked_required_fallout_ini`
+  - `export.rs`: `mid_copy_write_failure_keeps_partial_bytes_and_typed_retained_path`, `timestamp_failure_keeps_copied_bytes_without_final_publication`, `changed_sources_and_existing_or_overlapping_destinations_fail`, `completed_stage_preserves_bytes_times_and_reports_unsupported_publication`, `cancellation_retains_owned_stage_without_creating_final_output`, and `selected_save_links_are_rejected`
+  - `manifest.rs`: `manifest_cap_is_deliberate_and_preserves_limit_cause`
+  - `profile.rs`: `profile_resource_caps_are_deliberate`, `save_validation_rejects_total_entry_cap`, and `save_validation_rejects_exhausted_depth_with_io_cause`
+  - `snapshot.rs`: `snapshot_resource_caps_are_deliberate`, `canonical_tree_collection_rejects_total_cap_with_io_cause`, and `provider_collection_and_validation_reject_exhausted_depth_with_io_causes`
+  - `conflict_scan.rs`: the Unix symlink-replacement block of `indexed_content_reads_hash_once_opened_and_report_namespace_replacements_as_failures`
+- Tests added: `existing_outputs_and_outputs_inside_the_environment_are_rejected` and `export_writes_bytes_and_times_directly_to_the_output`. The ignored release measurement `measure_launch_inventory_walk_on_twenty_thousand_files` stays and runs on a multi-thread Tokio runtime, as the CLI does.
+
+Code kept on synchronous `std::fs` (sync code outside an async context, or sync by design):
+
+- `infrastructure-archive` readers (`source.rs`): ZIP, 7z, and RAR readers need `Read + Seek` files.
+- `infrastructure-execution/build.rs`: a build script.
+- `child_output.rs`: the capture spool directory, spool files, drain threads, and `read`. The drain threads are OS threads, and the Windows launch port that prepares them is sync.
+- `launch_inputs/windows_inputs.rs`: one `fs::metadata` probe in sync program resolution.
+- `usvfs/mod.rs`: the native artifact read in sync VFS setup.
+- `ExecutionInis::drop`: `TempDir::keep` in a `Drop` impl.
+- `ExecutionInis::create`: `tempfile::Builder::tempdir_in` makes one uniquely named directory synchronously.
+- `export.rs` `set_modified`: `std::fs::File::set_modified` runs on `spawn_blocking`, because `tokio::fs::File` has no way to set times.
+
+Walk timing (ignored release test above; 4 mods × 50 directories × 100 files, 5,001 winners, 5 `prepare_launch` runs per test; host load average 13–18 during the runs). Before and after builds ran in turn, three times each:
+
+| Build | Per-run medians (ms) | Median (ms) |
+| --- | --- | --- |
+| Before (e55617a, sync `std::fs` walk) | 20.9, 23.6, 21.0 | 21.0 |
+| After (`tokio::fs` walk) | 28.5, 27.6, 26.3 | 27.6 |
+
+The first baseline (median 19.9 ms, `/tmp/tokio-fs-walk-before.log`) agrees. `tokio::fs` sends each directory read and metadata call through the blocking pool, so the walk is about 30% (6–7 ms) slower for 20,000 files. Logs: `/tmp/tokio-fs-walk-after*.log` and `/tmp/tokio-fs-walk-interleaved.log`.
+
+Part 2 gate dispositions:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `environment/src/publication.rs`, `derived_profile.rs`, `export.rs`, `manifest.rs`, `conflict_scan.rs` | Language-neutral review priorities | Accepted. Removing flushes, staged INI and export publication, source comparison, link/reparse rejection, and caps is the user's explicit decision. Git rollback covers recovery. It is not a terseness trade. |
+| All changed environment modules, `dependencies/src/execution_adapter/native.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are adapter internals and port bodies, not application use cases. `CancellationToken` stays the last parameter where present. |
+| `environment/src/files.rs`, `lib.rs`, `profile.rs`, `transactions.rs`, `conflict_scan.rs`, `export.rs`, `execution_preparation.rs`, `native.rs` | Narrow custom implementations | Accepted. `files.rs` has two small helpers over `tokio::fs::read` and `read_dir` that replace the larger `safe_fs.rs`. The rest are direct `tokio::fs` calls. |
+| `environment/src/lib.rs`, `execution_preparation.rs`, `transactions.rs` | Choose the narrow conditional form | Accepted. The flagged `match` statements have three arms (found, `NotFound`, other error) with different results; one `if let` cannot express them. |
+| `environment/src/conflict_scan.rs`, `snapshot.rs`, `transactions.rs` | Guard clauses | Accepted. The flagged code keeps the original structure: the `temp` check nests the two access modes, and loops `continue` past unrelated entries before one check that returns. |
+| `game_platform/src/profile_sources.rs` | Match only for multi-way logic (Part 1, 0.55) | Fixed. The two-arm `Option` match is now an `if let`. |
+
+The new "Prefer Option and Result combinators" rule was applied to the code written after it arrived: `derived_profile.rs` (deleted child INI) and `transactions.rs` (split of the staged path) use `ok_or_else(...)?`. Three-way `NotFound` matches and `let`-`else` branches that `continue` stay conditionals.
+
+### No staging for initialization and installation
+
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
+The user decided that initialization and installation also write directly.
+
+- Initialization creates `mods`, `profile`, `overwrite`, `cache`, and `temp` in the Environment Root, writes the Profile State and the support BSA, and writes `mods.toml` last. A partial layout without `mods.toml` makes a retry fail with `environment_root_not_empty`, so it is never mistaken for an initialized environment. The layout check runs on the root. `publication.rs`, `publish_initialization`, `LayoutLocation`, and `validate_stage` are removed; the check is now `validate_layout`. `stage_profile` is now `write_initial_profile`.
+- Installation loads the environment with mutation access, validates the intent, and, for an enabled replacement, records the visible plugins. Then it deletes the old `mods/<name>` for a replacement and creates `mods/<name>`. Extracted files go straight into that folder. `finish` writes `meta.toml`, validates the provider and the prospective namespace, and then writes `modlist.txt` (new install) or updates `plugins.txt` and `loadorder.txt` (enabled replacement, `update_plugin_lists`, formerly `stage_plugin_maintenance`). A last snapshot load checks the planned priority and enabled state. The backup folder, the renames, `publish_installation`, and the read-back of published profile files are removed. `visible_plugins` no longer takes a staged replacement folder.
+- A failure or cancellation after the mod folder is created leaves partial state: a partial or unlisted mod folder, or partly updated plugin lists. There is no rollback; git rollback covers recovery. The namespace check still runs, but after the files are written.
+- Pending-operation refusal: nothing creates `temp/operation` any more, so the operation-specific checks are removed. These are the `SnapshotLoad::Publication` mode, `load_during_publication`, the `OPERATION_DIRECTORY` constant, the exclusive `temp/operation` reservation in initialization and installation, and the `environment_publication_failed` error code (`ErrorCode::EnvironmentPublicationFailed` and `ErrorMarker::environment_publication_failed`). The general refusal of a non-empty `temp` (`manual_cleanup_required`) still has a purpose: failed execution keeps its derived INIs in `temp/execution-inis-*` for the user to inspect, and a live capture spool sits there during exec. The refusal is kept for initialization, installation, settings mutation, and exec. The reservation was also the only guard against two concurrent installs; none remains.
+- Tests removed: `lib.rs` `staged_initialization_has_no_canonical_mutation`, `publication_failure_before_cache_keeps_manifest_staged_and_refuses_initialization`, and `cancellation_before_publication_preserves_the_complete_stage`; `transactions.rs` `pending_operation_refuses_a_later_mutation`, `staging_does_not_mutate_canonical_state`, `unexpected_backup_entry_is_a_publication_failure_with_its_original_cause`, `backup_validation_keeps_cancellation_as_the_top_marker`, `a_mid_publication_failure_keeps_stage_and_backups_then_refuses_later_mutation`, `cancellation_preserves_staging_without_canonical_mutation`, `postcommit_cancellation_is_not_observed`, and `cleanup_failure_after_validation_still_returns_success`. Two tests lost only their `temp/operation` assertion and were renamed: `prior_temp_debris_is_rejected` and `failed_intent_validation_writes_nothing` (it now checks that no mod folder exists).
+- The `mods-cli` skill references (`setup.md`, `installation.md`, `troubleshooting.md`) now describe direct writes and what `manual_cleanup_required` means.
+
+Gate dispositions for this change:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `environment/src/transactions.rs`, `lib.rs`, `snapshot.rs`, `profile.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are adapter internals; `CancellationToken` stays last. |
+| `environment/src/transactions.rs`, `snapshot.rs` | Language-neutral review priorities; Readability before secondary cleanup | Accepted. Removing staging is the user's explicit decision, not a terseness trade. The install flow is now one straight sequence of writes. |
+| `environment/src/transactions.rs`, `lib.rs` | Test public behavior | Accepted. The remaining tests drive `InstallationTransaction` and the initialization port and assert files on disk. |
+
+The combinator rule is applied in `finish_committed_installation`, which checks the installed mod with `find`, `filter`, and `ok_or_else(...)?`.
+
+### `exec --cwd` help and Phase spacing pass
+
+- `mods exec --help` now describes `--cwd`: "Working directory for the program; defaults to the bound game installation directory. Program lookup still uses the caller's directory and PATH". The text comes from the field's doc comment in `commands.rs`. There were no help snapshot tests; the new test `exec_help_describes_the_working_directory_default` checks both parts of the text.
+- Phase spacing: blank lines were added at phase changes in each file that the branch gate flagged for this rule. The files are `environment` (`conflict_scan.rs`, `derived_profile.rs`, `execution_preparation.rs`, `execution_preparation/inventory.rs`, `export.rs`, `lib.rs`, `manifest.rs`, `profile.rs`, `profile_activation.rs`, `snapshot.rs`, `transactions.rs`), `settings` (`lib.rs`, `layout.rs`, `manifest_writer.rs`), `game_platform` (`steam/validation.rs`, `profile_sources.rs`), `dependencies` (`export_environment.rs`, `execution_adapter.rs`, `execution_adapter/native.rs`), and `application/src/execution/execute_program.rs`. Only blank lines changed. The per-edit gate reviews after these edits report no Phase spacing finding. The full-branch review still reports Phase spacing at 0.21 to 0.44 in most of the same files, so the finding is not cleared there. `profile_activation.rs` no longer appears. The Part 2 and no-staging rows are replaced by this row:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `settings/src/lib.rs`, `layout.rs`, `manifest_writer.rs`; `environment/src/lib.rs`, `transactions.rs`, `execution_preparation.rs`, `execution_preparation/inventory.rs`, `conflict_scan.rs`, `snapshot.rs`, `derived_profile.rs`, `profile.rs`, `export.rs`, `manifest.rs`; `game_platform/src/steam/validation.rs`, `profile_sources.rs`; `dependencies/src/export_environment.rs`, `execution_adapter.rs`, `execution_adapter/native.rs`; `application/src/execution/execute_program.rs` | Phase spacing (full-branch review, 0.21 to 0.44) | Accepted after one fix pass. Blank lines now separate guards, acquisition, transformation, writes, and output in the changed functions, and the per-edit reviews of these files are clean. The full-branch review gives no line numbers. The remaining finding cannot be traced to a specific block; adding more blank lines would split statements that form one operation. |
+
+## Export shares preparation with exec
+
+The design is in [exec-performance-discussion.md](../exec-performance-discussion.md), section "Design: export shares preparation with exec". It is done in two commits.
+
+### Part 1: neutral shared ports
+
+exec behavior does not change. The changes:
+
+- New capability module `application::ports::preparation` with the shared, single-step ports:
+  - `PrepareEnvironmentPlan` returns `EnvironmentPlan` (was `PrepareLaunchPlan` / `LaunchPlan`). `LaunchProvider` is now `EnvironmentProvider`.
+  - `ProjectProfile` returns `ProfileProjection` (was `ProjectExecutionProfile` / `ExecutionProfileProjection`).
+  - `StageProfile` takes a `ProfilePurpose` (`Execution` or `Export`) and returns `StagedProfile` (was `StageExecutionProfile` / `StagedExecutionProfile`).
+  - `ProfileWarning` moved here. `AdapterState` moved to its own `ports::adapter_state` module, because both port groups use it.
+- `ProfileProjection` holds only `warnings`. The design listed a `profile` handle too. With the Documents and LocalAppData lookup moved into `CreateVirtualFileSystem`, no later step reads that handle, so it is gone. The adapter still logs the projected plugin order.
+- `CreateVirtualFileSystem` now takes `(EnvironmentPlan, &StagedProfile, Option<ModName>, CancellationToken)`. It resolves Documents and LocalAppData and builds the profile mappings itself.
+- New application helper `application::preparation::prepare_environment`. It calls `PrepareEnvironmentPlan` and `ProjectProfile`, then maps each `ProfileWarning` to the new neutral `PluginWarning`. `ExecutionWarning` is now `Plugin(PluginWarning)` or `ProfileStateInvalid`. The CLI renders plugin warnings through `output::plugin_warning`, with the same text as before.
+- `infrastructure-execution`: `build_profile_configuration` is split.
+  - `build_profile_projection` validates the profile and builds the plugin projection. It compiles on every platform.
+  - `profile_mappings` builds the named-file, save, and invalidation-archive mappings. It stays Windows-only (and in tests), with `ProfileMappingInput`.
+  - `ProfileConfigurationError` is now `ProfileProjectionError`.
+- `infrastructure-dependencies`: new platform-neutral `environment_preparation::PreparationAdapter` wires the three shared ports through `prepare_environment_plan_port`, `project_profile_port`, and `stage_profile_port`. `native.rs` keeps only target resolution, the VFS, launch, supervision, output, preservation, and the post-run check. Until export uses the adapter, non-Windows builds mark it `expect(dead_code)`. Part 2 removes that attribute.
+- `infrastructure-environment`: `ExecutionInis` is now `StagedProfileInis`, and `derive_execution_inis` is now `stage_profile_inis(root, prepared, purpose, cancellation)`.
+  - `Execution` stages as before: directory prefix `execution-inis-`, only `FalloutCustom.ini` is rewritten, and it is created when absent.
+  - `Export` uses prefix `export-inis-`, derives with `ProfileIniPurpose::Export`, uses the embedded default archive list, and does not create an absent `FalloutCustom.ini`. Nothing calls it yet. The new test `export_staging_keeps_the_standalone_layout` covers it.
+
+Small order changes in exec:
+
+- The helper projects the profile right after preparing the plan. The output-target check now runs after projection, not between preparation and projection. The step test `data_mod_output_target_must_exist_and_be_enabled` now expects `project` in the recorded steps. A profile that fails projection now reports that error before an unknown output target.
+- The Documents and LocalAppData lookup now runs inside `CreateVirtualFileSystem`, after staging. If it fails, the error now also carries the retained INI path.
+
+The combinator rule was applied to the code this change touched in `execute_program`: the working-directory default uses `map_or_else`, and the missing output-target error uses `ok_or_else`.
+
+Windows-only code: `native.rs` and the Windows parts of `infrastructure-execution` cannot be compiled from macOS. `cargo check --target x86_64-pc-windows-msvc` fails in the `usvfs-sys` build script for `infrastructure-execution`, and in `zstd-sys` for `infrastructure-dependencies`. `application` and `infrastructure-environment` pass the Windows check. `native.rs` was checked by reading: every import is used, every used type is imported, and `profile_mappings` borrows `prepared` only for the call, before `ViewConfiguration::new` moves its fields.
+
+#### Gate dispositions for Part 1
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/ports/adapter_state.rs` | Narrow custom implementations; Use-case parameters | Accepted. The type moved unchanged from `ports/execution.rs`. It is a module now because the preparation and execution ports both use it. |
+| `application/src/ports/preparation.rs`, `ports/execution.rs` | Use-case parameters; Narrow custom implementations | Accepted as inapplicable. These are port type aliases. Each port takes its business values first and `CancellationToken` last. No custom infrastructure is added. |
+| `application/src/preparation/prepare_environment.rs` | Use-case declaration order; Use-case parameters | Accepted as inapplicable. This is a capability helper that two use cases share, not a use case. It takes the two ports first and `CancellationToken` last. |
+| `application/src/execution/execute_program.rs`, `execution/types.rs` | Test public behavior; Use-case parameters; Use-case declaration order | Accepted. The tests call the public use case with fake ports, as before. The signature and declaration order are unchanged. |
+| `infrastructure/execution/src/profile.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure functions that take one input struct, not use cases. |
+| `infrastructure/environment/src/derived_profile.rs`, `execution_preparation.rs` | Use-case parameters | Accepted as inapplicable. `stage_profile_inis` is an infrastructure method; `CancellationToken` stays last. A Choose-the-narrow-conditional finding (two `match` blocks on the purpose) was fixed by mapping the purpose once. A Reason-comments finding on a restating Rustdoc summary was fixed by removing the summary. |
+| `infrastructure/dependencies/src/environment_preparation.rs` | Use-case parameters; Narrow custom implementations; Use-case declaration order; Phase spacing | Accepted. The adapter builds port closures, as the other composition modules do. A Callable-port-invocation finding came from the infrastructure function having the same name as the `project_profile` port field. It was fixed by renaming the function `build_profile_projection`. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable, as recorded earlier for this file. These are composition functions, not use cases. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs`, `environment_preparation.rs` | Callable port invocation (full-branch run, 0.56 and 0.48) | Partly fixed, rest accepted. The adapter methods that build ports had the same names as the port fields, so `preparation.project_profile()` looked like a direct port call. They now end in `_port`, like `prepare_export_port`. The per-edit recheck is clean, but the full-branch run still reports the rule. The remaining matches are private adapter functions such as `create_virtual_file_system(...)` and `preserve_execution_profile(...)`, which share names with port fields. They are the port bodies, not port calls; native.rs had this finding at 0.45 before this change. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs` | Cancellation propagation and checkpoints (full-branch run, 0.41) | Accepted. The token is passed through unchanged. The one checkpoint, after `ViewConfiguration::new` and before `VirtualGameView::configure`, moved with `create_virtual_file_system` from the earlier code. |
+| `infrastructure/environment/src/derived_profile.rs` | Reusable capability ports (full-branch run, 0.50) | Accepted for Part 1. Shared staging still attaches the exec-named `RetainedExecutionInis` when staging fails. Only exec stages in this commit, so the error text stays correct. Part 2 decides how an export stage failure is reported. |
+| `presentation/cli/src/runner.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. The change only renders a nested warning enum. |
+
+Parent decisions after Part 1: the three exec order changes and the removal of the `ProfileProjection` handle are accepted.
+
+### Part 2: export on the shared ports
+
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
+`export_environment` now composes these steps:
+
+1. `ValidateExportDestination(output)`: the path is absolute, it does not exist, and its parent is not inside the Environment Root. Unchanged rules.
+2. `prepare_environment` (shared helper): `PrepareEnvironmentPlan` and `ProjectProfile`, then the plugin warnings. Part 2 first validated the Steam installation inside export's `PrepareEnvironmentPlan` composition; the follow-up below removes that.
+3. `StageProfile(ProfilePurpose::Export)`: derived INIs in `temp/export-inis-*`.
+4. `ListExportFiles(&plan, &staged, include_saves)`: Data winners except game Data, the staged INIs, `plugins.txt`, `loadorder.txt`, `Plugins.fnvviewsettings` and `modlist.txt` from the profile, `cache/Fallout - Invalidation.bsa`, and saves when requested. Each file has its size and a source in an opaque `ExportSources` table.
+5. `plan_inventory` (unchanged): folds directory spelling and refuses structural conflicts.
+6. Without `--dry-run`, `WriteExport(sources, files, output)` checks the destination again, creates it, copies each file, and sets its modification time. A staged INI gets the time of its canonical profile file, as before.
+7. `DiscardStagedProfile(staged)` removes the stage on every path after staging: success, `--dry-run`, and failure. If removal fails, the error carries `RetainedProfile`. A failure inside staging is handled by the review repair below.
+
+Deviation from the task text: `WriteExport` does not remove the stage itself. The use case calls the new shared `DiscardStagedProfile` port after the write or after a failure, so one step handles the dry run, success, and every failure. A stage left in `temp` would make the next exec or export refuse with `manual_cleanup_required`.
+
+`ExportEnvironmentOutput` has a new `warnings: Vec<PluginWarning>`. The CLI prints them on stderr with the same text as exec, also on success.
+
+Removed:
+
+- `PrepareExport`, `PreparedExport`, `PublishExport`, and the `ExportSnapshot` capture.
+- `prepare_execution`, `PreparedExecution`, `ExecutionVisibleFile`, and the strict snapshot path behind them: `load_execution`, file lengths and times, provider metadata bytes, `ProviderFileDetails`, `validate_execution_profile`, and the owned-spool skip in `snapshot::load_inner`.
+- The runtime `Fallout_default.ini` read: `ProfileIniInputs::read` (non-execution mode) and its `fallback` field. `StagedProfileInis::create` no longer takes the game directory.
+- `RetainedExecutionInis`. The neutral `RetainedProfile` (in `application::ports::preparation`) replaces it on the shared stage. exec still prints `retained_execution_inis` with the same advice. export prints `retained_export_stage` and says the stage holds only derived copies and must be deleted before the next exec or export.
+
+Other changes:
+
+- The projection error phase is now `profile_projection` (was `execution`), because export uses the same port. A foreign handle in the shared ports now reports `environment_invalid` (was `execution_supervision_failed`). This path cannot happen in normal use.
+- The private port-body functions in `native.rs` no longer share names with port fields: `resolve_target`, `build_virtual_file_system`, `start_program`, `supervise_child`, `preserve_inis`, `finish_streams`, `check_retained_state`. The shared adapter's projection function is `project_plan`. In the environment export module, the private functions are `check_destination` and `write_output`.
+- `PreparationAdapter` and its `*_port` factory methods are replaced by `PreparationPorts::new(root, binding)`, a struct whose fields are the four shared ports. Composition moves the fields into the dependency bundles, so no call looks like a direct port call. The non-Windows `expect(dead_code)` is gone, because export uses the ports on every platform.
+
+#### Invalidation archive order
+
+Before `211ad59`, every purpose put `Fallout - Invalidation.bsa` first in `sArchiveList`. That commit changed execution copies to put it last. The discussion record asks to "append the managed invalidation archive once using existing transformation semantics" and to preserve the effective list. This wording is about adding the archive once to the existing list, and the existing transformation at that time put it first. No game, JIP LN NVSE, or usvfs reason for the last position was recorded. Mod Organizer 2 inserts its invalidation archive at index 0 (`m_DataArchives->addArchive(profile, 0, invalidationBSAName())` in `modorganizer-game_gamebryo/src/gamebryo/gamebryobsainvalidation.cpp`). Both purposes now put it first. This changes exec's derived `FalloutCustom.ini`; the tests that expected the last position were updated. This was not checked in game.
+
+#### User-visible export changes
+
+- Export accepts what exec accepts: extra entries in the Environment Root, and a generated BSA that is copied as it is.
+- Export and `export --dry-run` create a missing `meta.toml` for enabled mods, and they briefly create and remove an INI stage in `temp`. A non-empty `temp` now makes export refuse with `manual_cleanup_required`, like exec.
+- Without `sArchiveList` in `FalloutCustom.ini` or `Fallout.ini`, export uses the embedded default list.
+- Export prints plugin warnings.
+- The `LoadOrderNotEnforced` warning text still says the order is not enforced "through virtual timestamps". The text is the same for both commands, as decided.
+
+#### Checks for Part 2
+
+Windows: `cargo check --target x86_64-pc-windows-msvc` passes for `application`, `infrastructure-environment`, `infrastructure-settings`, and `infrastructure-game-platform`. `infrastructure-execution` and `infrastructure-dependencies` cannot build for Windows here (`usvfs-sys`, `zstd-sys`). The `native.rs` change is a rename of private functions only, checked by reading: every definition and call site was renamed by the same rule, and the port field names are unchanged.
+
+#### Gate dispositions for Part 2
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/export/export_environment.rs` | Use-case parameters; Use-case declaration order; Test public behavior | Accepted. The use case keeps its signature and declares Dependencies, Output, Error, then the function. The tests call the public use case with fake ports. |
+| `application/src/export/export_environment.rs` | Callable port invocation (per-edit, 0.44) | Accepted as a false positive. Every port is called with `.call(...)`. The only direct call is the shared helper `prepare_environment(...)`, which is a function, not a port. |
+| `application/src/export/export_environment/inventory.rs` | Preserve causes at owned boundaries | Accepted. The `DataRelativePath` error keeps its cause through `.context`. The byte-total overflow has no source error. The only change is that the function returns `ErrorMarker` reports and the use case adds `ExportEnvironmentError`. |
+| `application/src/export/types.rs`, `application/src/ports/preparation.rs` | Use-case parameters; Custom primitive justification | Accepted. The port aliases take business values first and `CancellationToken` last. `RetainedProfile` is a typed report attachment like `RetainedExport`; its Rustdoc states why it exists. |
+| `infrastructure/environment/src/export.rs` | Use-case parameters; Use-case declaration order; Phase spacing | Accepted as inapplicable for the infrastructure module. A Callable-port-invocation finding (0.51) was fixed by renaming the private functions to `check_destination` and `write_output`. A Test-public-behavior finding (0.46) was fixed by testing through the three public ports. |
+| `infrastructure/environment/src/snapshot.rs`, `profile.rs`, `execution_preparation.rs`, `derived_profile.rs` | Use-case parameters | Accepted as inapplicable. These are infrastructure functions; the strict-path parameters were removed and `CancellationToken` stays last. |
+| `infrastructure/dependencies/src/export_environment.rs` | Use-case parameters; Phase spacing; Narrow custom implementations; Use-case declaration order | Accepted. The composition wires ports, as the other composition modules do. After the follow-up it contains no logic. |
+| `presentation/cli/src/runner.rs` | Test public behavior | Accepted. The runner test drives the public CLI entry point with fake export ports and checks stdout and stderr. |
+| `infrastructure/environment/src/derived_profile.rs` | Reusable capability ports (Part 1, 0.50) | Fixed. Shared staging attaches the neutral `RetainedProfile`, and each command maps it to its own message. |
+| `infrastructure/dependencies/src/execution_adapter/native.rs`, `environment_preparation.rs` | Callable port invocation (Part 1 0.56 and 0.48; final Part 2 run 0.57 and 0.64) | Not cleared, accepted as a false positive after two fixes. First, the private port-body functions were renamed (listed above). Second, `PreparationPorts` replaced the `*_port()` factory methods, so composition only moves struct fields. The full-branch run still reports the rule. A search of both files for any call syntax on the 14 port names (`prepare_environment_plan(`, `create_virtual_file_system(`, and the others) finds none, and neither file invokes a port at all: they only build port closures that call infrastructure functions. Earlier reviews recorded the same false positive for other composition files. |
+| `infrastructure/environment/src/snapshot.rs` | Prefer Option and Result combinators; Choose the narrow conditional form | Accepted. The touched `temp` check returns an access-dependent error when the first entry exists; it is a guard, not a pure conversion. The `let ... else` after `read_metadata` returns the finished inventory early and the rest of the function continues, so no single combinator expresses it. |
+
+### Follow-up: export uses exec's preparation unchanged
+
+- Export no longer validates the Steam installation before preparation. The user's direction is that export and exec behave the same until their final step, and exec does not validate Steam. Both commands now take `prepare_environment_plan`, `project_profile`, `stage_profile`, and (for export) `discard_staged_profile` from the same `PreparationPorts::new(root, binding)`. The export composition only adds the export-specific ports. An invalid game directory now fails where preparation reads it, as in exec, and no longer fails with the Steam validation error first.
+- `skills/mods-cli/SKILL.md` no longer describes `export --dry-run` as free of side effects. Like exec, it creates a missing `meta.toml` for enabled mods and briefly stages derived INIs in `temp`. It can still run without extra confirmation.
+- With the validation wrapper gone, nothing in `infrastructure-dependencies` calls a port any more on any platform (no `.call(` or `.call_once(` in the crate), so its `#![feature(fn_traits)]` is removed. Otherwise the `unused_features` lint fails clippy.
+- Gate: the per-edit review of `infrastructure/dependencies/src/export_environment.rs` reports Use-case parameters (0.20). Accepted as inapplicable: this is a composition method with no parameters beyond the binding.
+
+### Review repair (export on shared ports)
+
+The review is in `/tmp/export-shared-review.md` (range `fafb661..3ba2b95`). This repair covers its findings.
+
+- M1: a failed `StageProfile(Export)` no longer leaves `temp/export-inis-*`. `StagedProfileInis::create` removes the partial export directory on any staging failure, including cancellation, and reports `RetainedProfile` only if the removal fails. A failed execution stage is still kept and reported, as before. The export stage is now removed on every path, before or after staging succeeds. The new test `a_failed_export_stage_is_removed_but_a_failed_execution_stage_is_kept` covers both purposes.
+- Accepted deviation from "Cancellation state preservation": export removes its stage after cancellation, both inside staging and in the use case after staging. The stage contains only derived copies of canonical INIs and no user-authored state, so removing it loses nothing and keeps `temp` empty for the next exec or export.
+- L1: if the write succeeds and only the stage removal fails, the use case attaches the new `CompletedExport` report. The CLI then prints "The export output is complete. Only the temp stage remains." next to `retained_export_stage`. The exit status stays 1.
+- L2: the `retained_partial_output` advice now says it is the partial output folder that export wrote into directly, not a staging folder.
+- L3: `prepare_launch` sorts winners by comparison key, so directory-spelling ties in the export plan no longer depend on hash order. Exec receives the same winners in sorted order. Ignored release measurement `measure_launch_inventory_walk_on_twenty_thousand_files`, medians of 5 runs each: before 26.2, 26.3, 25.8 ms; after 26.9, 26.4, 29.0, 27.4, 28.1, 26.9 ms. That is about 1 ms (4%) slower in the middle, within the spread of the later runs. The machine was not otherwise idle.
+- L4: the `PreparationPorts::new` Rustdoc now says that preparation uses the binding as loaded and does not verify the Steam installation or build.
+- Nit: `export.md` now says the export `sArchiveList` puts the invalidation archive first, followed by the profile list. It also describes the complete-output message.
+- Minor: the export use-case test uses the imported `Report`. `PreparedEnvironment` and its fields are `pub(crate)`; only the application crate uses them.
+
+Gate dispositions for the repair:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/derived_profile.rs` | Cancellation state preservation (0.77) | Accepted deviation, as recorded above. Only the export stage is removed after a cancelled or failed staging. It holds derived copies and no user-authored state. The execution stage is still kept. |
+| `infrastructure/environment/src/derived_profile.rs` | Phase spacing; Test public behavior | Accepted. The failure path separates removal from reporting. The new test uses a test-only thread-local hook, like the existing `CREATE_CONCURRENT_METADATA` hook, because a cancellation between files cannot be triggered from outside. |
+| `application/src/export/export_environment.rs` | Choose the narrow conditional form (0.40, per-edit 0.46) | Fixed. The nested match was flattened into one `match` on the export and removal results, and the final full-branch run no longer reports the rule. |
+| `application/src/export/export_environment.rs` | Import placement and use (0.32) | Accepted as a false positive. After the qualified `rootcause::Report` in the test was replaced, the file has no block-local import and no repeated qualified path. Only standard `fmt::`, `tracing::instrument` and enum-variant paths remain. |
+| `presentation/cli/src/error.rs` | Phase spacing | Accepted. The retained-stage block keeps the lookup, the completed-output line, and the advice together as one output step. |
+
+### Read-only sources in export (fix G)
+
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
+Bug from the user's Windows machine: export stopped after `Data/UIO/supported.txt`, whose source `mods/UIO - User Interface Organizer/UIO/supported.txt` is read-only. `tokio::fs::copy` carries the read-only state to the copy (the attribute on Windows, the mode on Unix). The old `set_modified` then opened the copy for writing to set its time, and that failed with access denied. The SafeDir export before this branch wrote the bytes itself, so no read-only state carried over.
+
+Fix: `set_modified` now opens the copy only with the right to change its times, then calls `File::set_modified` on a blocking thread.
+
+- Windows: `OpenOptionsExt::access_mode(FILE_WRITE_ATTRIBUTES)`. The read-only attribute denies data writes and deletion, not attribute or time changes. The constant comes from the `windows` crate (new feature `Win32_Storage_FileSystem` for `infrastructure-environment`).
+- Other platforms: a read-only handle. `futimens` with explicit times needs file ownership, not write permission.
+- The copy keeps its read-only state. Nothing clears it.
+
+Why not `filetime`: the task suggested `filetime::set_file_mtime`. Its 0.2.29 source (`src/windows.rs`) opens the path with `OpenOptions::new().write(true)`, which requests generic write access and fails on a read-only file in the same way. `fs-set-times` 0.20.3 tries write access and then read access, and then calls `SetFileTime`, which needs `FILE_WRITE_ATTRIBUTES` and so also fails with a read handle. Neither crate fixes this case, so the fix uses the standard library directly and adds no dependency.
+
+Regression test `export_copies_a_read_only_source_with_its_bytes_and_time` makes `overwrite/Opaque.bsa` read-only through std permissions (mode 0444 on Unix, the read-only attribute on Windows), exports it, and checks that the export succeeds, the bytes and the time match, and the copy is still read-only. The test restores write access afterwards so the temporary directory can be removed on Windows. On macOS the test failed without the fix (`PermissionDenied` from the open in `set_modified`, `export.rs:393`) and passes with it. It was not run on Windows here; `cargo clippy --target x86_64-pc-windows-msvc -p infrastructure-environment --all-targets` passes.
+
+Other places in this branch that write to a file that may be read-only. None of them uses the time-setting open, so this fix does not apply; they are listed for a decision:
+
+- INI preservation (`StagedProfileInis::preserve_inner`) writes the child's edits into the canonical profile INI with `tokio::fs::write`. A read-only canonical INI makes preservation fail; the staged INIs are kept and reported as `retained_execution_inis`.
+- Install and profile maintenance overwrite canonical files with `tokio::fs::write`: `profile/modlist.txt` (`transactions.rs`), `profile/plugins.txt` and `profile/loadorder.txt` (`profile.rs`), and `mods.toml` (`settings/manifest_writer.rs`). A read-only file makes the command fail with `io_failure`. I did not check whether the code before this branch handled read-only copies of these files.
+- Not affected: extraction creates new files in a new mod folder and does not copy archive attributes; the staged profile INIs, the export stage, and missing `meta.toml` files are all new files; reading a read-only canonical INI during staging works.
+
+Gate dispositions for fix G:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/export.rs` | Use-case parameters; Phase spacing; Narrow custom implementations; Use-case declaration order | Accepted as inapplicable, as recorded for Part 2. `set_modified` is a private infrastructure helper. It uses the standard library's `OpenOptionsExt::access_mode` because neither `filetime` nor `fs-set-times` opens a file with only `FILE_WRITE_ATTRIBUTES` (see above). |
+| `application/src/export/export_environment.rs` | Cancellation state preservation (0.52, first seen after the review repair) | Accepted, the same deviation as for `derived_profile.rs`: the use case removes the export stage after cancellation, because the stage holds only derived copies. |
+
+### Load order through plugin and BSA times (change H)
+
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
+Decision: `docs/exec-performance-discussion.md`, "Decision: enforce load order through plugin and BSA times". Both commands now run one shared step that gives the Data-root plugins and BSAs modification times in load order.
+
+Design:
+
+- Pure ordering: `domain::load_order_times(candidates, load_order, archive_list)` in `domain/src/load_order.rs`. Each `LoadOrderCandidate<T>` has a caller handle `file`, its `DataRelativePath`, and its current time. It returns `(file, time)` pairs in time order. The rules:
+  - Positions start at 2000-01-01T00:00:00Z and add one minute each.
+  - First the archives named in the derived archive list, in list order. Then other archives that no plugin loads, in current-time order (ties by name). Then plugins in `loadorder.txt` order, then unlisted plugins in current-time order (ties by name).
+  - An archive whose stem starts with a plugin stem gets that plugin's time. The longest stem wins; for equal stems (`Mod.esm` and `Mod.esp`) the earlier plugin wins. Membership in the archive list takes precedence over a plugin match.
+  - Names match case-insensitively (`case_fold_key`). Only Data-root files count. Every present plugin gets a time, because `loadorder.txt` lists active and inactive plugins. `loadorder.txt` names that are not present take no position.
+- The derived archive list is now one domain function, `derived_archive_list`, which `derive_profile_ini` also uses. The canonical list selection (`FalloutCustom.ini`, then `Fallout.ini`, then the built-in default) is now `selected_archive_list` in `derived_profile.rs`, shared by staging and the new step. The step reads the canonical texts from the plan, so it does not read the INIs again.
+- Shared port: `SetLoadOrderTimes = Fn(&EnvironmentPlan, LoadOrderTarget, CancellationToken)` in `application::ports::preparation`, with `LoadOrderTarget::{Sources, Export(PathBuf)}`. It is one step with one capability, like `StageProfile` with `ProfilePurpose`. `PreparationPorts` builds it for both compositions from `EnvironmentAdapter::set_load_order_times_port` (`environment/src/load_order.rs`).
+- The adapter takes the Data-root winners of the plan plus the generated `Fallout - Invalidation.bsa` from `cache`, reads their current times, and calls the pure function. It then sets each time with the attributes-only open from fix G, now `files::set_modified`:
+  - `Sources` (exec): the physical winning files, in the game's `Data`, the Data Mods, and Overwrite, plus the cache invalidation archive. A file that already has its time is skipped, so a second run opens no files.
+  - `Export(output)`: `output/Data/<name>` for every exported file. Winners from the game's own Data are not exported, so they are skipped. They still take their positions, so exported plugins keep the same times as under exec.
+- exec: the step runs after projection and the output-target check, and before staging, so the VFS is created after it. A failure gets `phase = load_order` (set with `set_phase_if_missing`, as in `install_archive`) and carries no `RetainedProfile`, because nothing is staged yet.
+- export: the step runs after `WriteExport`, only when not `dry_run`. A failure gets `phase = load_order` and carries `RetainedExport`, because the output is written but not finished. The stage is still discarded.
+- `WriteExport` no longer sets any time. A copy keeps the time that `tokio::fs::copy` gives it: the source time on Windows (`CopyFileExW`), the copy time on macOS and Linux. `ExportSource.modified` and the `ExportOrigin.time_source` indirection are removed, so staged INIs no longer take their canonical file's time.
+- `ProfileWarning::LoadOrderNotEnforced` and `PluginWarning::LoadOrderNotEnforced` are removed, with their CLI text, tests, and the skill reference. The `unlisted_plugin` text no longer says "projected order uses backing-file modification time". It now says the plugin gets a load-order time after the listed plugins, in current modification-time order. `docs/acceptance/issue-33.md` still names the old warning; it records past evidence, so it is unchanged.
+
+Tests:
+
+- Pure ordering (`domain/src/load_order.rs`): archive-list archives first in list order, then archives without a plugin by current time; listed plugins (case-insensitive, comments and blank lines skipped, missing names skipped) then unlisted plugins by current time; archives take the time of the longest matching plugin stem, case-insensitively, and the archive list overrides a plugin match; only Data-root plugins and archives get a time.
+- exec use case: `set_load_order_times` runs with `LoadOrderTarget::Sources` between `project` and `stage`, so before `create`. A failed step stops before staging with `phase = load_order` and nothing retained.
+- export use case: the step runs with `LoadOrderTarget::Export("/output")` after `write` and before `discard`. A failed step reports `phase = load_order` and `RetainedExport`, and the stage is still removed.
+- Adapter, exec (`load_order.rs`): times on the cache invalidation archive, a game Data BSA and master, a read-only Overwrite plugin, and its archive; a nested texture keeps its time.
+- Adapter, export (`export.rs`, `export_times_output_plugins_and_archives_in_load_order`, replacing the fix G test): the source plugin and two archives are read-only; export and the step succeed, the bytes match, the copy stays read-only, the output plugins and archives get their load-order times, `FalloutNV.esm` is not exported, and a nested Data file and `profile/Fallout.ini` keep times from after 2000-01-02. This passes on macOS; it was not run on Windows here.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain --all-targets -- -D warnings` passes. It could not compile `infrastructure-execution` (usvfs-sys), `infrastructure-dependencies`, or the `mods` CLI (zstd-sys through the dependencies crate). The one Windows-only change there, the new `set_load_order_times` field in `execution_adapter/native.rs`, was checked by reading.
+
+Skill and README updates: `execution.md` has a new "Load order through file times" section and no longer names `load_order_not_enforced`. `export.md` describes copy times and the output retiming. `troubleshooting.md` has a row for `phase = load_order`. `README.md` no longer says that exec does not enforce plugin order.
+
+The projection tests in `infrastructure/execution/src/profile.rs` now expect one warning fewer each (6 and 2), because the projection no longer adds `LoadOrderNotEnforced`.
+
+Gate dispositions for change H:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/load_order.rs` | Use-case parameters (0.55); Phase spacing (0.28); Use-case declaration order (0.11) | Accepted as inapplicable. The file holds an adapter port and a private helper, not a use case. `LoadOrderInputs::apply(self, target, cancellation)` takes the token last; `LoadOrderInputs` is the plan data that the port copies so the future does not borrow the plan. Phases in `apply` are separated by blank lines. |
+| `domain/src/load_order.rs` | Phase spacing (0.30); Use-case parameters (0.14) | Accepted. Classification, sorting, and time assignment are separated by blank lines. It is a pure domain function with no dependencies or token. |
+| `domain/src/profile_state.rs` | Focused use-case orchestration (0.32) | Accepted as a false positive. `profile_state.rs` is the domain capability module for profile INIs, not a use-case file; `derived_archive_list` is a profile-INI rule shared by `derive_profile_ini` and the load-order step. |
+| `application/src/ports/mod.rs` | Capability modules and public APIs (0.50) | Accepted. It re-exports the new `SetLoadOrderTimes` port and `LoadOrderTarget`, which the adapter and composition crates must name, like the other preparation ports. |
+| `application/src/execution/execute_program.rs` | Cancellation state preservation (0.52, new) | Accepted as a false positive. The new step runs before staging and removes nothing; on cancellation it returns `operation_cancelled` with `phase = load_order`. Times already set stay set; they are derived from the profile and are set again on the next run. |
+| `infrastructure/environment/src/files.rs` | Prefer Option and Result combinators (0.51); Use-case parameters; declaration order | Accepted. The `match` in the existing `read_optional` maps `NotFound` to `None` and keeps other errors, which is three-way branching. The new `set_modified` uses combinators only. The file has no use case. |
+| `infrastructure/environment/src/export.rs`, `derived_profile.rs`, `application/src/export/export_environment.rs`, `execute_program.rs`, `infrastructure/dependencies/src/*` | Use-case parameters; Phase spacing; Test public behavior; Callable port invocation | Unchanged dispositions from earlier sections. The Callable port invocation findings on `environment_preparation.rs` (now 0.72) and `native.rs` remain false positives and still need a `/coding-style-gate` override. |
+
+Full check: `bun run check` exit 0; 424 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
+### Export can include the game's own Data winners (change I)
+
+Decision: `docs/exec-performance-discussion.md`, "Decision: export can include the game's own Data winners".
+
+- CLI: new optional named flag `--include-game-data` on `export` (`ExportArgs.include_game_data`), with help text. Syntax: `mods [--environment PATH] export OUTPUT [--include-saves] [--include-game-data] [--dry-run]`.
+- Use case: `export_environment(dependencies, output, include_saves, include_game_data, dry_run, cancellation)`. The flag is a business input. It goes to `ListExportFiles` next to `include_saves`, to `plan_inventory`, and to the load-order step.
+- `ListExportFiles` is now `Fn(&EnvironmentPlan, &StagedProfile, include_saves, include_game_data, CancellationToken)`. The adapter lists `SteamData` winners only with the flag. Game root files are not winners, so they are never listed.
+- `plan_inventory(candidates, include_game_data)` keeps `SteamData` files only with the flag. The generated invalidation archive wins: a `SteamData` file at the same path as a `GeneratedInvalidation` file is dropped. A non-game Data file at that path still fails as a duplicate path, as before.
+- `LoadOrderTarget::Export` is now `{ output, include_game_data }`. With the flag, the base game plugins and BSAs in the output also get load-order times. They already took their positions before, so the times of the other files do not change. The load-order inputs now also drop any Data winner named `Fallout - Invalidation.bsa`, because the generated archive replaces it. This applies to exec as well, where the virtual file system maps the generated archive over it; Steam validation already refuses such a file in the game's Data folder.
+- Without the flag, the listing, the plan, the output, and the times are unchanged. The dry-run preview already renders `steam_data` providers, so its format is unchanged.
+
+Tests:
+
+- CLI parsing: the flag parses with the other export options, and all three flags default to off. The dispatch test passes `--include-game-data` in its dry-run case and checks that the flag reaches `ListExportFiles`.
+- `plan_inventory` (new `inventory.rs` tests): game Data files are kept only with the flag, with the byte totals; the generated invalidation archive wins over a game Data copy, matched case-insensitively.
+- Use case: with and without the flag, `Data/Base.esm` is in the output only with the flag, the byte total changes, and the flag reaches `ListExportFiles` and the load-order step.
+- Adapter listing: `Data/FalloutNV.esm` is listed only with the flag.
+- Adapter export with the flag: `Data/FalloutNV.esm` is copied with its bytes and gets load-order position 2, between `Opaque.bsa` (1) and `Mod.esp` (3).
+- Adapter exec: a game Data `Fallout - Invalidation.bsa` winner keeps its time; the generated archive gets position 0.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain --all-targets -- -D warnings` passes. As before, `infrastructure-execution`, `infrastructure-dependencies`, and the CLI could not be compiled for Windows here. Change I does not touch Windows-only code.
+
+Docs: `export.md` (syntax, what the flag adds, invalidation precedence, load-order times, preview provider kind), `commands.md` (syntax), and the `SKILL.md` reference list.
+
+Gate dispositions for change I:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/export/export_environment.rs`, `export/types.rs`, `export_environment/inventory.rs` | Use-case parameters | Accepted. The use case takes dependencies first and the token last. `include_game_data` is a named business input next to `include_saves`, as the task requires; it is not hidden in a bag. |
+| `infrastructure/environment/src/export.rs`, `load_order.rs` | Use-case parameters | Accepted as inapplicable: adapter ports and private helpers, token last. |
+| `presentation/cli/src/runner.rs` | Test public behavior (0.38); Use-case parameters (0.15) | Accepted. The dispatch test checks the public CLI contract: the parsed flag reaches the export port. |
+| `application/src/export/export_environment/inventory.rs` | Preserve causes at owned boundaries (0.70, was 0.56) | Accepted as a false positive. Change I adds only a filter and tests. The markers without a cause (duplicate path, directory/file clash, byte overflow) have no underlying error to keep, and the path conversion keeps its cause with `.context`. |
+| `application/src/ports/preparation.rs` | Use-case parameters (0.35) | Accepted. `LoadOrderTarget::Export` gained the `include_game_data` field; the port keeps the token last. |
+
+Full check: `bun run check` exit 0; 428 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
+### Review repair for changes H and I
+
+> **Superseded by change J:** `loadorder.txt` is no longer part of the Profile State and is never read. `plugins.txt` line order is the load order, and the `stale_load_order_entry` and `unlisted_plugin` warnings are gone. The `loadorder.txt` text below describes the code before change J.
+
+Review: `/tmp/load-order-review.md` (H at 3fa9ebf, I at 4042a97). Windows validation at 4042a97 passed (447 workspace tests).
+
+- **BOM in `loadorder.txt` (finding 3):** `load_order_times` ignores a UTF-8 byte order mark at the start of the text. Before, the first entry was keyed as `"\u{feff}falloutnv.esm"`, so `FalloutNV.esm` became unlisted and got a time after every listed plugin. Test: `a_byte_order_mark_does_not_hide_the_first_listed_plugin`. The projection still reads the raw text and can still warn about that entry; that gap existed before H and is unchanged.
+- **Failing file named (finding 4):** a failed `metadata` or `set_modified` keeps `io_failure` and `phase = load_order`, and now also carries a typed `application::ports::LoadOrderFile { path }` attachment. The CLI prints it as `load_order_file = "..."` for exec and export (`error.rs`, test `load_order_errors_name_the_failing_file`). Adapter test: `a_failure_names_the_file_and_other_root_files_are_not_read`.
+- **Only plugins and archives are read (finding 5):** new `domain::takes_load_order_time(path)` (Data root and `.esm`, `.esp`, or `.bsa`). The adapter filters with it before `metadata`, and `load_order_times` uses the same predicate. The test above deletes a root `Readme.txt` and the step still succeeds.
+- **Second exec run (review item 4c):** test `a_second_exec_run_changes_no_times`. After the first run it removes all access to the timed files on Unix (`0o000`), so any open for a time change fails, then runs again and compares times. With the skip arm removed, the test fails, so it proves that files with the right time are not opened.
+- **CONTEXT.md (finding 8):** the Game Installation is now "the shared base"; its contents stay unchanged, but `exec` sets the times of its Data-root plugins and BSAs, and environments that share it must not run at the same time.
+- **execution.md (finding 8):** `loadorder.txt` is the order authority; exec sets the times again on every run, so a timestamp-only sort by LOOT or xEdit under exec is reverted unless it also updates `loadorder.txt`. The same paragraph warns against concurrent environments on one installation, and the failure text names `load_order_file`. `troubleshooting.md` mentions `load_order_file`.
+- **Nits:** `ListExportFiles` takes an `ExportSelection { include_saves, include_game_data }` instead of two unnamed `bool`s. The use case keeps its two named parameters and builds the selection. The plugin sort key is now a named `PluginRank { unlisted, position, modified, key }`, whose field order is the sort order.
+
+Decision on review finding 1 (a no-flag export ranks mod plugins before the destination's Steam-dated DLC masters): option C. The 2000-01-01 base stays, with no code change. `export.md` now says that without `--include-game-data` the destination's own base game and DLC plugins keep their dates, the exported mod plugins are timed from 2000-01-01 and can sort before the DLC masters they need, and the flag is recommended when the output is a full game setup. The `--include-game-data` help text says the same in one sentence.
+
+Not changed here: the in-game Windows check of BSA priority and archive invalidation (finding 2), the three places that decide the export output set (finding 6), inactive plugins taking an archive (finding 7), and the split profile-INI rules and empty-stem plugin (nits).
+
+Gate dispositions for this repair:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `application/src/export/types.rs` | Reason comments (0.57, first run) | Fixed. The field Rustdoc that restated the field names was removed; the struct summary states the non-obvious rule (game root files are never exported). |
+| `application/src/export/types.rs`, `export_environment.rs`, `ports/preparation.rs`, `infrastructure/environment/src/export.rs`, `load_order.rs`, `presentation/cli/src/runner.rs` | Use-case parameters | Accepted. `ExportSelection` is a named port input, not an unrelated bag; the use case keeps named parameters with the token last; the other files are adapters, port types, or tests. |
+| `application/src/ports/mod.rs` | Capability modules and public APIs (0.49) | Accepted. It re-exports `LoadOrderFile`, which presentation must name to print the path. |
+| `infrastructure/environment/src/export.rs` | Rustdoc format (0.35, first run) | Accepted as a false positive. This repair changed only test calls in the file. Its ordinary `//` comments are inside function bodies and explain code, and every item comment uses `///`. |
+
+Full check: `bun run check` exit 0; 432 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests. Windows-target clippy for `application`, `infrastructure-environment`, and `domain` is clean.
+
+### plugins.txt is the only load order (change J)
+
+Decision: `docs/exec-performance-discussion.md`, "Decision: drop loadorder.txt; plugins.txt order is the load order". `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines.
+
+- Ordering: `domain::load_order_times(candidates, plugin_list, archive_list)` orders plugins by `plugins.txt` line order. Present plugins that it does not list are inactive and come after the listed ones, in current-time order. BOM stripping, case-insensitive matching, and the BSA rules are unchanged. The adapter passes the `plugins.txt` text from the plan.
+- `loadorder.txt` left the Profile State:
+  - `PROFILE_FILES` (environment, settings, execution) no longer names it, so init does not import it (`game_platform` profile sources), the initial profile does not create it, export does not list it, and the exec profile mappings no longer map it into LocalAppData (7 mappings instead of 8).
+  - Validation (environment `validate_profile`, settings `layout::validate_profile`) no longer requires or reads it. Both accept it as an ignored entry (`IGNORED_PROFILE_FILES`), so an existing file is not rejected, even with invalid content.
+  - Install maintenance: `update_plugin_lists` is now `update_plugin_list`. After an enabled replacement it removes vanished plugins from `plugins.txt` as before; it no longer appends newly visible plugins to `loadorder.txt`. Newly installed plugins stay inactive until a user lists them, which was already true for `plugins.txt`.
+  - `prepare_launch` no longer decodes `loadorder.txt`. The snapshot and conflict scan never read it; one snapshot test fixture stopped writing it.
+- Warnings: `stale_load_order_entry` and `unlisted_plugin` are removed (`PluginWarning::StaleLoadOrderEntry`, `PluginWarning::UnlistedPlugin`, `ProfileWarning::Unlisted`, CLI text, tests). `ProfileWarning::Unavailable` no longer carries a file name, because only `plugins.txt` produces it. `stale_plugin_entry` and `duplicate_plugin_entry` stay.
+- Projection (`infrastructure/execution/src/profile.rs`): it reads only `plugins.txt`. Listed plugins form the projected order and get the `PluginsFile` activation source; other present plugins follow with no warning. The projection now also strips a BOM from `plugins.txt`, so a BOM no longer causes a false `stale_plugin_entry`.
+
+Tests:
+
+- Domain ordering tests use `plugins.txt` text (renamed `plugins_follow_plugins_txt_then_unlisted_plugins_by_current_time`); the BOM test is kept.
+- Init: the initial profile has 7 records and no `loadorder.txt`; invalid-entry publication tests cover `plugins.txt` only.
+- Install: the disabled replacement keeps `plugins.txt` and `modlist.txt`; the enabled replacement removes the vanished plugin from `plugins.txt` and leaves an existing `loadorder.txt` untouched.
+- Exec: the profile mappings have 7 entries and none for `loadorder.txt`; `prepare_launch` accepts an invalid `loadorder.txt` and does not read it; the projection tests use `plugins.txt` only, and a new test checks the BOM.
+- Settings: new test `a_former_load_order_file_is_ignored`.
+- Export: the listing contains `profile/plugins.txt` and not an existing `profile/loadorder.txt`; the load-order export tests activate `Mod.esp` through `plugins.txt`.
+- Runner and use-case tests no longer use the removed warnings.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain -p infrastructure-settings -p infrastructure-game-platform --all-targets -- -D warnings` passes. `infrastructure-execution`, `infrastructure-dependencies`, and the CLI still cannot be compiled for Windows here. The execution crate's projection and mapping code is platform-neutral or `cfg(any(windows, test))`, so the macOS tests cover it.
+
+Docs: `CONTEXT.md` (Profile State), `README.md`, `SKILL.md` (new step 6), and the references `execution.md`, `export.md`, `installation.md`, `setup.md`, and `troubleshooting.md` state the rule above and that `loadorder.txt` is not used.
+
+Gate dispositions for change J (no override):
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/environment/src/transactions.rs` | Cancellation propagation and checkpoints (0.41); Phase spacing; Use-case parameters | Accepted. J only renamed the `update_plugin_list` call and changed test fixtures; the token handling is unchanged. |
+| `infrastructure/environment/src/profile.rs` | Use-case parameters (0.41); Phase spacing | Accepted. `update_plugin_list(root, binding, before, cancellation)` keeps the token last; it is an adapter helper, not a use case. The removed `loadorder.txt` block shortened it to read, filter, and write phases separated by blank lines. |
+| `infrastructure/execution/src/profile.rs` | Phase spacing (0.27); Use-case parameters | Accepted. The single `plugins.txt` loop replaces the two-file loop; validation, duplicate and stale checks, and the unlisted append are separated by blank lines. The file has no use case. |
+| `infrastructure/settings/src/lib.rs`, `layout.rs` | Phase spacing; Language-neutral review priorities; Use-case parameters | Accepted. J removed `loadorder.txt` from the layout lists and fixtures and added one test; the rest is unchanged. |
+| `infrastructure/environment/src/execution_preparation.rs` | Language-neutral review priorities (0.59 on an intermediate run) | Accepted. The three-way `match` on the file name became an `if`/`else`, because only `plugins.txt` needs another decoder now. |
+| Other files | Earlier rules | Unchanged dispositions from earlier sections. |
+
+Full check: `bun run check` exit 0; 434 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
+### Review repair for change J
+
+Review: `/tmp/plugins-order-review.md` (J at e2067bc). Windows validation at e2067bc passed (453 workspace tests).
+
+- **M1, BOM before code-page decoding:** new `active_code_page::decode_plugin_list` removes a leading UTF-8 byte order mark (`EF BB BF`) from the bytes before active-code-page decoding. On a non-UTF-8 code page such as 1252, the mark would otherwise decode to `ï»¿` in front of the first plugin name; the projection would report it as stale, and the load-order step would treat that plugin as unlisted. Every reader of `plugins.txt` uses it: `prepare_launch` (which feeds the projection and the load-order step), environment `validate_profile`, `update_plugin_list`, and `ProfileActivation` (snapshot and conflict scan). Settings `validate_plugin_list` strips the same bytes before its own decoder. The domain and projection still remove a decoded U+FEFF, which a UTF-8 code page leaves in the text. Tests: `a_plugin_list_byte_order_mark_is_not_decoded_as_text` (decoder) and `a_plugins_txt_byte_order_mark_is_removed_before_decoding` (raw bytes through `prepare_launch`). On macOS the test decoder already sniffs the mark, so these tests prove the behavior only on Windows with a non-UTF-8 code page; there they would fail without the fix.
+- **L1, base master first:** `PluginRank` has a new first field, `after_base_master`, so `FalloutNV.esm` takes the first plugin position even when `plugins.txt` lists it later or not at all, as the projection already did. Test: `the_base_master_comes_first_wherever_plugins_txt_lists_it`. `execution.md` states the rule.
+- **L2:** `ProfileWarning::Duplicate` and `PluginWarning::DuplicatePluginEntry` no longer carry a file name, matching `Unavailable`. The CLI text still names `"plugins.txt"`, and the runner test checks the unchanged text.
+- **L3:** the `let ... else` in the projection that only turned `None` into an error is now `ok_or_else(...)?`.
+- **L4:** `IGNORED_PROFILE_FILES` is defined once, in `domain::profile_state`, and environment and settings use it.
+- **L5:** the earlier sections that describe `loadorder.txt` now start with a "Superseded by change J" note.
+
+Windows cross-check: `cargo clippy --target x86_64-pc-windows-msvc -p application -p infrastructure-environment -p domain -p infrastructure-settings -p infrastructure-game-platform --all-targets -- -D warnings` passes.
+
+Gate dispositions for this repair (no override):
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `infrastructure/settings/src/layout.rs` | Dependency direction and composition roots (0.21, new) | Accepted as a false positive. The new import is `domain::IGNORED_PROFILE_FILES`; settings already depends on `domain` (for example `canonical_profile_routing_valid`), and infrastructure-to-domain is the allowed direction. |
+| `infrastructure/environment/src/active_code_page.rs`, `profile.rs`, `profile_activation.rs`, `execution_preparation.rs`, `infrastructure/execution/src/profile.rs`, `domain/src/load_order.rs` | Use-case parameters; Phase spacing; declaration order | Accepted. These files hold adapter helpers, a projection, and a pure domain function, not use cases; the edits are a decoder swap, a combinator, and a new sort-key field. |
+| `application/src/ports/preparation.rs`, `preparation/prepare_environment.rs`, `presentation/cli/src/runner.rs` | Use-case parameters; Test public behavior | Accepted. Only the `Duplicate` warning lost its file field; the runner test checks the public CLI text. |
+
+Full check: `bun run check` exit 0; 437 Rust tests passed and 1 skipped, 2 release-version tests, 137 tool tests.
+
+## INI text lines without an assignment
+
+Exec failed with `environment_invalid` (phase `profile_ini`) on a real profile. The vanilla `Fallout.ini` and `FalloutPrefs.ini` continue the `SMasterMismatchWarning` value on two lines without `=`. The game's INI reader ignores such lines, so `domain::profile_ini_valid` now accepts them. It still rejects control characters, empty or unterminated section headers, and assignments with an empty key. No game behavior requires accepting those forms.
+
+The derive and preserve editors already kept lines without `=` unchanged, so derived and preserved copies keep the block byte-for-byte. Effect on each `profile_ini_valid` caller:
+
+- Execution INI creation (`ExecutionInis::create` through `ProfileIniInputs::read_mode`): accepts the block. Launch preparation itself does not call the validator.
+- Postrun preservation (`preserve_inner`): accepts child INIs that keep the block. A child `[malformed` header is still rejected.
+- Export (`ProfileIniInputs::read` and its `Fallout_default.ini` fallback): accepts the block in canonical INIs and in the game default.
+- Init staging and settings do not call the validator. Init's `canonical_ini` derivation already kept such lines.
+
+New tests use the exact three-line block in `Fallout.ini` and `FalloutPrefs.ini`: the domain validator and editors, launch preparation with INI creation and preservation plus the postrun check, and export capture of derived INIs. All three failed before the fix with the reported marker (`/tmp/ini-continuation-red.log`). No existing rejection test encoded the wrong behavior, so none changed.
+
+Validation: focused domain and infrastructure-environment nextest passed 139 tests (`/tmp/ini-continuation-focused.log`). Full `bun run check` passed with 444 Rust tests, 2 release-version tests, and 119 tool tests (`/tmp/ini-continuation-check.log`). `git diff --check` passed.
+
+The style gate reported these findings for this fix:
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `environment/src/execution_preparation.rs` | Phase spacing | Fixed between the derived-copy check and the child edit, and before the postrun check. Accepted for the remaining fixture setup: the block text, both INI texts, and their writes form one setup phase. |
+| `environment/src/execution_preparation.rs` | Use-case parameters | Accepted as inapplicable. The change adds only a test function; no infrastructure or use-case signature changed. |
+| `environment/src/export.rs` | Use-case parameters | Accepted as inapplicable. The change adds only a test function; no infrastructure or use-case signature changed. |
+
+## Removed binding IDs
+
+The later approved change removes `steam_app_id` and `observed_build_id` from both manifest schemas and their writers. `GameBinding` now contains only the game directory. No migration or automatic rewrite was added. Both readers retain `deny_unknown_fields`, so old manifests with either key fail as invalid. Tests cover each removed key separately.
+
+Steam discovery and strict installation validation still check the fixed Fallout New Vegas app identity. Steam `buildid` is no longer required or compared. Build mismatches no longer block strict consumers; their unrelated installation, filesystem, and source-change checks remain.
+
+The CLI no longer accepts `steam-app-id` or `observed-build-id` as config keys. Settings output contains `schema-version`, `name`, and `game-dir`. The set-game-directory result no longer carries a recorded build or build-mismatch warning. The `game_build_mismatch` error code and expected/actual build fields are removed. Invalid or missing effective overrides still produce the existing `EffectiveBinding::Invalid` outcome. Stored/effective path shadowing and durable settings publication remain.
+
+## Command-scoped settings
+
+CLI composition starts settings loading after parsing, root selection, and diagnostic setup. `Resources::system` does not read the manifest. Composition calls `load_settings` once, then supplies records to get/list and binds the effective game directory into command-local infrastructure ports. There is no `LoadSettings` application port, global singleton, or lazy downstream resolution.
+
+Environment conflict scans, snapshots, plugin maintenance, and installation transactions receive the supplied binding explicitly. The native exec adapter stores that binding instead of a settings reader. Exec preparation no longer reads `mods.toml`. Strict export and initialization still parse manifests for source/staged integrity validation, not to choose a different binding.
+
+The settings snapshot retains stored/effective provenance, captured overrides, and original source bytes. Mutation preview computes proposed typed values without reading configuration again. Publication compares the original bytes before staging and immediately before rename. This is not an atomic filesystem compare-and-swap; it retains safe file opens and durable publication. Export compares captured manifest bytes and retains strict source capture/revalidation rather than resolving settings again.
+
+Read modes retain separate pending-work and profile-validation policies. Config get/list and updates keep their layout checks. Exec and export defer profile work to their own owners. Conflict scans and install previews do not gain a full settings-layout scan. Init uses only its override reader and requires no manifest. Help/version stop before resource construction. Errors at the moved load boundary retain allowlisted output and command-specific cancellation/exec exit codes.
+
+## Temporary INIs and compatibility
+
+The shared domain INI transform writes managed archive and save settings into a temporary FalloutCustom.ini. It uses an existing Custom.ini as the basis or creates a temporary file when absent. It retains unrelated settings and maps the temporary file through the existing profile mapping plan. Custom.ini's archive list takes precedence over Fallout.ini, including an explicitly empty value. If neither file has a list, exec uses the embedded verified default list. The transform retains the selected list and appends the invalidation archive once. It does not read an external game-default INI on the launch path.
+
+JIP LN NVSE is a required runtime prerequisite, not a new plugin-detection gate. GECK support for the new override mechanism is deferred. [JIP's loader source](https://github.com/jazzisparis/JIP-LN-NVSE/blob/5a30ac4356ea0e93b9ff357b5031b1e420240a4d/internal/patches_game.h#L5047-L5097) assigns registered settings. It does not prove that archive loading or save-directory initialization occurs after those assignments. The compatibility investigation is `/tmp/mods-custom-ini-compatibility.md`. No Windows runtime evidence was collected.
+
+Postrun preservation still checks concurrent canonical edits, validates child INIs, restores managed canonical keys, and publishes through the existing durable helpers. A canonically absent FalloutCustom.ini stays absent. Existing-file unrelated child edits persist. Uncertain Job drain, malformed edits, deletion, and publication errors retain temporary INIs under the existing policy.
+
+## Operation evidence
+
+The existing flat fixture contains base Data, one enabled mod, one disabled mod, and empty Overwrite. Both mods have metadata and an asset. Two files win.
+
+| Launch preparation operation | Previous preparation | New launch preparation |
+| --- | ---: | ---: |
+| Provider directory enumerations | 4 | 3 |
+| Provider metadata content reads | 2 | 1 |
+| Full prelaunch preparation passes | 1 | 0 |
+| Validation-only asset opens in the inventory | Per asset | 0 |
+| Asset size/mtime collection in the inventory | Per asset | 0 |
+
+The directory/read counts come from test-only counters through public preparation. The prior counts are recorded in [single-pass provider inventory](single-pass-provider-inventory.md). `cargo test -p infrastructure-environment execution_collects_each_provider_once -- --nocapture` printed `provider inventory: (3, 1), elapsed 1.00425ms`. This is one small macOS debug fixture, not a benchmark or Windows startup measurement. The counters do not count all filesystem calls, native VFS recursion, config reads, or safe metadata creation.
+
+## Validation
+
+- Focused nextest passed for domain, infrastructure-environment, and infrastructure-execution. The latest run includes the extra-entry/corrupt-BSA acceptance regression.
+- Full `bun run check` passed after the settings expansion with 436 Rust tests and 119 tool tests. The consolidated repair passed with 438 Rust tests and 119 tool tests. Logs: `/tmp/streamline-check.log` and `/tmp/streamline-repair-check.log`.
+- New tests cover one source resolution across preview/store, distinct composed bindings without downstream manifest parsing, concurrent settings edits, help/version without resource loading, init without a manifest, and moved-boundary error status.
+- Focused operation counter passed with three provider walks and one metadata read.
+- Public preparation tests cover empty/full modsets, duplicate/spelling mismatches, disabled malformed metadata and cycles, priority/subtree reinstatement, file/directory collisions, missing/concurrent metadata, hard links, linked provider directories, bounded cycles, large configuration, retained postrun edits, and pending temp ownership.
+- INI tests cover canonical absence, existing Custom.ini precedence, one invalidation entry across repeated preparation, unrelated child edits, encoding, concurrent edits, and retained failure state.
+- Archive-list fallback tests cover both lists absent across two preparations: the temporary Custom.ini gets the six default archives plus one invalidation entry. Separate cases show that an empty Custom.ini list and an empty Fallout.ini list each take precedence over the defaults. Every case leaves canonical files unchanged, and an absent canonical Custom.ini stays absent. The game fixture has no `Fallout_default.ini`.
+- Archive-list fallback: focused domain and infrastructure-environment nextest passed 135 tests, `/tmp/archive-fallback-focused.log`. Full `bun run check` passed with 440 Rust tests, 2 release-version tests, and 119 tool tests, `/tmp/archive-fallback-check.log`. `git diff --check` passed.
+- Strict export tests pass unchanged. A regression also confirms strict preparation does not create missing metadata and rejects the relaxed fixture.
+
+Windows-only native adapter/lookup code is not compiled or exercised by macOS checks. Actual Windows process errors, linked-provider native recursion, JIP archive timing, and Custom.ini save timing remain unverified. No new platform test setup was added.
+
+## Coding-style gate dispositions
+
+The gate remains non-clean. The following dispositions cover changed-file findings reported during implementation, including findings on earlier intermediate versions. Existing baseline dispositions remain in [single-pass provider inventory](single-pass-provider-inventory.md) and [issue 31 execution composition](issue-31-execution-composition.md). They are not converted into clean findings here.
+
+Paths below omit `src/infrastructure/` unless stated otherwise.
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `environment/src/snapshot.rs` | Capability modules and public APIs | Accepted. Only the existing metadata parser/result becomes crate-visible so strict and lightweight readers share schema rules. The leaf module remains private and no external API is added. |
+| `environment/src/snapshot.rs` | Focused use-case orchestration | Accepted as inapplicable. This is the existing infrastructure snapshot capability, not an application use-case file. The parser is now reused. |
+| `environment/src/snapshot.rs` | Use-case parameters | Accepted as inapplicable. Strict walker order remains. Helpers now take the command binding explicitly; cancellation remains last. |
+| `environment/src/execution_preparation.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. These are infrastructure adapter methods and DTOs, not application entry points. Cancellation remains last. |
+| `environment/src/execution_preparation.rs` | Narrow custom implementations | Accepted. Preparation composes project-owned environment rules with standard collections and filesystem APIs. It does not replace a runtime or general-purpose library. |
+| `environment/src/execution_preparation.rs` | Test public behavior | Accepted. Tests call public preparation/check methods. Counters establish the requested operation budget; a test-only callback forces the project-owned create-new race. No production helper exists solely for testing. |
+| `environment/src/execution_preparation.rs` | Phase spacing | Fixed around acquisition, profile reads, projection, and output. Accepted for adjacent fixture setup/assertions that belong to one scenario phase. |
+| `environment/src/execution_preparation/inventory.rs` | Guard clauses; Choose the narrow conditional form | Accepted. Traversal failures return or continue. Metadata read/create recovery requires distinct success, absence, concurrent creation, and error outcomes. The remaining value-producing branches both continue. |
+| `environment/src/execution_preparation/inventory.rs` | Phase spacing | Fixed in the consolidated repair. Added separators after modlist lookup construction, provider traversal, and metadata recovery before tombstone parsing. Focused and full checks are recorded below. |
+| `environment/src/execution_preparation/inventory.rs` | Use-case parameters | Accepted as inapplicable. This private infrastructure algorithm needs explicit recursive budgets; it is not an application use case. |
+| `environment/src/execution_preparation/inventory.rs` | Narrow custom implementations | Accepted. Priority projection and tombstone suppression are project rules. The implementation uses standard filesystem APIs, HashMap/HashSet, existing path identities, and the existing TOML parser. |
+| `environment/src/execution_preparation/inventory.rs` | Pre-MVP test placement; Test public behavior | Accepted. No separate test target or cross-file test module was added. The parent preparation module owns the public-method tests and one test-only creation callback. It exercises the create-new race through preparation. |
+| `environment/src/derived_profile.rs` | Guard clauses | Fixed, then superseded by the approved fallback. The refusal guard is removed. Archive selection is one value-producing `if`/`else if`/`else` chain with no exiting branch. |
+| `environment/src/derived_profile.rs` | Phase spacing | Accepted. Reads, text validation, archive selection, staging, and durable publication retain separate phases. Per-file operations remain together. For the fallback change, the gate flagged this rule at low confidence. Blank lines now separate each new test's setup, derivation checks, `preserve` call, canonical-file assertions, and final game-directory check. The recheck after that edit no longer reports this rule. |
+| `environment/src/derived_profile.rs` | Use-case parameters | Accepted as inapplicable. These are infrastructure INI owner methods, not application use cases. The fallback change keeps every signature. The gate still reports this rule after that change. |
+| `environment/src/profile.rs` | Focused use-case orchestration; Cohesive orchestration | Accepted. The extracted text validator is reused by strict bounded reads and lightweight already-read texts. This is an infrastructure capability, not an application use-case file. |
+| `environment/src/profile.rs` | Phase spacing | Accepted. The shared text-validation call follows decoding as one acquisition/validation phase. The abandoned structural-only launch validator was removed. |
+| `environment/src/profile.rs` | Guard clauses | Accepted for existing multi-way profile handling. No new successful path remains below an exiting opposite branch. |
+| `environment/src/profile.rs` | Use-case parameters | Accepted as inapplicable. These are infrastructure profile functions. |
+| `environment/src/manifest.rs` | Focused use-case orchestration; Use-case parameters | Accepted as inapplicable. The parser remains an infrastructure integrity validator for initialization and strict export. Binding discovery was removed; exec no longer parses it. |
+| `dependencies/src/execution_adapter/native.rs` | Language-neutral review priorities | Accepted. The removals implement the approved policy, not an unapproved safety optimization. Existing Job supervision, cleanup, and preservation remain. |
+| `dependencies/src/execution_adapter/native.rs` | Use-case parameters; Use-case declaration order | Accepted as inapplicable. This is an infrastructure adapter method with its original signature. |
+| `execution/src/launch_inputs/windows_inputs.rs` | Preserve causes at owned boundaries | Accepted. Candidate metadata errors do not become returned launch failures. Non-missing candidates proceed to Windows, whose launch error the adapter preserves. This deliberate lookup policy avoids falling through to a different executable on access failure. |
+| `execution/src/launch_inputs/windows_inputs.rs` | Guard clauses; Choose the narrow conditional form | Fixed. Missing candidates now continue before the successful selection path. The earlier multi-arm selection match was removed. |
+| `execution/src/launch_inputs/windows_inputs.rs` | Language-neutral review priorities | Accepted. The user explicitly chose to defer access/format failures to Windows. Captured caller lookup and string constraints remain; native behavior is a reported platform gap. |
+| `execution/src/launch_inputs/windows_inputs.rs` | Phase spacing | Fixed around lookup selection, cwd resolution, command encoding, and output. |
+| `execution/src/profile.rs` | Use-case parameters | Accepted as inapplicable. The existing infrastructure profile builder keeps its input DTO. |
+| `src/domain/src/profile_state.rs` | Self-explanatory code; Reason comments; Rustdoc format | Accepted. The Rustdoc records the JIP prerequisite, deferred GECK support, and caller materialization obligation. These are external compatibility contracts, not narration of the implementation. No error section is needed for this infallible transform. |
+| `src/domain/src/profile_state.rs` | Phase spacing | Fixed between archive selection and emission. The remaining statements form one managed-section transformation. |
+
+| `game_platform/src/resolution.rs` | Language-neutral review priorities | Accepted. Removing the build comparison is an explicit user requirement. Strict path validation and environment/game separation remain. |
+| `game_platform/src/resolution.rs` | Use-case parameters | Accepted as inapplicable. Existing infrastructure adapter signatures remain; cancellation is last where present. |
+| `game_platform/src/steam/validation.rs` | Language-neutral review priorities | Accepted. Build freshness is no longer a policy. App identity, install directory, executable, default INI, and safe filesystem validation remain. |
+| `game_platform/src/bound_game.rs` | Test public behavior | Accepted. The test establishes the project-owned policy that reopening accepts a changed Steam build, rather than testing a dependency. It exercises the capability boundary used by installation. |
+| `game_platform/src/bound_game.rs` | Use-case parameters | Accepted as inapplicable. The existing infrastructure function receives the expected binding then final cancellation token. |
+| `settings/src/lib.rs` | Use-case parameters | Accepted as inapplicable. Infrastructure loading returns a command snapshot; publication receives that explicit snapshot. These are capability methods, not application use-case entries. |
+| `environment/src/export.rs` | Use-case parameters | Accepted. Only test fixtures lose the obsolete constructor argument. Production parameter order did not change. |
+| `environment/src/conflict_scan.rs` | Use-case parameters | Accepted. The infrastructure scan and content-reader receive the binding explicitly before final cancellation. They do not discover settings. |
+| `environment/src/lib.rs` | Use-case parameters | Accepted. This infrastructure adapter binds the explicitly supplied game directory into command-local ports. Application-owned callable ports still use `.call` at invocation. |
+| `src/application/src/installation/install_archive.rs` | Use-case parameters | Accepted. The production use case retains dependencies first and cancellation last. Only obsolete binding fixture arguments changed. |
+| `src/application/src/environment/initialize_environment.rs` | Use-case parameters | Accepted. Dependencies remain first and cancellation last. Only fixture binding construction and its assertion changed. |
+| `src/application/src/settings/set_game_directory.rs` | Use-case declaration order | Accepted as a false positive. Declarations remain Dependencies, Output, Error, then the use-case function. Removing build-specific fields does not alter that order. |
+| `src/presentation/cli/src/output.rs` | Language-neutral review priorities | Accepted. The build-warning formatter intentionally returns empty output after the approved warning removal. It retains the existing quiet successful-mutation contract, with a regression test. No unrelated diagnostic policy changed. |
+
+### Settings-expansion dispositions
+
+These include intermediate findings as well as the final diff. The gate is still non-clean. An enforce-mode override remains required; this table does not clear it.
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `src/application/src/ports/settings.rs` | Use-case parameters | Accepted as inapplicable. This file declares application callable-port types rather than a use case. Existing binding inputs and final cancellation remain; only LoadSettings was removed. |
+| `src/application/src/settings/get_setting.rs` | Use-case parameters | Accepted as a false positive. Dependencies are the first by-value argument. Supplied setting records and the requested key are separate typed business arguments. This read-only use case has no cancellation parameter. |
+| `src/application/src/settings/get_setting.rs` | Import placement and use | Accepted as a false positive. Imports remain at module scope, including cfg(test) atomics and test-module imports. No function-local import was added. Qualification in tests distinguishes the function under test or a fixture namespace. |
+| `src/application/src/settings/list_settings.rs` | Use-case declaration order | Accepted as a false positive. The file declares ListSettingsDependencies, ListSettingsOutput, ListSettingsError, then the instrumented async function in that order. |
+| `src/application/src/settings/list_settings.rs` | Use-case parameters | Accepted as a false positive. Dependencies are the first by-value argument. Supplied setting records and the requested key are separate typed business arguments. This read-only use case has no cancellation parameter. |
+| `src/application/src/settings/list_settings.rs` | Preserve causes at owned boundaries | Accepted as inapplicable. This use case now receives records and performs no fallible load. The moved presentation load boundary retains the rootcause report and renders only its allowlisted marker; regression coverage replaces the obsolete load-port cause test. |
+| `src/application/src/settings/list_settings.rs` | Language-neutral review priorities | Accepted. Removing the hidden settings load is expressly approved architecture, not a terseness optimization. List output and provenance remain unchanged; source-load errors are tested at their new presentation owner. |
+| `dependencies/src/execute_program.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/execute_program.rs` | Dependency direction and composition roots | Accepted as a false positive. CLI remains the composition root. Infrastructure dependencies composes application-owned ports from infrastructure adapters and domain bindings. Workspace dependency checks pass; no dependency was added. |
+| `dependencies/src/execution_adapter.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/explain_path.rs` | Callable port invocation | Accepted as a false positive after direct inspection and an ast-grep call search. This file calls inherent adapter factory methods to construct ports; it never invokes an application-owned callable port. |
+| `dependencies/src/explain_path.rs` | Use-case declaration order | Accepted as inapplicable. This is an infrastructure capability or composition method, not a use-case file with Dependencies/Output/Error declarations. |
+| `dependencies/src/explain_path.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/explain_path.rs` | Dependency direction and composition roots | Accepted as a false positive. CLI remains the composition root. Infrastructure dependencies composes application-owned ports from infrastructure adapters and domain bindings. Workspace dependency checks pass; no dependency was added. |
+| `dependencies/src/export_environment.rs` | Use-case declaration order | Accepted as inapplicable. This is an infrastructure capability or composition method, not a use-case file with Dependencies/Output/Error declarations. |
+| `dependencies/src/export_environment.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/export_environment.rs` | Phase spacing | Accepted. Supplied-binding validation, capture, publication wrapping, and output construction remain separate phases. Closure captures belong to their single composition operation. |
+| `dependencies/src/get_setting.rs` | Callable port invocation | Accepted as a false positive. This composition method constructs a dependency value containing only report_progress. It does not invoke a port. |
+| `dependencies/src/inspect_mod_conflicts.rs` | Callable port invocation | Accepted as a false positive after direct inspection and an ast-grep call search. This file calls inherent adapter factory methods to construct ports; it never invokes an application-owned callable port. |
+| `dependencies/src/inspect_mod_conflicts.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/inspect_mod_conflicts.rs` | Dependency direction and composition roots | Accepted as a false positive. CLI remains the composition root. Infrastructure dependencies composes application-owned ports from infrastructure adapters and domain bindings. Workspace dependency checks pass; no dependency was added. |
+| `dependencies/src/install_archive.rs` | Callable port invocation | Accepted as a false positive after direct inspection and an ast-grep call search. This file calls inherent adapter factory methods to construct ports; it never invokes an application-owned callable port. |
+| `dependencies/src/install_archive.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/lib.rs` | Use-case declaration order | Accepted as inapplicable. This is an infrastructure capability or composition method, not a use-case file with Dependencies/Output/Error declarations. |
+| `dependencies/src/lib.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/lib.rs` | Dependency direction and composition roots | Accepted as a false positive. CLI remains the composition root. Infrastructure dependencies composes application-owned ports from infrastructure adapters and domain bindings. Workspace dependency checks pass; no dependency was added. |
+| `dependencies/src/list_effective_conflicts.rs` | Callable port invocation | Accepted as a false positive after direct inspection and an ast-grep call search. This file calls inherent adapter factory methods to construct ports; it never invokes an application-owned callable port. |
+| `dependencies/src/list_effective_conflicts.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `dependencies/src/set_game_directory.rs` | Callable port invocation | Accepted as a false positive after direct inspection and an ast-grep call search. This file calls inherent adapter factory methods to construct ports; it never invokes an application-owned callable port. |
+| `dependencies/src/set_game_directory.rs` | Use-case declaration order | Accepted as inapplicable. This is an infrastructure capability or composition method, not a use-case file with Dependencies/Output/Error declarations. |
+| `dependencies/src/set_game_directory.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `environment/src/conflict_scan.rs` | Use-case declaration order | Accepted as inapplicable. This is an infrastructure capability or composition method, not a use-case file with Dependencies/Output/Error declarations. |
+| `environment/src/conflict_scan.rs` | Preserve causes at owned boundaries | Accepted for test-fixture error conversion only. The new propagation test maps setup/scan failures to fixture failure text, following the existing test convention. Production scan/content boundaries still preserve underlying causes. |
+| `environment/src/conflict_scan.rs` | Phase spacing | Accepted. The supplied-binding test separates fixture setup, port invocation, and output assertions; provider traversal phases are unchanged. |
+| `environment/src/lib.rs` | Import placement and use | Accepted as a false positive. Imports remain at module scope, including cfg(test) atomics and test-module imports. No function-local import was added. Qualification in tests distinguishes the function under test or a fixture namespace. |
+| `environment/src/profile.rs` | Use-case declaration order | Accepted as inapplicable. This is an infrastructure capability or composition method, not a use-case file with Dependencies/Output/Error declarations. |
+| `environment/src/transactions.rs` | Use-case declaration order | Accepted as inapplicable. This is an infrastructure capability or composition method, not a use-case file with Dependencies/Output/Error declarations. |
+| `environment/src/transactions.rs` | Use-case parameters | Accepted as inapplicable. This is infrastructure capability/composition code, not an application use-case entry point. The supplied binding or snapshot is explicit, and cancellation remains final where supported. |
+| `environment/src/transactions.rs` | Test public behavior | Accepted. Existing fault-injection tests verify project publication/cleanup policy. Their only new input is the explicit fixture binding; they were not relaxed. |
+| `settings/src/lib.rs` | Narrow custom implementations | Accepted. The new state is a command-local immutable settings snapshot and byte comparison around existing durable publication. Parsing still uses Config/TOML; no replacement parser, general cache, or singleton was added. |
+| `settings/src/lib.rs` | Import placement and use | Accepted as a false positive. Imports remain at module scope, including cfg(test) atomics and test-module imports. No function-local import was added. Qualification in tests distinguishes the function under test or a fixture namespace. |
+| `settings/src/lib.rs` | Phase spacing | Fixed acquisition/resolution/output spacing. Accepted remaining adjacency where a read and its source comparison form one integrity operation, or a proposed binding and its provenance form one transformation. |
+| `settings/src/lib.rs` | Test public behavior | Accepted. Tests exercise project-owned snapshot reuse, source-byte concurrency, and publication refusal. The source counter is test-only and asserts the requested one-load policy rather than dependency behavior. |
+| `settings/src/manifest_writer.rs` | Use-case parameters | Accepted. This is the existing private infrastructure writer, not a use case. Its validation callback stays after cancellation to preserve the established local API; expected source bytes are explicit. |
+| `settings/src/manifest_writer.rs` | Phase spacing | Fixed in the consolidated repair. Added a blank line after drop(staged) before reading the canonical manifest. This separates staged validation from the source-byte concurrency check. |
+| `src/presentation/cli/src/main.rs` | Use-case parameters | Accepted as inapplicable. This is presentation dispatch/composition, not an application use case. Existing root/startup inputs and the command-owned composition callback remain explicit. |
+| `src/presentation/cli/src/main.rs` | Phase spacing | Fixed in the consolidated repair. Added a blank line after the returning initialization guard, before settings-load mode selection. |
+| `src/presentation/cli/src/runner.rs` | Callable port invocation | Accepted as inapplicable to the dependency_factory callback. That callback is presentation-owned composition, not an application port. Application use cases are ordinary functions; their internal ports use `.call`. |
+| `src/presentation/cli/src/runner.rs` | Use-case declaration order | Accepted as inapplicable. Presentation dispatch owns command/resource variants, not application use-case declarations. |
+| `src/presentation/cli/src/runner.rs` | Use-case parameters | Accepted as inapplicable. This is presentation dispatch/composition, not an application use case. Existing root/startup inputs and the command-owned composition callback remain explicit. |
+| `src/presentation/cli/src/runner.rs` | Guard clauses | Accepted. Composition/dispatch matches produce alternative command results; neither branch is an exiting guard followed by a nested success path. Existing early errors still return. |
+| `src/presentation/cli/src/runner.rs` | Narrow custom implementations | Accepted. Two command-dependency variants distinguish initialization from commands that require settings. This is project dispatch policy, not a new framework or runtime. |
+| `src/presentation/cli/src/runner.rs` | Phase spacing | Accepted. Parsing, root selection, diagnostics, command composition, dispatch, and output cleanup retain separate phases. New tests separate setup/action/assertion. |
+| `src/presentation/cli/src/runner.rs` | Test public behavior | Accepted. The runner is the presentation boundary under test. Tests assert visible exit status, redacted output, init without a manifest, and help/version bypass; no dependency internals are inspected. |
+
+### Parent gate reconciliation
+
+The parent gate snapshot `/tmp/streamline-parent-latest-gate.txt` also reports the following pairs. Unchanged files are identified against the frozen base, not treated as clean.
+
+| File | Rule | Disposition |
+| --- | --- | --- |
+| `src/application/src/execution/mod.rs` | Use-case declaration order | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. This parent module only declares private leaves and re-exports their API; it is not the use-case implementation. |
+| `src/application/src/export/export_environment/inventory.rs` | Use-case parameters | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. This is an inventory helper, port/type declaration, or presentation formatter rather than an application entry point. |
+| `src/application/src/export/export_environment/inventory.rs` | Phase spacing | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. The existing inventory/formatting statements retain their original phase grouping; no edit was made here. |
+| `src/application/src/export/mod.rs` | Use-case declaration order | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. This parent module only declares private leaves and re-exports their API; it is not the use-case implementation. |
+| `src/application/src/export/types.rs` | Use-case parameters | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. This is an inventory helper, port/type declaration, or presentation formatter rather than an application entry point. |
+| `src/domain/src/profile_state.rs` | Focused use-case orchestration | Accepted as inapplicable. This domain INI transformation is not a use case. It owns the archive/save override policy shared by execution and export. |
+| `src/domain/src/profile_state.rs` | Guard clauses | Accepted. The archive-source selection returns a value from alternative inputs. There is no exiting opposite branch nesting the success path. |
+| `src/domain/src/profile_state.rs` | Narrow custom implementations | Accepted. This is the game-specific Custom.ini override policy using the existing IniDocument model, not a general parser. |
+| `dependencies/src/execution_adapter/native.rs` | Readability before secondary cleanup | Accepted. Existing comments still explain Job lifetime, cleanup, and retention invariants. The change removes preflight work without secondary stylistic cleanup. |
+| `dependencies/src/execution_adapter/native.rs` | Phase spacing | Accepted. Caller lookup, supplied-binding preparation, profile construction, execution, and postrun preservation remain separate blocks. |
+| `dependencies/src/export_environment.rs` | Narrow custom implementations | Accepted. The wrapper binds one supplied game path and compares original source bytes before strict export. It reuses existing validation/publication ports instead of implementing a new export engine. |
+| `environment/src/derived_profile.rs` | Narrow custom implementations | Accepted. Temporary INI generation and managed-key restoration are project-owned compatibility rules. Existing domain INI parsing and durable filesystem helpers remain. |
+| `environment/src/derived_profile.rs` | Test public behavior | Accepted. Tests exercise derive/preserve operations, absent canonical Custom.ini, child edits, and refusal/retention policy. They do not recreate the INI dependency test suite. |
+| `environment/src/export.rs` | Use-case declaration order | Accepted as inapplicable. This is the existing infrastructure exporter. Its application use-case declarations live in application/export/export_environment.rs. |
+| `environment/src/export.rs` | Narrow custom implementations | Accepted as unchanged baseline behavior. Only obsolete binding fixture arguments were removed. Strict export still uses its existing bounded source/publication capability. |
+| `environment/src/export.rs` | Phase spacing | Accepted as unchanged baseline behavior. The only diff removes binding fixture fields; export capture/publication phase spacing is unchanged. |
+| `environment/src/export.rs` | Test public behavior | Accepted. Existing public export/fault-injection tests cover project-owned source-change and durable-publication policy. No assertion was relaxed for exec simplification. |
+| `environment/src/export_publication.rs` | Rustdoc format | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. This private platform publication helper retains its existing safety comment; its documentation was not edited. |
+| `environment/src/safe_fs.rs` | Narrow custom implementations | Fixed after spec review. The uncapped read now acquires the existing checked regular handle and calls the standard read_to_end API. No asset-validation open, custom read loop, or byte cap was restored. |
+| `environment/src/safe_fs.rs` | Phase spacing | Fixed in the consolidated repair. Checked-handle acquisition, standard whole-file reading, and output have separate blocks. |
+| `environment/src/snapshot.rs` | Narrow custom implementations | Accepted. This is the retained strict inventory capability. The changes expose existing metadata schema parsing and pass a supplied binding; they do not add a general-purpose facility. |
+| `environment/src/snapshot.rs` | Phase spacing | Accepted. Provider acquisition, projection, and dependency evaluation retain separate phases. Explicit binding propagation replaces the old local discovery branch in place. |
+| `environment/src/snapshot.rs` | Test public behavior | Accepted. Existing scenario tests now supply their fixture binding explicitly. They still assert inventory/dependency policy rather than implementation collection shapes. |
+| `src/presentation/cli/src/error.rs` | Phase spacing | Accepted. Removing the build-ID rendering branch leaves the existing optional allowlisted field assembly contiguous as one output phase. |
+| `src/presentation/cli/src/export_output.rs` | Use-case parameters | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. This is an inventory helper, port/type declaration, or presentation formatter rather than an application entry point. |
+| `src/presentation/cli/src/export_output.rs` | Import placement and use | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. Imports are at module scope in the existing formatter and its test module. |
+| `src/presentation/cli/src/export_output.rs` | Phase spacing | Accepted as unchanged baseline, outside this implementation diff against `5eb0f192`. The existing inventory/formatting statements retain their original phase grouping; no edit was made here. |
+| `src/presentation/cli/src/main.rs` | Use-case declaration order | Accepted as inapplicable. main.rs owns binary composition, not a Dependencies/Output/Error application use case. |
+
+## Consolidated review repair
+
+The independent [spec review](streamline-exec-spec-review.md) found one safe-open regression. The independent [standards review](streamline-exec-standards-review.md) found three phase-spacing breaches and includes the full 95-pair gate audit. These linked reviews describe the pre-repair snapshot. They are not claims that reviewers reran the repaired code.
+
+`SafeDir::read` now opens through `open_regular` before calling the standard uncapped `read_to_end`. This restores no-follow, regular-file, reparse-point, and single-link checks for required INI content and postrun preservation. It does not restore asset validation, configuration caps, chunk loops, or freshness checks.
+
+New tests call public prepare/derive/preserve operations. They add hard links to canonical or staged Fallout.ini after derivation and modify child INI content. Preservation must fail, leave canonical bytes unchanged, retain child edits and the temporary directory, and report the typed retained path plus the I/O cause. A Unix regression also verifies that required Fallout.ini cannot be a relative symlink. Both tests failed before the fix and passed afterward.
+
+The three reviewed phase boundaries are fixed in `settings/src/manifest_writer.rs`, `execution_preparation/inventory.rs`, and CLI `main.rs`. The inventory also separates lookup construction and final modset comparison. Their earlier accepted spacing dispositions are superseded by fixed/rechecked entries above.
+
+- Red regression run: two failures reproduced the safe-open regression, `/tmp/streamline-repair-red.log`.
+- Focused workspace run: 158 tests passed, `/tmp/streamline-repair-focused.log`.
+- Full repair check: 438 Rust tests and 119 tool tests passed, `/tmp/streamline-repair-check.log`. `git diff --check` passed.
+- A package-only focused command could not compile the earlier `tokio::test` composed-port test because that package relies on workspace feature unification. The focused check uses the documented workspace environment instead. No dependency change was made in this bounded repair.
+
+The user later approved the archive-list fallback in [Status and scope](#status-and-scope). The Windows/JIP evidence gaps and non-clean style-gate status remain. No second repair cycle or unrelated refactor was made.
+
+Evidence prose was edited with the local Unslop process. No commit, push, PR, or external repository message was made.

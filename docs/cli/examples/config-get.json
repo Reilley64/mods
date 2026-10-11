@@ -1,0 +1,15 @@
+{
+  "setting": {
+    "key": "game-dir",
+    "value": "C:\\Games\\Fallout New Vegas",
+    "source": {
+      "kind": "environment",
+      "variable": "MODS_GAME_DIR"
+    },
+    "manifest_value": "D:\\Games\\Fallout New Vegas",
+    "manifest_path": "C:\\env\\manifest.toml",
+    "shadowed": true,
+    "writable": true
+  },
+  "warnings": []
+}

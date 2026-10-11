@@ -1,6 +1,7 @@
 use crate::commands::LogLevel;
 use std::future::Future;
 use std::path::Path;
+use std::path::PathBuf;
 use tracing::Dispatch;
 use tracing::dispatcher::with_default;
 use tracing::instrument::WithSubscriber;
@@ -25,6 +26,7 @@ pub(crate) enum SessionStart {
 pub(crate) struct DiagnosticSession {
 	id: Uuid,
 	operation: &'static str,
+	path: PathBuf,
 	subscriber: Dispatch,
 }
 
@@ -35,6 +37,7 @@ impl DiagnosticSession {
 		}
 
 		let id = Uuid::new_v4();
+		let path = root.join("logs").join(format!("{id}.jsonl"));
 		let Ok(appender) = RollingFileAppender::builder()
 			.rotation(Rotation::NEVER)
 			.filename_prefix(format!("{id}.jsonl"))
@@ -58,8 +61,13 @@ impl DiagnosticSession {
 		SessionStart::FileBacked(Self {
 			id,
 			operation,
+			path,
 			subscriber,
 		})
+	}
+
+	pub(crate) fn path(&self) -> PathBuf {
+		self.path.clone()
 	}
 
 	pub(crate) fn id(&self) -> Uuid {

@@ -1,52 +1,52 @@
 use crate::GamePlatformAdapter;
 use crate::bound_game::reopen_bound_game;
 use crate::file_version::read_file_version;
-use crate::fs_access;
 use application::ErrorMarker;
 use domain::GameBinding;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use rootcause::report;
 use std::io::ErrorKind;
-use std::path::Path;
+use tokio::fs::read;
 use tokio_util::sync::CancellationToken;
 
 const XNVSE_VERSION_FILES: [&str; 2] = ["nvse_loader.exe", "nvse_1_4.dll"];
 
 impl GamePlatformAdapter {
-	pub(crate) fn read_game_version(
+	pub(crate) async fn read_game_version(
 		&self,
 		binding: &GameBinding,
 		cancellation: &CancellationToken,
 	) -> Result<Vec<u32>, ErrorMarker> {
-		let game = reopen_bound_game(binding, cancellation)?;
+		let game = reopen_bound_game(binding, cancellation).await?;
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
 		}
 
-		let executable = fs_access::open_regular(&game, Path::new("FalloutNV.exe"))
+		let executable = read(game.join("FalloutNV.exe"))
+			.await
 			.context(ErrorMarker::game_install_invalid())?;
-		read_file_version(executable)
+		read_file_version(&executable)
 	}
 
-	pub(crate) fn read_xnvse_version(
+	pub(crate) async fn read_xnvse_version(
 		&self,
 		binding: &GameBinding,
 		cancellation: &CancellationToken,
 	) -> Result<Option<Vec<u32>>, ErrorMarker> {
-		let game = reopen_bound_game(binding, cancellation)?;
+		let game = reopen_bound_game(binding, cancellation).await?;
 		let mut malformed = None;
 		for name in XNVSE_VERSION_FILES {
 			if cancellation.is_cancelled() {
 				return Err(report!(ErrorMarker::operation_cancelled()));
 			}
 
-			let file = match fs_access::open_regular(&game, Path::new(name)) {
-				Ok(file) => file,
-				Err(error) if error.current_context().kind() == ErrorKind::NotFound => continue,
-				Err(error) => return Err(error.context(ErrorMarker::game_install_invalid())),
+			let bytes = match read(game.join(name)).await {
+				Ok(bytes) => bytes,
+				Err(error) if error.kind() == ErrorKind::NotFound => continue,
+				Err(error) => return Err(report!(error).context(ErrorMarker::game_install_invalid())),
 			};
-			let mut version = match read_file_version(file) {
+			let mut version = match read_file_version(&bytes) {
 				Ok(version) => version,
 				Err(error) => {
 					if malformed.is_none() {
@@ -85,40 +85,44 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn game_and_xnvse_versions_use_their_semantic_component_order() -> Result<()> {
+	#[tokio::test]
+	async fn game_and_xnvse_versions_use_their_semantic_component_order() -> Result<()> {
 		let (_temp, game) = fixture()?;
 		fs::write(game.join("FalloutNV.exe"), pe_with_version([1, 4, 0, 525]))?;
 		fs::write(game.join("nvse_loader.exe"), pe_with_version([0, 6, 4, 9]))?;
-		let binding = steam::validate(&game)?;
+		let binding = steam::validate(&game).await?;
 		let adapter = adapter_without_sources();
 
-		let game_version = adapter.read_game_version(&binding, &CancellationToken::new())?;
-		let xnvse_version = adapter.read_xnvse_version(&binding, &CancellationToken::new())?;
+		let game_version = adapter.read_game_version(&binding, &CancellationToken::new()).await?;
+		let xnvse_version = adapter.read_xnvse_version(&binding, &CancellationToken::new()).await?;
 
 		assert_eq!(game_version, vec![1, 4, 0, 525]);
 		assert_eq!(xnvse_version, Some(vec![6, 4, 9]));
 		Ok(())
 	}
 
-	#[test]
-	fn xnvse_core_is_used_when_loader_is_absent() -> Result<()> {
+	#[tokio::test]
+	async fn xnvse_core_is_used_when_loader_is_absent() -> Result<()> {
 		let (_temp, game) = fixture()?;
 		fs::write(game.join("nvse_1_4.dll"), pe_with_version([0, 6, 3, 10]))?;
-		let binding = steam::validate(&game)?;
+		let binding = steam::validate(&game).await?;
 
-		let version = adapter_without_sources().read_xnvse_version(&binding, &CancellationToken::new())?;
+		let version = adapter_without_sources()
+			.read_xnvse_version(&binding, &CancellationToken::new())
+			.await?;
 
 		assert_eq!(version, Some(vec![6, 3, 10]));
 		Ok(())
 	}
 
-	#[test]
-	fn missing_xnvse_returns_none() -> Result<()> {
+	#[tokio::test]
+	async fn missing_xnvse_returns_none() -> Result<()> {
 		let (_temp, game) = fixture()?;
-		let binding = steam::validate(&game)?;
+		let binding = steam::validate(&game).await?;
 
-		let version = adapter_without_sources().read_xnvse_version(&binding, &CancellationToken::new())?;
+		let version = adapter_without_sources()
+			.read_xnvse_version(&binding, &CancellationToken::new())
+			.await?;
 
 		assert_eq!(version, None);
 		Ok(())

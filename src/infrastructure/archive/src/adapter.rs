@@ -267,9 +267,10 @@ fn plain_candidates(
 		{
 			continue;
 		}
-		let Some(destination) = member.path.strip_prefix(&core.discovery.data_root) else {
-			return Err(report!(ErrorMarker::unsafe_archive().with_phase("planning")));
-		};
+		let destination = member
+			.path
+			.strip_prefix(&core.discovery.data_root)
+			.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("planning")))?;
 		if destination.is_empty() {
 			continue;
 		}
@@ -1526,6 +1527,20 @@ mod tests {
 		Ok(converter.convert(&document)?)
 	}
 
+	#[tokio::test]
+	async fn completed_download_without_extension_uses_archive_signature() -> TestResult {
+		let temp = TempDir::new()?;
+		let path = temp.path().join("archive");
+		write_zip(&path, &[("Data/textures/a.dds", b"texture")])?;
+
+		let index = ArchiveAdapter
+			.index_port()
+			.call((archive_path(&path)?, None, CancellationToken::new()))
+			.await?;
+		assert!(matches!(index.installer, IndexedInstaller::Plain { candidates, .. } if candidates.len() == 1));
+		Ok(())
+	}
+
 	#[test]
 	fn single_not_usable_option_preserves_exactly_one_for_no_choice_error() -> TestResult {
 		let installer = single_option_installer(r#"<type name="NotUsable" />"#)?;
@@ -1710,12 +1725,10 @@ mod tests {
 		assert!(report
 			.iter_reports()
 			.any(|node| node.downcast_current_context::<ArchiveError>() == Some(&ArchiveError::Io)));
-		let Some(io_error) = report
+		let io_error = report
 			.iter_reports()
 			.find_map(|node| node.downcast_current_context::<IoError>())
-		else {
-			return Err("original I/O error was missing from the report tree".into());
-		};
+			.ok_or("original I/O error was missing from the report tree")?;
 		assert_eq!(io_error.kind(), IoErrorKind::NotFound);
 		Ok(())
 	}

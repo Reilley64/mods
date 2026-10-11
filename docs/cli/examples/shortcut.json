@@ -1,0 +1,9 @@
+{
+  "warnings": [
+    {
+      "code": "diagnostic_logging_unavailable",
+      "message": "diagnostic session logging is unavailable",
+      "details": {}
+    }
+  ]
+}

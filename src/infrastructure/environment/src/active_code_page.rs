@@ -90,6 +90,12 @@ pub(crate) fn encode(text: &str) -> Result<Vec<u8>, ErrorMarker> {
 	Ok(encoded)
 }
 
+/// Decodes `plugins.txt`. A UTF-8 byte order mark is removed first, because a
+/// non-UTF-8 active code page would decode it as text in front of the first plugin.
+pub(crate) fn decode_plugin_list(bytes: &[u8]) -> Result<String, ErrorMarker> {
+	decode(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes))
+}
+
 #[cfg(not(windows))]
 pub(crate) fn decode(bytes: &[u8]) -> Result<String, ErrorMarker> {
 	if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
@@ -181,4 +187,19 @@ fn active_code_page() -> Result<u32, ErrorMarker> {
 		return Err(report!(WindowsError::from_thread()).context(ErrorMarker::environment_invalid(None)));
 	}
 	Ok(code_page)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::decode_plugin_list;
+	use application::ErrorMarker;
+	use rootcause::Result;
+
+	#[test]
+	fn a_plugin_list_byte_order_mark_is_not_decoded_as_text() -> Result<(), ErrorMarker> {
+		let text = decode_plugin_list(b"\xef\xbb\xbfFalloutNV.esm\r\nMod.esp\r\n")?;
+
+		assert_eq!(text, "FalloutNV.esm\r\nMod.esp\r\n");
+		Ok(())
+	}
 }

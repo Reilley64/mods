@@ -10,18 +10,16 @@ workspace = true
 
 [dependencies]
 application = { workspace = true }
-cap-std = { workspace = true }
 domain = { workspace = true }
 pelite = { version = "0.10.0", default-features = false, features = ["std"] }
 rootcause = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
 tokio-util = { workspace = true, features = ["rt"] }
 
-[target.'cfg(unix)'.dependencies]
-libc = { workspace = true }
-
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 winreg = "0.56.0"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

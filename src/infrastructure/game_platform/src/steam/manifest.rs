@@ -8,7 +8,7 @@ use rootcause::report;
 use std::path::Component;
 use std::path::Path;
 
-pub(super) fn fields(text: &str) -> Result<(u32, String, u64), SteamMetadataParseError> {
+pub(super) fn fields(text: &str) -> Result<(u32, String), SteamMetadataParseError> {
 	let root = parse_key_values(text)?;
 	let app_state = exactly_one_object(&root, "AppState").ok_or_else(|| report!(SteamMetadataParseError))?;
 	let app_id = exactly_one_text(app_state, "appid")
@@ -19,11 +19,7 @@ pub(super) fn fields(text: &str) -> Result<(u32, String, u64), SteamMetadataPars
 		.filter(|value| !value.is_empty())
 		.ok_or_else(|| report!(SteamMetadataParseError))?
 		.to_owned();
-	let build = exactly_one_text(app_state, "buildid")
-		.ok_or_else(|| report!(SteamMetadataParseError))?
-		.parse()
-		.context(SteamMetadataParseError)?;
-	Ok((app_id, install_dir, build))
+	Ok((app_id, install_dir))
 }
 
 pub(super) fn is_install_directory_name(value: &str) -> bool {

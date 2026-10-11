@@ -1,0 +1,16 @@
+{
+  "settings": [
+    {
+      "key": "name",
+      "value": null,
+      "source": {
+        "kind": "manifest"
+      },
+      "manifest_value": null,
+      "manifest_path": "C:\\env\\manifest.toml",
+      "shadowed": false,
+      "writable": true
+    }
+  ],
+  "warnings": []
+}

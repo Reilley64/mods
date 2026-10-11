@@ -20,7 +20,7 @@ use ffi::mods_usvfs_launch;
 use ffi::mods_usvfs_link_directory;
 use ffi::mods_usvfs_link_file;
 use ffi::mods_usvfs_open;
-use native_path::native_path_wide;
+pub(crate) use native_path::native_path_wide;
 use native_path::physical_path_wide;
 use native_path::wide;
 use rootcause::Result;
@@ -32,12 +32,10 @@ use std::env::current_exe;
 use std::ffi::CString;
 use std::ffi::OsStr;
 use std::fs::read;
-use std::marker::PhantomData;
 use std::path::Path;
 use std::process::id;
 use std::ptr::NonNull;
 use std::ptr::null_mut;
-use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use usvfs_sys as ffi;
@@ -51,11 +49,28 @@ static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Load artifacts only from the package's `usvfs` directory beside its executable.
 /// A failed native teardown poisons this process's session gate rather than
 /// reconnecting to uncertain upstream state.
+///
+/// The view is `Send` but not `Sync`: it may move between threads, but upstream
+/// calls must never overlap.
 pub struct VirtualGameView {
 	native: Option<NonNull<ModsUsvfs>>,
-	// Upstream controller state is global; do not permit cross-thread access.
-	_thread: PhantomData<Rc<()>>,
 }
+
+// SAFETY: Moving the session to another thread is sound; overlapping calls are
+// not. In the pinned usvfs-rs revision `c23705c`, the controller exports that
+// the shim calls (`usvfsVirtualLinkFile`, `usvfsVirtualLinkDirectoryStatic`,
+// `usvfsCreateProcessHooked`, the clear functions, connect, and disconnect in
+// `src/usvfs_dll/usvfs.cpp`) use the process-global `context` without a lock.
+// `READ_CONTEXT`/`WRITE_CONTEXT` locking appears only in hook code for
+// injected children. No controller state is thread-local: `src/` has no
+// `thread_local`, `DllMain` ignores thread attach and detach, and the shim in
+// `rust/usvfs-sys/native/barrier.cpp` keeps no thread or lock state. The
+// caller's thread therefore does not matter, but calls must never overlap.
+// This wrapper prevents overlap: `SESSION_ACTIVE` allows one session per
+// process, `NonNull` keeps the view `!Sync`, and every native call takes
+// `&mut self` or `self`. Moving the value transfers ownership, which also
+// orders every call on the old thread before any call on the new one.
+unsafe impl Send for VirtualGameView {}
 
 impl VirtualGameView {
 	/// Loads the exact packaged native artifacts and applies mods' mapping decisions.
@@ -65,16 +80,16 @@ impl VirtualGameView {
 	/// Returns input, artifact, concurrent-session, or native setup failures.
 	pub fn configure(configuration: &ViewConfiguration) -> Result<Self, ExecutionError> {
 		let executable = current_exe().context(ExecutionError)?;
-		let Some(parent) = executable.parent() else {
-			return Err(report!(ExecutionError));
-		};
+		let parent = executable.parent().ok_or_else(|| report!(ExecutionError))?;
 		let mut view = Self::load(&parent.join("usvfs"))?;
+
 		if let Err(mut failure) = configuration.apply(&mut view) {
 			if let Err(cleanup) = view.close() {
 				failure.children_mut().push(cleanup.into_dynamic().into_cloneable());
 			}
 			return Err(failure);
 		}
+
 		Ok(view)
 	}
 
@@ -82,6 +97,7 @@ impl VirtualGameView {
 		if !directory.is_absolute() {
 			return Err(report!(ExecutionError));
 		}
+
 		for (name, expected) in ARTIFACTS {
 			let bytes = read(directory.join(name)).context(ExecutionError)?;
 			let actual: [u8; 32] = Sha256::digest(bytes).into();
@@ -89,6 +105,7 @@ impl VirtualGameView {
 				return Err(report!(ExecutionError));
 			}
 		}
+
 		let name = if cfg!(target_pointer_width = "64") {
 			"usvfs_x64.dll"
 		} else {
@@ -96,6 +113,7 @@ impl VirtualGameView {
 		};
 		let library = wide(directory.join(name).as_os_str())?;
 		let instance = CString::new(format!("mods-{}", id())).context(ExecutionError)?;
+
 		if SESSION_ACTIVE
 			.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
 			.is_err()
@@ -114,13 +132,8 @@ impl VirtualGameView {
 			}
 			check(result)?;
 		}
-		let Some(native) = NonNull::new(native) else {
-			return Err(report!(ExecutionError));
-		};
-		Ok(Self {
-			native: Some(native),
-			_thread: PhantomData,
-		})
+		let native = NonNull::new(native).ok_or_else(|| report!(ExecutionError))?;
+		Ok(Self { native: Some(native) })
 	}
 
 	pub(crate) fn launch_native(
@@ -135,15 +148,15 @@ impl VirtualGameView {
 		if !application.is_absolute() || !directory.is_absolute() {
 			return Err(report!(ExecutionError));
 		}
+
 		let application = physical_path_wide(application.as_os_str())?;
 		let mut command = wide(command)?;
 		let directory = physical_path_wide(directory.as_os_str())?;
 		if command.len() > 32767 {
 			return Err(report!(ExecutionError));
 		}
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		let mut output = PROCESS_INFORMATION::default();
 		// SAFETY: this session exclusively owns the live controller. Buffers are
 		// terminated and outlive the call; command is writable. Startup has the SDK
@@ -201,9 +214,7 @@ impl Drop for VirtualGameView {
 
 impl ConfigureView for VirtualGameView {
 	fn clear_bypasses(&mut self) -> Result<(), ExecutionError> {
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session, exception-contained call, no borrowed buffers.
 		check(unsafe { mods_usvfs_clear_bypasses(native.as_ptr()) })
 	}
@@ -211,9 +222,7 @@ impl ConfigureView for VirtualGameView {
 		let source = physical_path_wide(mapping.source.as_os_str())?;
 		let destination = native_path_wide(mapping.destination.as_os_str())?;
 		let flags = LINKFLAG_CREATETARGET | if recursive { LINKFLAG_RECURSIVE } else { 0 };
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session and checked terminated buffers live for the
 		// call. Flags come from the pinned upstream header, not handwritten ABI values.
 		check(unsafe {
@@ -224,9 +233,7 @@ impl ConfigureView for VirtualGameView {
 		let source = physical_path_wide(mapping.source.as_os_str())?;
 		let destination = native_path_wide(mapping.destination.as_os_str())?;
 		let flags = if recursive { LINKFLAG_RECURSIVE } else { 0 };
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session; checked terminated buffers live through the
 		// call. Flags come from the pinned header and never mark a creation target.
 		check(unsafe {
@@ -236,9 +243,7 @@ impl ConfigureView for VirtualGameView {
 	fn link_file(&mut self, mapping: &PathMapping) -> Result<(), ExecutionError> {
 		let source = physical_path_wide(mapping.source.as_os_str())?;
 		let destination = native_path_wide(mapping.destination.as_os_str())?;
-		let Some(native) = self.native else {
-			return Err(report!(ExecutionError));
-		};
+		let native = self.native.ok_or_else(|| report!(ExecutionError))?;
 		// SAFETY: exclusive live session; checked terminated buffers remain live and
 		// the native boundary does not retain their addresses.
 		check(unsafe { mods_usvfs_link_file(native.as_ptr(), source.as_ptr(), destination.as_ptr()) })
@@ -261,15 +266,121 @@ fn check(result: ModsResult) -> Result<(), ExecutionError> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::HookedProcess;
+	use crate::LaunchRequest;
+	use std::env::var_os;
+	use std::fs;
+	use std::path::PathBuf;
+	use std::sync::Mutex;
+	use std::sync::MutexGuard;
+	use std::sync::PoisonError;
+	use std::thread::sleep;
+	use std::thread::spawn;
+	use std::time::Duration;
+	use std::time::Instant;
+	use tempfile::TempDir;
+
+	// Tests in one process share the upstream session gate, so they run one at a time.
+	static SESSION_TESTS: Mutex<()> = Mutex::new(());
+
+	fn exclusive_session() -> MutexGuard<'static, ()> {
+		SESSION_TESTS.lock().unwrap_or_else(PoisonError::into_inner)
+	}
 
 	#[test]
 	fn packaged_exports_obey_single_session_ownership() -> Result<(), ExecutionError> {
+		let _session = exclusive_session();
 		let directory = Path::new(env!("MODS_USVFS_ARTIFACTS"));
 		let view = VirtualGameView::load(directory)?;
 		assert!(VirtualGameView::load(directory).is_err());
 		view.close()?;
 		let view = VirtualGameView::load(directory)?;
 		drop(view);
+		assert!(!SESSION_ACTIVE.load(Ordering::Acquire));
+		Ok(())
+	}
+
+	#[test]
+	fn session_moves_between_threads_for_configure_launch_and_close() -> Result<(), ExecutionError> {
+		let _session = exclusive_session();
+		let temp = TempDir::new().context(ExecutionError)?;
+		let root = temp.path().to_path_buf();
+		let source = root.join("source");
+		let mapped = root.join("virtual");
+		fs::create_dir(&source).context(ExecutionError)?;
+		fs::create_dir(&mapped).context(ExecutionError)?;
+		fs::write(source.join("mapped.txt"), "mapped through usvfs").context(ExecutionError)?;
+		let shell = PathBuf::from(var_os("ComSpec").ok_or_else(|| report!(ExecutionError))?);
+
+		for cycle in 0..3 {
+			let output = root.join(format!("output-{cycle}.txt"));
+
+			let view = spawn({
+				let mapping = PathMapping {
+					source: source.clone(),
+					destination: mapped.clone(),
+				};
+				move || -> Result<VirtualGameView, ExecutionError> {
+					let mut view = VirtualGameView::load(Path::new(env!("MODS_USVFS_ARTIFACTS")))?;
+					view.link_directory(&mapping, true)?;
+					Ok(view)
+				}
+			})
+			.join()
+			.map_err(|_| report!(ExecutionError))??;
+
+			let process = spawn({
+				let command = format!(
+					"cmd.exe /d /c type \"{}\" > \"{}\"",
+					mapped.join("mapped.txt").display(),
+					output.display()
+				);
+				let shell = shell.clone();
+				let root = root.clone();
+				move || -> Result<HookedProcess, ExecutionError> {
+					let mut process = view.launch(LaunchRequest {
+						new_process_group: false,
+						application: &shell,
+						command_line: OsStr::new(&command),
+						directory: &root,
+						standard_streams: None,
+					})?;
+					process.resume()?;
+
+					let deadline = Instant::now() + Duration::from_secs(30);
+					while !process.job_is_empty()? {
+						if Instant::now() >= deadline {
+							return Err(report!(ExecutionError));
+						}
+						sleep(Duration::from_millis(10));
+					}
+
+					assert_eq!(process.root_status()?, Some(0));
+					Ok(process)
+				}
+			})
+			.join()
+			.map_err(|_| report!(ExecutionError))??;
+
+			spawn(move || {
+				let mut process = process;
+				process.finish()
+			})
+			.join()
+			.map_err(|_| report!(ExecutionError))??;
+
+			assert!(!SESSION_ACTIVE.load(Ordering::Acquire));
+			assert_eq!(
+				fs::read_to_string(&output).context(ExecutionError)?,
+				"mapped through usvfs"
+			);
+		}
+
+		let view = VirtualGameView::load(Path::new(env!("MODS_USVFS_ARTIFACTS")))?;
+		spawn(move || view.close())
+			.join()
+			.map_err(|_| report!(ExecutionError))??;
+
 		assert!(!SESSION_ACTIVE.load(Ordering::Acquire));
 		Ok(())
 	}

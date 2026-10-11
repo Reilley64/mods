@@ -1,5 +1,6 @@
 use crate::conflicts::ListEffectiveConflictsOutput;
 use domain::ArchiveIdentity;
+use domain::ArchivePath;
 use domain::DataRelativePath;
 use domain::EffectiveResult;
 use domain::FileDependencyState;
@@ -107,6 +108,11 @@ pub struct FileDependencyFact {
 pub struct InstallationState {
 	pub game_binding: GameBinding,
 	pub installed_mods: Vec<InstalledMod>,
+	/// Names of the `mods` entries that `modlist.txt` does not list.
+	///
+	/// These entries are not installed mods and contribute nothing. An install can take one of
+	/// these names only with `--replace`, because its directory would collide with the entry.
+	pub unlisted_mod_names: Vec<ModName>,
 	pub current_winners: HashMap<DataRelativePath, EffectiveResult>,
 	pub file_dependencies: HashMap<String, FileDependencyFact>,
 }
@@ -301,7 +307,11 @@ pub struct PlannedCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMode {
 	NewInstall,
+	/// Replaces a mod listed in `modlist.txt`, keeping its entry, priority, and enabled state.
 	Replacement,
+	/// Replaces an unlisted `mods` entry of the same name. The entry is removed, and the new mod
+	/// is listed like a new install.
+	UnlistedReplacement,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallOverlap {
@@ -317,6 +327,9 @@ pub struct ProjectedModState {
 	pub mode: InstallMode,
 	pub mod_name: ModName,
 	pub priority: ModPriority,
+	/// Zero-based position among mod entries in `modlist.txt`, counted from the
+	/// top. Comment lines are not counted. MO2 order puts the highest Mod
+	/// Priority first, so a new install is at 0.
 	pub list_position: u64,
 	pub enabled: bool,
 	pub overlaps: Vec<InstallOverlap>,
@@ -340,6 +353,10 @@ pub struct InstallPlan {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovedInstallation {
+	/// Extraction reads this archive after the transaction begins, so a replacement must not
+	/// remove it.
+	pub archive: ArchivePath,
+	pub nexus: Option<NexusProvenance>,
 	pub source_basename: String,
 	pub fomod_schema_version: Option<String>,
 	pub plan: InstallPlan,
@@ -364,4 +381,55 @@ pub struct InstalledArchive {
 	pub plan: InstallPlan,
 	pub conflicts: ListEffectiveConflictsOutput,
 	pub warnings: Vec<InstallWarning>,
+}
+
+#[derive(Debug, Clone)]
+pub enum InstallArchiveSource {
+	Local(ArchivePath),
+	Downloaded(DownloadedMod),
+}
+impl From<ArchivePath> for InstallArchiveSource {
+	fn from(archive: ArchivePath) -> Self {
+		Self::Local(archive)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NexusProvenance {
+	pub game_domain: String,
+	pub mod_id: u64,
+	pub file_id: u64,
+	pub file_version: String,
+	pub mod_version: String,
+	pub mod_name: String,
+	pub file_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModSource {
+	Local(ArchivePath),
+	Remote(RemoteModSource),
+}
+#[derive(Debug, Clone)]
+pub struct RemoteModSource {
+	pub url: String,
+	pub file_id: Option<u64>,
+}
+#[derive(Debug, Clone)]
+pub struct DownloadedMod {
+	pub suggested_name: String,
+	pub archive: ArchivePath,
+	pub provenance: Option<NexusProvenance>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadModFile {
+	pub file_id: u64,
+	pub name: String,
+	pub version: String,
+	pub category: String,
+}
+#[derive(Debug, Clone)]
+pub enum DownloadModOutput {
+	Downloaded(DownloadedMod),
+	SelectionRequired(Vec<DownloadModFile>),
 }

@@ -4,7 +4,7 @@
   "license": "GPL-3.0-or-later",
   "version": "0.0.0",
   "scripts": {
-    "check": "bun run check:rust && bun run check:tools",
+    "check": "bun install --frozen-lockfile && bun run check:rust && bun run check:tools",
     "check:rust": "bun run format:check && bun run lint && bun run dependency:check && bun run test:release-versions && bun run test:rust",
     "test:release-versions": "bun test scripts/release-versions.test.ts",
     "check:tools": "bun run test:tools",
@@ -13,17 +13,12 @@
     "dependency:check": "bun scripts/check-dependency-graph.ts",
     "test": "bun run test:rust && bun run test:tools",
     "test:rust": "cargo nextest run --workspace --all-targets",
-    "test:tools": "bun test tests ./.prime/agent/extensions/coding-style-gate/tests ./.prime/agent/extensions/codex-discovery-version/tests",
+    "test:tools": "bun test tests ./.prime/agent/extensions/codex-discovery-version/tests",
     "check:pr-title": "bun scripts/validate-pr-title.ts"
-  },
-  "dependencies": {
-    "@typesafe-ai/sdk": "0.6.0",
-    "diff": "9.0.0"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.2",
-    "@commitlint/config-conventional": "21.2.2",
-    "msw": "2.15.0"
+    "@commitlint/config-conventional": "21.2.2"
   },
   "packageManager": "bun@1.4.2"
 }

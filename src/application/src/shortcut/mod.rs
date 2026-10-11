@@ -1,0 +1,10 @@
+mod create_shortcut;
+mod types;
+pub use create_shortcut::CreateShortcutDependencies;
+pub use create_shortcut::CreateShortcutError;
+pub use create_shortcut::CreateShortcutOutput;
+pub use create_shortcut::create_shortcut;
+pub use types::LocateEnvironmentRoot;
+pub use types::LocateLauncher;
+pub use types::PersistShortcut;
+pub use types::ShortcutDefinition;

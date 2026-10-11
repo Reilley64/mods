@@ -1,0 +1,16 @@
+{
+  "normalized_key": "textures/a.dds",
+  "display_path": "Textures\\A.dds",
+  "resolution_status": "exact",
+  "effective_result": null,
+  "provider_stack": [],
+  "tombstone_effects": [],
+  "content_comparisons": [],
+  "reasons": [
+    {
+      "kind": "absent_no_entry"
+    }
+  ],
+  "problems": [],
+  "warnings": []
+}

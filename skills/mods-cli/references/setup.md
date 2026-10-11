@@ -16,7 +16,7 @@ Confirm that WinGet selects `Reilley64.Mods`; stop if it reports an ambiguous or
 
 ### Release ZIP fallback
 
-If WinGet cannot find the package, offer the [v0.1.0 release ZIP](https://github.com/Reilley64/mods/releases/tag/v0.1.0) as an alternative and obtain approval before installation. Download `mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip` and `mods-v0.1.0-runtime-SHA256SUMS`. Verify the ZIP's SHA-256 against the matching checksum file, then extract into a fresh installation directory. Stop on a mismatch.
+If WinGet cannot find the package, offer the [v0.1.0 release ZIP](https://github.com/Reilley64/mods/releases/tag/v0.1.0) as an alternative and obtain approval before installation. Download `mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip` and `SHA256SUMS`. Verify the ZIP's SHA-256 against its `SHA256SUMS` entry, then extract into a fresh installation directory. Stop on a mismatch.
 
 Install both Microsoft Visual C++ redistributables if missing. Keep the complete extracted layout, including licenses and `BUILD-AND-SOURCE.md`:
 
@@ -28,13 +28,13 @@ usvfs/usvfs_proxy_x86.exe
 usvfs/usvfs_proxy_x64.exe
 ```
 
-Do not move only `mods.exe` or substitute native files from another release. The original all-in-one `mods-v0.1.0-x86_64-pc-windows-msvc.zip` remains supported and has its own `SHA256SUMS`; it includes corresponding source. The smaller runtime ZIP has a separate source download linked in `BUILD-AND-SOURCE.md`.
+Do not move only `mods.exe` or substitute native files from another release. The complete corresponding source is the separate `mods-v0.1.0-source.tar.gz` release asset, also linked with its SHA-256 in `BUILD-AND-SOURCE.md`.
 
 Use the full executable path with PowerShell's `&` operator, or add its installation directory to PATH with user approval. Check `mods --version` and `mods --help` after setup. Do not assume Chocolatey or Scoop availability.
 
 ## Select a Mod Environment
 
-A **Mod Environment** is one isolated setup, not a separately selectable profile. Its **Environment Root** contains `mods.toml` (the **Environment Manifest**) and managed state. **Profile State** is its one set of mod order, plugin state, INIs, and saves beneath `profile`.
+A **Mod Environment** is one isolated setup, not a separately selectable profile. Its **Environment Root** contains `mods.toml` (the **Environment Manifest**) and managed state. **Profile State** is its one set of mod order, plugin state, INIs, and saves beneath `profile`. `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Profile State has no `loadorder.txt`; `init` does not import one, and an existing one is ignored.
 
 - `--environment PATH` selects the Environment Root.
 - Without it, the root is `%LOCALAPPDATA%\mods\environments\default`; this is not current-directory or ancestor discovery.
@@ -46,16 +46,16 @@ A **Mod Environment** is one isolated setup, not a separately selectable profile
 After approval, select a new Environment Root and a real Steam Game Installation:
 
 ```powershell
-mods --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
-mods --environment 'D:\Mod Environments\Mojave' config list
-mods --environment 'D:\Mod Environments\Mojave' config get game-dir
+mods --json --environment 'D:\Mod Environments\Mojave' init --game-install 'D:\SteamLibrary\steamapps\common\Fallout New Vegas'
+mods --json --environment 'D:\Mod Environments\Mojave' config list
+mods --json --environment 'D:\Mod Environments\Mojave' config get game-dir
 ```
 
-A **Game Binding** records the Game Installation's Steam identity, path, and observed build. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.
+A **Game Binding** records the Game Installation's path. Selection precedence is `--game-install`, then `MODS_GAME_DIR`, then Steam library discovery, then Bethesda registry fallback. A selected invalid path fails rather than silently falling back. The fallback emits a warning.
 
-Initialization creates the manifest and Profile State. Use a nonexistent or empty root; existing `logs` and an empty `temp` are permitted when safe. An existing `mods.toml`, other contents, unsafe paths, or unfinished temporary state can block initialization. It is not a repair/reset command.
+Initialization creates the manifest and Profile State. Use a nonexistent or empty root; existing `logs` and an empty `temp` are permitted when safe. An existing `mods.toml`, other contents, unsafe paths, or unfinished temporary state can block initialization. It is not a repair/reset command. Initialization writes the layout directly into the root and writes `mods.toml` last. A failed initialization can leave a partial layout, which blocks a retry until it is removed.
 
-`MODS_GAME_DIR` is the only supported `MODS_*` setting override. Use an absolute Game Installation path. Unknown, duplicate, empty, or non-Unicode overrides fail validation; even an explicit `--game-install` does not bypass malformed override validation. Use [configuration](commands.md) to inspect effective versus stored values before changing a binding.
+`MODS_GAME_DIR` overrides the Game Installation, and `MODS_NEXUS_API_KEY` overrides the stored Nexus API key. Use an absolute Game Installation path. Other `MODS_*` variables are ignored, and an empty variable counts as unset. A duplicate or non-Unicode override fails validation; even an explicit `--game-install` does not bypass malformed override validation. Use [configuration](commands.md) to inspect effective versus stored values before changing a binding.
 
 ## Setup failures
 
@@ -63,7 +63,7 @@ Initialization creates the manifest and Profile State. Use a nonexistent or empt
 - Missing DLL/proxy or VFS startup failure: restore the entire matching ZIP layout and check both VC++ redistributables. Inspect security-tool quarantine; do not disable security controls automatically.
 - Hash mismatch or extraction failure: stop; check that the asset and checksum belong together and use a fresh destination. Do not overlay a partly extracted installation.
 - Missing `LOCALAPPDATA`: specify an absolute `--environment`.
-- Game discovery or build mismatch: inspect `config get game-dir`, inherited `MODS_GAME_DIR`, and the real Steam installation before an approved binding change. Do not copy mod files into Steam Data as a workaround.
+- Game discovery failure: inspect `config get game-dir`, inherited `MODS_GAME_DIR`, and the real Steam installation before an approved binding change. Do not copy mod files into Steam Data as a workaround.
 - Invalid or already initialized root: inspect the selected path and existing state. Do not delete it or rerun initialization as an automatic fix.
 
 For error codes, retained partial state, and logs, read [troubleshooting](troubleshooting.md).

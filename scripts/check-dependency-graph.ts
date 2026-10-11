@@ -4,6 +4,7 @@ const packageNames = [
   "application",
   "infrastructure-environment",
   "infrastructure-settings",
+  "infrastructure-nexus",
   "infrastructure-game-platform",
   "infrastructure-archive",
   "infrastructure-execution",
@@ -26,10 +27,11 @@ const expectedProjectDependencies: Record<PackageName, readonly PackageName[]> =
   application: ["domain"],
   "infrastructure-environment": ["application", "domain"],
   "infrastructure-settings": ["application", "domain"],
+  "infrastructure-nexus": ["application", "domain"],
   "infrastructure-game-platform": ["application", "domain"],
   "infrastructure-archive": ["application", "domain"],
   "infrastructure-execution": ["application", "domain"],
-  "infrastructure-dependencies": ["infrastructure-environment", "infrastructure-settings", "infrastructure-game-platform", "infrastructure-archive", "infrastructure-execution", "application", "domain"],
+  "infrastructure-dependencies": ["infrastructure-nexus", "infrastructure-environment", "infrastructure-settings", "infrastructure-game-platform", "infrastructure-archive", "infrastructure-execution", "application", "domain"],
 };
 
 export function validateProjectGraph(metadata: CargoMetadata): string[] {

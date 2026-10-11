@@ -17,15 +17,15 @@ The `mods.toml` file that marks an Environment Root and records its schema, opti
 _Avoid_: Global registry, profile manifest
 
 **Game Binding**:
-The association between one Mod Environment and one Game Installation, including its Steam identity, path, and observed build.
+The association between one Mod Environment and one Game Installation, identified by its path.
 _Avoid_: Profile, global game setting
 
 **Game Installation**:
-The Steam-managed Fallout: New Vegas installation that supplies the clean shared base for one or more Mod Environments.
+The Steam-managed Fallout: New Vegas installation that supplies the shared base for one or more Mod Environments. Its file contents stay unchanged, but `exec` sets the modification times of its Data-root plugins and BSAs to enforce the running environment's load order, as it does for plugins and BSAs in Data Mods and Overwrite. Environments that share an installation set these times again on each run, so two of them must not run at the same time.
 _Avoid_: Mod Environment, profile
 
 **Profile State**:
-The single set of mod order, plugin state, INIs, and saves owned by a Mod Environment and grouped beneath its `profile` directory.
+The single set of mod order, plugin state, INIs, and saves owned by a Mod Environment and grouped beneath its `profile` directory. `plugins.txt` lists the active plugins. Its line order is the load order. To change the load order, reorder its lines. Profile State has no `loadorder.txt`; an existing one is ignored.
 _Avoid_: A separately selectable profile, nested environment
 
 **Data Mod**:
@@ -45,7 +45,7 @@ The case-insensitively unique name that identifies a Data Mod in its directory n
 _Avoid_: Mod ID, opaque identifier
 
 **Mod Priority**:
-The zero-based position of a Data Mod in the complete low-to-high `modlist.txt` order. Only enabled Data Mods participate in the Virtual Game View; Overwrite has a separate implicit highest rank.
+The zero-based rank of a Data Mod in the complete `modlist.txt`, which uses Mod Organizer 2 order: the first listed mod has the highest priority and the last listed mod has priority 0. Game Data is always lowest. There is no migration: a list written low-to-high by earlier versions now reads reversed. Only enabled Data Mods participate in the Virtual Game View; Overwrite has a separate implicit highest rank. A folder in `mods` without a `modlist.txt` entry is not a Data Mod: it is ignored like a disabled mod, and mods never adds it to the list. Each listed mod needs a folder of exactly the listed spelling.
 _Avoid_: Plugin load order, dependency rank
 
 **File Conflict**:
@@ -63,6 +63,10 @@ _Avoid_: Root output, temporary directory
 **Output Target**:
 Overwrite or one installed, enabled Data Mod selected to receive new Data files and new copy or file-move destinations for one managed execution. Selection does not change Mod Priority or relocate existing destination files from their current provider.
 _Avoid_: Profile State, staging directory
+
+**Launch Shortcut**:
+A desktop entry that preserves an executable, its arguments, and launch choices for one Mod Environment. It uses that environment's current mods and settings rather than a saved snapshot.
+_Avoid_: Mod snapshot, saved Mod Environment
 
 **Diagnostic Session**:
 The bounded diagnostic scope for one environment-bound CLI command, including its nested work and cleanup. After the MVP, an MCP request or MCP server lifecycle may also have its own Diagnostic Session.

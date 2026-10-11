@@ -1,5 +1,4 @@
 use crate::errors::ErrorMarker;
-use crate::ports::LoadSettings;
 use crate::ports::ProgressEvent;
 use crate::ports::ReportProgress;
 use crate::settings::types::SettingKey;
@@ -12,7 +11,6 @@ use std::fmt;
 #[derive(Clone)]
 pub struct GetSettingDependencies {
 	pub report_progress: Option<ReportProgress>,
-	pub load_settings: LoadSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,16 +30,14 @@ impl fmt::Display for GetSettingError {
 #[tracing::instrument(skip_all)]
 pub async fn get_setting(
 	dependencies: GetSettingDependencies,
+	settings: Vec<SettingRecord>,
 	key: SettingKey,
 ) -> Result<GetSettingOutput, GetSettingError> {
-	let resolved = dependencies.load_settings.call(()).await.context(GetSettingError)?;
-
 	if let Some(progress) = &dependencies.report_progress {
 		progress.call((ProgressEvent::SettingsLoaded,)).await;
 	}
 
-	let setting = resolved
-		.settings
+	let setting = settings
 		.into_iter()
 		.find(|record| record.key == key)
 		.ok_or_else(|| report!(ErrorMarker::setting_unknown()))
@@ -52,60 +48,39 @@ pub async fn get_setting(
 
 #[cfg(test)]
 mod tests {
-	use super::GetSettingDependencies;
-	use super::get_setting;
-	use crate::ports::PortFuture;
-	use crate::settings::ResolvedSettings;
+	use super::*;
 	use crate::settings::SettingKey;
-	use crate::settings::SettingRecord;
 	use crate::settings::SettingSource;
 	use crate::settings::SettingValue;
-	use domain::GameBinding;
-	use domain::GameInstallationPath;
-	use domain::SteamBuildId;
-	use std::env::temp_dir;
-	use std::error::Error;
-	use std::result::Result as StdResult;
-	use std::sync::Arc;
+	use rootcause::Result;
 
 	#[tokio::test]
-	async fn get_selects_the_requested_typed_key() -> StdResult<(), Box<dyn Error>> {
-		let binding = GameBinding::new(
-			GameInstallationPath::new(temp_dir().join("game")).map_err(|_| "invalid test game path")?,
-			SteamBuildId::new(1).map_err(|_| "invalid test build ID")?,
-		);
-		let records = SettingKey::ALL
-			.into_iter()
-			.map(|key| SettingRecord {
-				key,
-				value: SettingValue::Unset,
-				source: SettingSource::Manifest,
-				manifest_value: SettingValue::Unset,
-				manifest_path: key.manifest_path(),
-				shadowed: false,
-				writable: key == SettingKey::GameDir,
-			})
-			.collect();
-		let resolved = ResolvedSettings {
-			settings: records,
-			effective_binding: binding.clone(),
-			manifest_binding: binding,
+	async fn supplied_records_preserve_provenance() -> Result<()> {
+		let record = SettingRecord {
+			key: SettingKey::GameDir,
+			value: SettingValue::Path("effective".into()),
+			source: SettingSource::Environment {
+				variable: "MODS_GAME_DIR",
+			},
+			manifest_value: SettingValue::Path("stored".into()),
+			manifest_path: "game_dir",
+			shadowed: true,
+			writable: true,
 		};
-		let dependencies = GetSettingDependencies {
-			report_progress: None,
-			load_settings: Arc::new(move || {
-				let value = resolved.clone();
-				Box::pin(async move { Ok(value) }) as PortFuture<_>
-			}),
-		};
-		assert_eq!(
-			get_setting(dependencies, SettingKey::GameDir)
-				.await
-				.map_err(|_| "get failed")?
-				.setting
-				.key,
-			SettingKey::GameDir
-		);
+		let output = get_setting(
+			GetSettingDependencies { report_progress: None },
+			vec![record.clone()],
+			SettingKey::GameDir,
+		)
+		.await?;
+		assert_eq!(output.setting, record);
+		assert!(get_setting(
+			GetSettingDependencies { report_progress: None },
+			Vec::new(),
+			SettingKey::Name
+		)
+		.await
+		.is_err());
 		Ok(())
 	}
 }

@@ -1,0 +1,59 @@
+{
+  "resolution_status": "invalid",
+  "rows": [
+    {
+      "kind": "ordinary_conflict",
+      "normalized_key": "textures/a.dds",
+      "display_path": "Textures\\A.dds",
+      "participation": "active",
+      "effective_file": {
+        "kind": "overwrite",
+        "priority": {
+          "kind": "overwrite"
+        },
+        "original_path": "Textures\\A.dds",
+        "participation_reason": "overwrite"
+      },
+      "losing_files": [
+        {
+          "kind": "steam_data",
+          "priority": {
+            "kind": "base"
+          },
+          "original_path": "Textures\\A.dds",
+          "participation_reason": "steam_base"
+        }
+      ],
+      "content_comparisons": [
+        {
+          "state": "not_compared",
+          "winner": {
+            "kind": "overwrite",
+            "priority": {
+              "kind": "overwrite"
+            },
+            "original_path": "Textures\\A.dds",
+            "participation_reason": "overwrite"
+          },
+          "loser": {
+            "kind": "steam_data",
+            "priority": {
+              "kind": "base"
+            },
+            "original_path": "Textures\\A.dds",
+            "participation_reason": "steam_base"
+          }
+        }
+      ]
+    }
+  ],
+  "problems": [
+    {
+      "kind": "provider_missing",
+      "scope": {
+        "kind": "global"
+      }
+    }
+  ],
+  "warnings": []
+}

@@ -10,20 +10,18 @@ workspace = true
 
 [dependencies]
 application = { workspace = true }
-cap-std = { workspace = true }
 config = { version = "0.15.25", default-features = false, features = ["toml"] }
 domain = { workspace = true }
 encoding_rs = { workspace = true }
 rootcause = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["fs"] }
 tokio-util = { workspace = true, features = ["rt"] }
 toml = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = { workspace = true }
-
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Globalization", "Win32_Storage_FileSystem"] }
+windows = { workspace = true, features = ["Win32_Globalization"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

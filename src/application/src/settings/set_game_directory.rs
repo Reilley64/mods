@@ -7,10 +7,8 @@ use crate::ports::StoreGameBinding;
 use crate::ports::ValidateEffectiveBinding;
 use crate::ports::ValidateGameDirectory;
 use crate::settings::types::EffectiveBinding;
-use crate::settings::types::SetGameDirectoryWarning;
 use crate::settings::types::SettingSource;
 use domain::GameInstallationPath;
-use domain::SteamBuildId;
 use rootcause::Result;
 use rootcause::prelude::ResultExt;
 use std::fmt;
@@ -29,12 +27,10 @@ pub struct SetGameDirectoryDependencies {
 #[derive(Debug, Clone)]
 pub struct SetGameDirectoryOutput {
 	pub stored_value: GameInstallationPath,
-	pub stored_observed_build_id: SteamBuildId,
 	pub effective_value: GameInstallationPath,
 	pub source: SettingSource,
 	pub shadowed: bool,
 	pub effective_binding: EffectiveBinding,
-	pub warnings: Vec<SetGameDirectoryWarning>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,35 +70,25 @@ pub async fn set_game_directory(
 		.await
 		.context(SetGameDirectoryError)?;
 
-	let (effective_binding, warnings) = if prospective.shadowed {
+	let effective_binding = if prospective.shadowed {
 		match dependencies
 			.validate_effective_binding
 			.call((prospective.effective.clone(), cancellation.clone()))
 			.await
 		{
-			Ok(_) => (EffectiveBinding::Valid, Vec::new()),
-			Err(report) => {
-				let marker = report.current_context();
-				let warnings = match marker.code() {
-					ErrorCode::GameBuildMismatch => {
-						let Some((expected_build_id, actual_build_id)) = marker.build_ids()
-						else {
-							return Err(report.context(SetGameDirectoryError));
-						};
-						vec![SetGameDirectoryWarning::EffectiveGameBindingInvalid {
-							variable: "MODS_GAME_DIR",
-							expected_build_id,
-							actual_build_id,
-						}]
-					}
-					ErrorCode::GameInstallNotFound | ErrorCode::GameInstallInvalid => Vec::new(),
-					_ => return Err(report.context(SetGameDirectoryError)),
-				};
-				(EffectiveBinding::Invalid, warnings)
+			Ok(_) => EffectiveBinding::Valid,
+			Err(report)
+				if matches!(
+					report.current_context().code(),
+					ErrorCode::GameInstallNotFound | ErrorCode::GameInstallInvalid
+				) =>
+			{
+				EffectiveBinding::Invalid
 			}
+			Err(report) => return Err(report.context(SetGameDirectoryError)),
 		}
 	} else {
-		(EffectiveBinding::Valid, Vec::new())
+		EffectiveBinding::Valid
 	};
 
 	let outcome = dependencies
@@ -117,12 +103,10 @@ pub async fn set_game_directory(
 
 	Ok(SetGameDirectoryOutput {
 		stored_value: outcome.stored.game_directory().clone(),
-		stored_observed_build_id: outcome.stored.observed_build_id(),
 		effective_value: outcome.effective.game_directory().clone(),
 		source: outcome.source,
 		shadowed: outcome.shadowed,
 		effective_binding,
-		warnings,
 	})
 }
 
@@ -135,11 +119,9 @@ mod tests {
 	use crate::ports::PortFuture;
 	use crate::ports::StoredAndEffectiveBinding;
 	use crate::settings::EffectiveBinding;
-	use crate::settings::SetGameDirectoryWarning;
 	use crate::settings::SettingSource;
 	use domain::GameBinding;
 	use domain::GameInstallationPath;
-	use domain::SteamBuildId;
 	use rootcause::report;
 	use std::env::temp_dir;
 	use std::error::Error;
@@ -150,16 +132,13 @@ mod tests {
 	use tokio_util::sync::CancellationToken;
 
 	#[tokio::test]
-	async fn shadowed_invalid_effective_binding_is_validated_before_store_and_returns_warning()
-	-> StdResult<(), Box<dyn Error>> {
+	async fn shadowed_invalid_effective_binding_is_validated_before_store() -> StdResult<(), Box<dyn Error>> {
 		let stored = GameBinding::new(
 			GameInstallationPath::new(temp_dir().join("stored")).map_err(|_| "invalid test game path")?,
-			SteamBuildId::new(2).map_err(|_| "invalid test build ID")?,
 		);
 		let effective = GameBinding::new(
 			GameInstallationPath::new(temp_dir().join("effective"))
 				.map_err(|_| "invalid test game path")?,
-			SteamBuildId::new(2).map_err(|_| "invalid test build ID")?,
 		);
 		let order = Arc::new(AtomicUsize::new(0));
 		let validation_observed_order = Arc::new(AtomicUsize::new(0));
@@ -197,7 +176,7 @@ mod tests {
 				move |_, _| {
 					validation_observed_order.store(order.load(Ordering::SeqCst), Ordering::SeqCst);
 					order.store(2, Ordering::SeqCst);
-					Box::pin(async { Err(report!(ErrorMarker::game_build_mismatch(2, 1))) })
+					Box::pin(async { Err(report!(ErrorMarker::game_install_invalid())) })
 						as PortFuture<_>
 				}
 			}),
@@ -226,18 +205,10 @@ mod tests {
 				.await
 				.map_err(|_| "set failed")?;
 		assert_eq!(output.effective_binding, EffectiveBinding::Invalid);
-		assert_eq!(output.warnings.len(), 1);
 		assert_eq!(validation_observed_order.load(Ordering::SeqCst), 1);
 		assert_eq!(store_observed_order.load(Ordering::SeqCst), 2);
 		assert_eq!(order.load(Ordering::SeqCst), 3);
-		assert!(matches!(
-			&output.warnings[0],
-			SetGameDirectoryWarning::EffectiveGameBindingInvalid {
-				variable: "MODS_GAME_DIR",
-				expected_build_id: 2,
-				actual_build_id: 1
-			}
-		));
+
 		Ok(())
 	}
 
@@ -256,7 +227,6 @@ mod tests {
 		assert_eq!(output.stored_value, stored.game_directory().clone());
 		assert!(output.shadowed);
 		assert_eq!(output.effective_binding, EffectiveBinding::Invalid);
-		assert!(output.warnings.is_empty());
 		Ok(())
 	}
 
@@ -274,7 +244,6 @@ mod tests {
 		assert_eq!(store_calls.load(Ordering::SeqCst), 1);
 		assert!(output.shadowed);
 		assert_eq!(output.effective_binding, EffectiveBinding::Invalid);
-		assert!(output.warnings.is_empty());
 		Ok(())
 	}
 
@@ -304,12 +273,10 @@ mod tests {
 		let stored = GameBinding::new(
 			GameInstallationPath::new(temp_dir().join("stored-shadowed-binding"))
 				.map_err(|_| "invalid test game path")?,
-			SteamBuildId::new(2).map_err(|_| "invalid test build ID")?,
 		);
 		let effective = GameBinding::new(
 			GameInstallationPath::new(temp_dir().join("effective-shadowed-binding"))
 				.map_err(|_| "invalid test game path")?,
-			SteamBuildId::new(2).map_err(|_| "invalid test build ID")?,
 		);
 		let dependencies = SetGameDirectoryDependencies {
 			report_progress: None,

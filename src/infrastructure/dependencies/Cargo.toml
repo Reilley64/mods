@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+infrastructure-nexus = { path = "../nexus" }
 infrastructure-environment = { path = "../environment" }
 infrastructure-settings = { path = "../settings" }
 infrastructure-game-platform = { path = "../game_platform" }
