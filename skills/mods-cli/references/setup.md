@@ -16,7 +16,7 @@ Confirm that WinGet selects `Reilley64.Mods`; stop if it reports an ambiguous or
 
 ### Release ZIP fallback
 
-If WinGet cannot find the package, offer the [v0.1.0 release ZIP](https://github.com/Reilley64/mods/releases/tag/v0.1.0) as an alternative and obtain approval before installation. Download `mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip` and `mods-v0.1.0-runtime-SHA256SUMS`. Verify the ZIP's SHA-256 against the matching checksum file, then extract into a fresh installation directory. Stop on a mismatch.
+If WinGet cannot find the package, offer the [v0.1.0 release ZIP](https://github.com/Reilley64/mods/releases/tag/v0.1.0) as an alternative and obtain approval before installation. Download `mods-v0.1.0-runtime-x86_64-pc-windows-msvc.zip` and `SHA256SUMS`. Verify the ZIP's SHA-256 against its `SHA256SUMS` entry, then extract into a fresh installation directory. Stop on a mismatch.
 
 Install both Microsoft Visual C++ redistributables if missing. Keep the complete extracted layout, including licenses and `BUILD-AND-SOURCE.md`:
 
@@ -28,7 +28,7 @@ usvfs/usvfs_proxy_x86.exe
 usvfs/usvfs_proxy_x64.exe
 ```
 
-Do not move only `mods.exe` or substitute native files from another release. The original all-in-one `mods-v0.1.0-x86_64-pc-windows-msvc.zip` remains supported and has its own `SHA256SUMS`; it includes corresponding source. The smaller runtime ZIP has a separate source download linked in `BUILD-AND-SOURCE.md`.
+Do not move only `mods.exe` or substitute native files from another release. The complete corresponding source is the separate `mods-v0.1.0-source.tar.gz` release asset, also linked with its SHA-256 in `BUILD-AND-SOURCE.md`.
 
 Use the full executable path with PowerShell's `&` operator, or add its installation directory to PATH with user approval. Check `mods --version` and `mods --help` after setup. Do not assume Chocolatey or Scoop availability.
 
