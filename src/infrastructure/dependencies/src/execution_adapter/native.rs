@@ -43,13 +43,30 @@ use std::future::ready;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_PATH_NOT_FOUND: u32 = 3;
+const ERROR_ACCESS_DENIED: u32 = 5;
+const ERROR_BAD_EXE_FORMAT: u32 = 193;
+const ERROR_EXE_MACHINE_TYPE_MISMATCH: u32 = 216;
+const ERROR_DIRECTORY: u32 = 267;
+const ERROR_ELEVATION_REQUIRED: u32 = 740;
+const LAUNCH_INPUT_ERRORS: [u32; 6] = [
+	ERROR_FILE_NOT_FOUND,
+	ERROR_PATH_NOT_FOUND,
+	ERROR_ACCESS_DENIED,
+	ERROR_BAD_EXE_FORMAT,
+	ERROR_EXE_MACHINE_TYPE_MISMATCH,
+	ERROR_DIRECTORY,
+];
+
 struct NativeProgram {
 	process: HookedProcess,
 	private_streams: Option<PrivateStreams>,
 }
 
-// These ports create every handle they consume, so another handle type is a
-// composition defect rather than a user-facing condition.
+/// Reports a foreign adapter handle as a composition defect, not a user-facing condition.
+///
+/// These ports create every handle they consume, so no user input can supply another handle type.
 fn foreign_handle() -> Report<ErrorMarker> {
 	report!(ErrorMarker::execution_supervision_failed())
 }
@@ -96,8 +113,17 @@ impl ExecutionAdapter {
 			finish_program_output: Arc::new(|output| completed(finish_streams(output))),
 			check_profile_state: Arc::new(move |cancellation| {
 				let adapter = adapter.clone();
-				Box::pin(async move { adapter.check_retained_state(cancellation).await })
-					as PortFuture<_>
+				Box::pin(async move {
+					let spool = adapter.capture.as_ref().and_then(|capture| capture.directory());
+					EnvironmentAdapter
+						.check_launch_with_spool(
+							&adapter.root,
+							&adapter.binding,
+							spool,
+							&cancellation,
+						)
+						.await
+				}) as PortFuture<_>
 			}),
 		}
 	}
@@ -179,9 +205,9 @@ impl ExecutionAdapter {
 				let marker = if let Some(native) = native {
 					if native.cleanup_status != 0 {
 						ErrorMarker::vfs_failed().with_phase("cleanup")
-					} else if native.native_error == 740 {
+					} else if native.native_error == ERROR_ELEVATION_REQUIRED {
 						ErrorMarker::elevation_required()
-					} else if matches!(native.native_error, 2 | 3 | 5 | 193 | 216 | 267) {
+					} else if LAUNCH_INPUT_ERRORS.contains(&native.native_error) {
 						ErrorMarker::program_launch_failed()
 					} else {
 						ErrorMarker::vfs_failed().with_phase("vfs_setup")
@@ -203,17 +229,6 @@ impl ExecutionAdapter {
 			process,
 			private_streams,
 		})))
-	}
-
-	async fn check_retained_state(&self, cancellation: CancellationToken) -> Result<(), ErrorMarker> {
-		EnvironmentAdapter
-			.check_launch_with_spool(
-				&self.root,
-				&self.binding,
-				self.capture.as_ref().and_then(|capture| capture.directory()),
-				&cancellation,
-			)
-			.await
 	}
 }
 

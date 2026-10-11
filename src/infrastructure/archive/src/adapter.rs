@@ -267,9 +267,10 @@ fn plain_candidates(
 		{
 			continue;
 		}
-		let Some(destination) = member.path.strip_prefix(&core.discovery.data_root) else {
-			return Err(report!(ErrorMarker::unsafe_archive().with_phase("planning")));
-		};
+		let destination = member
+			.path
+			.strip_prefix(&core.discovery.data_root)
+			.ok_or_else(|| report!(ErrorMarker::unsafe_archive().with_phase("planning")))?;
 		if destination.is_empty() {
 			continue;
 		}
@@ -1724,12 +1725,10 @@ mod tests {
 		assert!(report
 			.iter_reports()
 			.any(|node| node.downcast_current_context::<ArchiveError>() == Some(&ArchiveError::Io)));
-		let Some(io_error) = report
+		let io_error = report
 			.iter_reports()
 			.find_map(|node| node.downcast_current_context::<IoError>())
-		else {
-			return Err("original I/O error was missing from the report tree".into());
-		};
+			.ok_or("original I/O error was missing from the report tree")?;
 		assert_eq!(io_error.kind(), IoErrorKind::NotFound);
 		Ok(())
 	}

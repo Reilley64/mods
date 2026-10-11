@@ -116,9 +116,7 @@ impl CallerSnapshot {
 			break;
 		}
 
-		let Some(application) = resolved else {
-			return Err(report!(LaunchInputError::NotFound));
-		};
+		let application = resolved.ok_or_else(|| report!(LaunchInputError::NotFound))?;
 		let directory = self.absolute(cwd.unwrap_or(&self.directory))?;
 
 		let mut encoded_arguments = vec![application.as_os_str().encode_wide().collect()];

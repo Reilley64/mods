@@ -13,4 +13,3 @@ native/artifacts/
 !.env.example
 .DS_Store
 Thumbs.db
-.prime/agent/coding-style-dispositions.json

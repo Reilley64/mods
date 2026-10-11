@@ -155,11 +155,11 @@ impl SettingsAdapter {
 	}
 
 	fn initialization_override(&self) -> Result<Option<GameInstallationPath>, ErrorMarker> {
-		let Some(value) = config_source::initialization_override(&self.environment)? else {
-			return Ok(None);
-		};
-		let path = GameInstallationPath::new(value.into()).context(ErrorMarker::game_install_invalid())?;
-		Ok(Some(path))
+		config_source::initialization_override(&self.environment)?
+			.map(|value| {
+				GameInstallationPath::new(value.into()).context(ErrorMarker::game_install_invalid())
+			})
+			.transpose()
 	}
 
 	fn preview_game_binding(
@@ -237,6 +237,7 @@ impl SettingsAdapter {
 		refuse_unfinished_operation_before_layout(&self.root, SettingsAccess::Mutation).await?;
 		open_manifest_root(&self.root).await?;
 		layout::validate(self.root.as_path()).await?;
+
 		let prepared = self.prepare_game_binding(loaded, binding)?;
 
 		if cancellation.is_cancelled() {

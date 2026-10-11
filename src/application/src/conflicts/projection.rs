@@ -159,11 +159,9 @@ pub(super) async fn project_inspection(
 	read_content: ReadConflictContent,
 	cancellation: CancellationToken,
 ) -> Result<InspectModConflictsOutput, ErrorMarker> {
-	let Some(provider) = scan.providers.iter().find(|provider| {
+	let provider = scan.providers.iter().find(|provider| {
 		matches!(&provider.identity, ProviderIdentity::DataMod { mod_name: candidate, .. } if candidate == &mod_name)
-	}) else {
-		return Err(report!(ErrorMarker::mod_not_found().with_mod_name(mod_name.clone())));
-	};
+	}).ok_or_else(|| report!(ErrorMarker::mod_not_found().with_mod_name(mod_name.clone())))?;
 
 	let enabled = provider.enabled;
 	let identity = provider.identity.clone();
@@ -233,13 +231,12 @@ pub(super) async fn project_path(
 	let controlling_tombstone = projection.tombstone_index.controlling(path.comparison_key()).cloned();
 
 	let effective_result = if resolution_status == ResolutionStatus::Exact {
-		Some(if let Some(winner) = resolved.unsuppressed.first() {
-			EffectiveResult::File(winner.provider.clone())
-		} else {
-			EffectiveResult::Absent {
+		Some(resolved.unsuppressed.first().map_or_else(
+			|| EffectiveResult::Absent {
 				controlling_tombstone: controlling_tombstone.clone(),
-			}
-		})
+			},
+			|winner| EffectiveResult::File(winner.provider.clone()),
+		))
 	} else {
 		None
 	};

@@ -22,6 +22,10 @@ issue, state that explicitly rather than inventing a closing reference.
 Use GitHub's closing keyword `Closes`, not `Implements`, so merging into the
 default branch closes the issue automatically.
 
+When a PR adds an accepted ADR that supersedes planned work, close each open
+issue it supersedes, including map children, as not planned. Link the ADR in the
+closing comment.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.

@@ -1,15 +1,17 @@
+use crate::command_outcome;
+use crate::command_outcome::CommandOutcome;
+use crate::command_outcome::CommandResult;
+use crate::command_outcome::OutcomeContext;
+use crate::command_outcome::STATUS_CONTROL_C_EXIT;
 use crate::commands::Cli;
-use crate::commands::Command;
-use crate::commands::ConfigCommand;
-use crate::commands::ConflictsCommand;
-use crate::commands::SetCommand;
-use crate::commands::parse_from;
 use crate::conflict_output;
 use crate::diagnostics::DiagnosticSession;
-use crate::diagnostics::SINK_WARNING;
 use crate::diagnostics::SessionStart;
-use crate::error;
 use crate::export_output;
+use crate::invocation::Composition;
+use crate::invocation::Invocation;
+use crate::invocation::PreparedCommand;
+use crate::invocation::invocation;
 use crate::json_conflicts;
 use crate::json_export;
 use crate::json_install;
@@ -18,35 +20,23 @@ use crate::operation;
 use crate::output;
 use crate::path_resolution::resolve_path;
 use application::ErrorMarker;
-use application::conflicts::ExplainPathDependencies;
-use application::conflicts::InspectModConflictsDependencies;
-use application::conflicts::ListEffectiveConflictsDependencies;
 use application::conflicts::explain_path;
 use application::conflicts::inspect_mod_conflicts;
 use application::conflicts::list_effective_conflicts;
-use application::environment::InitializeEnvironmentDependencies;
 use application::environment::InitializeEnvironmentWarning;
 use application::environment::initialize_environment;
-use application::execution::ExecuteProgram;
 use application::execution::ExecutionWarning;
-use application::export::ExportEnvironmentDependencies;
 use application::export::export_environment;
 use application::installation::InstallArchiveOutput;
-use application::installation::InstallModDependencies;
 use application::installation::InstallModOutput;
 use application::installation::ModSource;
 use application::installation::RemoteModSource;
 use application::installation::install_mod;
 use application::ports::ProgressEvent;
 use application::ports::ReportProgress;
-use application::settings::GetSettingDependencies;
-use application::settings::ListSettingsDependencies;
-use application::settings::ResolvedSettings;
-use application::settings::SetGameDirectoryDependencies;
 use application::settings::get_setting;
 use application::settings::list_settings;
 use application::settings::set_game_directory;
-use application::shortcut::CreateShortcutDependencies;
 use application::shortcut::create_shortcut;
 use clap::Error as ClapError;
 use clap::error::ErrorKind;
@@ -61,16 +51,12 @@ use domain::OutputTarget;
 use domain::Program;
 use domain::ProgramArgument;
 use domain::WorkingDirectory;
-use rootcause::Report;
 use rootcause::Result as RootResult;
 use rootcause::report;
-use serde_json::Map;
-use serde_json::Value;
 use serde_json::json;
 use std::env::current_dir;
 use std::env::var_os;
 use std::error::Error;
-use std::ffi::OsString;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -78,78 +64,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
-
-pub(crate) enum CommandDependencies {
-	Initialize(InitializeEnvironmentDependencies),
-	Existing(Box<Dependencies>),
-}
-
-pub(crate) struct Dependencies {
-	pub(crate) settings: ResolvedSettings,
-	pub(crate) create_shortcut: CreateShortcutDependencies,
-	pub(crate) execution_force_cancellation: CancellationToken,
-	pub(crate) execute_program: ExecuteProgram,
-	pub(crate) initialize_environment: InitializeEnvironmentDependencies,
-	pub(crate) list_settings: ListSettingsDependencies,
-	pub(crate) get_setting: GetSettingDependencies,
-	pub(crate) set_game_directory: SetGameDirectoryDependencies,
-	pub(crate) install_mod: InstallModDependencies,
-	pub(crate) export_environment: ExportEnvironmentDependencies,
-	pub(crate) list_effective_conflicts: ListEffectiveConflictsDependencies,
-	pub(crate) inspect_mod_conflicts: InspectModConflictsDependencies,
-	pub(crate) explain_path: ExplainPathDependencies,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RunOutcome {
-	pub(crate) status: u32,
-	pub(crate) stdout: String,
-	pub(crate) stderr: String,
-	pub(crate) execution_failed: bool,
-	pub(crate) diagnostic_log: Option<PathBuf>,
-	pub(crate) presentation: Option<JsonPresentation>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum JsonPresentation {
-	Success(Value),
-	Problem(Value),
-}
-
-impl RunOutcome {
-	fn publish_json(mut self) -> Self {
-		if let Some(presentation) = self.presentation.take() {
-			match presentation {
-				JsonPresentation::Success(value) => {
-					self.stdout = json_output::document(&value);
-					self.stderr.clear();
-				}
-				JsonPresentation::Problem(value) => {
-					self.stdout.clear();
-					self.stderr = json_output::document(&value);
-				}
-			}
-		}
-
-		self
-	}
-}
-
-fn success(stdout: String, stderr: String, json_mode: bool, mut value: Value, warnings: Vec<Value>) -> RunOutcome {
-	let mut outcome = RunOutcome {
-		presentation: None,
-		execution_failed: false,
-		diagnostic_log: None,
-		status: 0,
-		stdout,
-		stderr,
-	};
-	if json_mode {
-		value["warnings"] = Value::Array(warnings);
-		outcome.presentation = Some(JsonPresentation::Success(value));
-	}
-	outcome
-}
 
 #[derive(Debug)]
 enum RootSelectionError {
@@ -200,149 +114,69 @@ pub(crate) async fn execute(
 	cli: Cli,
 	startup_directory: PathBuf,
 	local_app_data: Option<PathBuf>,
-	dependency_factory: impl AsyncFnOnce(&EnvironmentRoot, &Command) -> RootResult<CommandDependencies, ErrorMarker>,
-) -> RunOutcome {
-	let root = match select_environment_root(&cli, &startup_directory, local_app_data.as_deref()) {
+	prepare_command: impl AsyncFnOnce(&EnvironmentRoot, &Path, Composition) -> RootResult<PreparedCommand, ErrorMarker>,
+) -> CommandOutcome {
+	let root = select_environment_root(&cli, &startup_directory, local_app_data.as_deref());
+	let Invocation {
+		operation_name,
+		quiet_success,
+		command_family,
+		composition,
+	} = invocation(cli.command);
+
+	let root = match root {
 		Ok(root) => root,
 		Err(selection_error) => {
-			let message = selection_error.message();
-			let presentation = cli.json.then(|| {
-				JsonPresentation::Problem(json_output::problem(
-					"environment_root_selection_failed",
-					"Environment Root selection failed",
-					message,
-					2,
-					json!({}),
-				))
-			});
-			return RunOutcome {
-				presentation,
-				execution_failed: true,
-				diagnostic_log: None,
-				status: 2,
-				stdout: String::new(),
-				stderr: format!("error: {message}\n"),
-			}
-			.publish_json();
+			return command_outcome::outcome(
+				CommandResult::RootSelectionFailed(selection_error.message()),
+				OutcomeContext {
+					family: command_family,
+					json: cli.json,
+					quiet_success,
+					diagnostic_logging_unavailable: false,
+					diagnostic_session: None,
+					diagnostic_log: None,
+				},
+			);
 		}
 	};
 
-	let operation_name = match &cli.command {
-		Command::Init { .. } => "initialize",
-		Command::Config {
-			command: ConfigCommand::List,
-		} => "config.list",
-		Command::Config {
-			command: ConfigCommand::Get { .. },
-		} => "config.get",
-		Command::Config {
-			command: ConfigCommand::Set { .. },
-		} => "config.set.game_dir",
-		Command::Install(_) => "install",
-		Command::Conflicts {
-			command: ConflictsCommand::List { .. },
-		} => "conflicts.list",
-		Command::Conflicts {
-			command: ConflictsCommand::Inspect { .. },
-		} => "conflicts.inspect",
-		Command::Conflicts {
-			command: ConflictsCommand::Explain { .. },
-		} => "conflicts.explain",
-		Command::Export(_) => "export",
-		Command::Exec(_) => "exec",
-		Command::Shortcut(_) => "shortcut",
-	};
-	let (mut session, diagnostic_warning) =
+	let (mut session, diagnostic_logging_unavailable) =
 		match DiagnosticSession::start(root.as_path(), cli.log_level, operation_name) {
-			SessionStart::FileBacked(session) => (Some(session), String::new()),
-			SessionStart::Disabled => (None, String::new()),
-			SessionStart::SetupFailed => (None, format!("{SINK_WARNING}\n")),
+			SessionStart::FileBacked(session) => (Some(session), false),
+			SessionStart::Disabled => (None, false),
+			SessionStart::SetupFailed => (None, true),
 		};
+	let context = OutcomeContext {
+		family: command_family,
+		json: cli.json,
+		quiet_success,
+		diagnostic_logging_unavailable,
+		diagnostic_session: session.as_ref().map(DiagnosticSession::id),
+		diagnostic_log: session.as_ref().map(DiagnosticSession::path),
+	};
 
-	let session_id = session.as_ref().map(DiagnosticSession::id);
-	let diagnostic_log = session.as_ref().map(DiagnosticSession::path);
-	let dependencies = match dependency_factory(&root, &cli.command).await {
-		Ok(dependencies) => dependencies,
+	let prepared = match prepare_command(&root, &startup_directory, composition).await {
+		Ok(prepared) => prepared,
 		Err(report) => {
-			let marker = report.current_context();
-			let status = if matches!(cli.command, Command::Exec(_)) {
-				error::execution_exit_status(marker.code())
-			} else {
-				error::exit_status(marker.code())
-			};
-			let mut stderr = error::application_error(&report);
-			stderr.push_str(&diagnostic_warning);
-			if let Some(id) = session_id {
-				stderr.push_str(&format!("diagnostic session: {id}\n"));
-			}
-
 			if let Some(session) = session.take() {
 				session.finish("failure");
 			}
 
-			let mut presentation = cli
-				.json
-				.then(|| JsonPresentation::Problem(json_output::marker_problem(marker, status)));
-			if let Some(JsonPresentation::Problem(problem)) = &mut presentation {
-				if !diagnostic_warning.is_empty() {
-					problem["warnings"] = json!([json_output::diagnostic_warning()]);
-				}
-				if let Some(id) = session_id {
-					problem["instance"] = json!(id.to_string());
-				}
-			}
-			return RunOutcome {
-				presentation,
-				execution_failed: true,
-				diagnostic_log,
-				status,
-				stdout: String::new(),
-				stderr,
-			}
-			.publish_json();
+			return command_outcome::outcome(CommandResult::Failed(report.into()), context);
 		}
 	};
 
-	let json_mode = cli.json;
-	let quiet_success = matches!(&cli.command, Command::Shortcut(_));
-	let log_level = cli.log_level.to_string();
-	let work = async move {
-		match dependencies {
-			CommandDependencies::Initialize(dependencies) => match cli.command {
-				Command::Init { game_install } => {
-					dispatch_initialization(
-						dependencies,
-						root,
-						game_install,
-						&startup_directory,
-						json_mode,
-					)
-					.await
-				}
-				_ => marker_outcome(ErrorMarker::environment_invalid(None), json_mode),
-			},
-			CommandDependencies::Existing(dependencies) => {
-				dispatch(
-					cli.command,
-					*dependencies,
-					root,
-					startup_directory,
-					log_level,
-					json_mode,
-				)
-				.await
-			}
-		}
-	};
-	let mut result = match session.as_ref() {
+	let work = dispatch(prepared, root, startup_directory, cli.log_level.to_string());
+	let result = match session.as_ref() {
 		Some(session) => session.capture(work).await,
 		None => work.await,
 	};
 
-	result.diagnostic_log = diagnostic_log;
-	let terminal = if result.status == 0 {
+	let outcome = command_outcome::outcome(result, context);
+	let terminal = if outcome.status == 0 {
 		"success"
-	} else if result.status == 0xC000_013A {
+	} else if outcome.status == STATUS_CONTROL_C_EXIT {
 		"cancelled"
 	} else {
 		"failure"
@@ -352,142 +186,111 @@ pub(crate) async fn execute(
 		session.finish(terminal);
 	}
 
-	if let Some(presentation) = &mut result.presentation {
-		match presentation {
-			JsonPresentation::Success(value) => {
-				if !diagnostic_warning.is_empty()
-					&& let Some(warnings) = value["warnings"].as_array_mut()
-				{
-					warnings.push(json_output::diagnostic_warning());
-				}
-			}
-			JsonPresentation::Problem(problem) => {
-				if !diagnostic_warning.is_empty() {
-					problem["warnings"] = json!([json_output::diagnostic_warning()]);
-				}
-				if let Some(id) = session_id {
-					problem["instance"] = json!(id.to_string());
-				}
-			}
-		}
-	} else {
-		if !quiet_success || result.status != 0 {
-			result.stderr.push_str(&diagnostic_warning);
-		}
-		if result.status != 0
-			&& let Some(id) = session_id
-		{
-			result.stderr.push_str(&format!("diagnostic session: {id}\n"));
-		}
-	}
-
-	result.publish_json()
-}
-
-async fn dispatch_initialization(
-	dependencies: InitializeEnvironmentDependencies,
-	root: EnvironmentRoot,
-	game_install: Option<PathBuf>,
-	startup: &Path,
-	json_mode: bool,
-) -> RunOutcome {
-	let Ok(game_install) = game_install
-		.map(|path| resolve_path(&path, startup))
-		.map(GameInstallationPath::new)
-		.transpose()
-	else {
-		return marker_outcome(ErrorMarker::game_install_invalid(), json_mode);
-	};
-	match initialize_environment(dependencies, root, game_install, operation::ctrl_c_token()).await {
-		Ok(output) => {
-			let (stdout, stderr) = output::initialization(&output);
-			let warnings = output
-				.warnings
-				.iter()
-				.map(|warning| match warning {
-					InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => {
-						json_output::warning(
-							"bethesda_registry_fallback_used",
-							"Bethesda registry fallback was used",
-							json!({}),
-						)
-					}
-				})
-				.collect();
-			success(stdout, stderr, json_mode, json!({}), warnings)
-		}
-		Err(report) => report_outcome(&report, json_mode),
-	}
+	outcome
 }
 
 async fn dispatch(
-	command: Command,
-	dependencies: Dependencies,
+	prepared: PreparedCommand,
 	root: EnvironmentRoot,
 	startup: PathBuf,
 	log_level: String,
-	json_mode: bool,
-) -> RunOutcome {
-	match command {
-		Command::Init { game_install } => {
-			dispatch_initialization(
-				dependencies.initialize_environment,
-				root,
-				game_install,
-				&startup,
-				json_mode,
-			)
-			.await
-		}
-		Command::Config { command } => match command {
-			ConfigCommand::List => {
-				match list_settings(dependencies.list_settings, dependencies.settings.settings).await {
-					Ok(output) => success(
-						output::settings(&output.settings),
-						String::new(),
-						json_mode,
-						json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
-						vec![],
-					),
-					Err(report) => report_outcome(&report, json_mode),
+) -> CommandResult {
+	match prepared {
+		PreparedCommand::InitializeEnvironment {
+			dependencies,
+			game_install,
+		} => {
+			let game_install = match game_install
+				.map(|path| resolve_path(&path, &startup))
+				.map(GameInstallationPath::new)
+				.transpose()
+			{
+				Ok(game_install) => game_install,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::game_install_invalid()).into(),
+					);
 				}
-			}
-			ConfigCommand::Get { key } => {
-				match get_setting(dependencies.get_setting, dependencies.settings.settings, key.into())
-					.await
-				{
-					Ok(output) => success(
-						output::setting(&output.setting),
-						String::new(),
-						json_mode,
-						json!({"setting": json_output::setting(&output.setting)}),
-						vec![],
-					),
-					Err(report) => report_outcome(&report, json_mode),
-				}
-			}
-			ConfigCommand::Set {
-				command: SetCommand::GameDir { value },
-			} => {
-				let Ok(path) = GameInstallationPath::new(resolve_path(&value, &startup)) else {
-					return marker_outcome(ErrorMarker::setting_value_invalid(), json_mode);
-				};
-				match set_game_directory(
-					dependencies.set_game_directory,
-					path,
-					operation::ctrl_c_token(),
-				)
-				.await
-				{
-					Ok(output) => {
-						let (stdout, stderr) = output::set_game_directory(&output);
-						success(stdout, stderr, json_mode, json!({}), vec![])
+			};
+
+			match initialize_environment(dependencies, root, game_install, operation::ctrl_c_token()).await
+			{
+				Ok(output) => {
+					let (stdout, stderr) = output::initialization(&output);
+					let warnings = output
+						.warnings
+						.iter()
+						.map(|warning| match warning {
+							InitializeEnvironmentWarning::BethesdaRegistryFallbackUsed => {
+								json_output::warning(
+									"bethesda_registry_fallback_used",
+									"Bethesda registry fallback was used",
+									json!({}),
+								)
+							}
+						})
+						.collect();
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document: json!({}),
+						warnings,
 					}
-					Err(report) => report_outcome(&report, json_mode),
 				}
+				Err(report) => CommandResult::Failed(report.into()),
 			}
+		}
+		PreparedCommand::ListSettings { dependencies, settings } => {
+			match list_settings(dependencies, settings.settings).await {
+				Ok(output) => CommandResult::Succeeded {
+					stdout: output::settings(&output.settings),
+					stderr: String::new(),
+					document: json!({"settings": output.settings.iter().map(json_output::setting).collect::<Vec<_>>() }),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
+			}
+		}
+		PreparedCommand::GetSetting {
+			dependencies,
+			settings,
+			key,
+		} => match get_setting(dependencies, settings.settings, key.into()).await {
+			Ok(output) => CommandResult::Succeeded {
+				stdout: output::setting(&output.setting),
+				stderr: String::new(),
+				document: json!({"setting": json_output::setting(&output.setting)}),
+				warnings: Vec::new(),
+			},
+			Err(report) => CommandResult::Failed(report.into()),
 		},
-		Command::Install(arguments) => {
+		PreparedCommand::SetGameDirectory { dependencies, value } => {
+			let path = match GameInstallationPath::new(resolve_path(&value, &startup)) {
+				Ok(path) => path,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::setting_value_invalid()).into(),
+					);
+				}
+			};
+
+			match set_game_directory(dependencies, path, operation::ctrl_c_token()).await {
+				Ok(output) => {
+					let (stdout, stderr) = output::set_game_directory(&output);
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document: json!({}),
+						warnings: Vec::new(),
+					}
+				}
+				Err(report) => CommandResult::Failed(report.into()),
+			}
+		}
+		PreparedCommand::InstallMod {
+			dependencies,
+			arguments,
+		} => {
 			let cancellation = operation::ctrl_c_token();
 
 			let source = if let Some(url) =
@@ -499,29 +302,36 @@ async fn dispatch(
 				})
 			} else {
 				if arguments.file.is_some() {
-					return marker_outcome(ErrorMarker::nexus_source_invalid(), json_mode);
+					return CommandResult::Failed(
+						report!(ErrorMarker::nexus_source_invalid()).into(),
+					);
 				}
-				let Ok(archive) = ArchivePath::new(resolve_path(&arguments.archive, &startup)) else {
-					return marker_outcome(ErrorMarker::unsafe_archive(), json_mode);
+				let archive = match ArchivePath::new(resolve_path(&arguments.archive, &startup)) {
+					Ok(archive) => archive,
+					Err(report) => {
+						return CommandResult::Failed(
+							report.context(ErrorMarker::unsafe_archive()).into(),
+						);
+					}
 				};
 				ModSource::Local(archive)
 			};
 
-			let mod_name = if let Some(value) = arguments.name {
-				let Ok(value) = ModName::new(value) else {
-					return marker_outcome(ErrorMarker::invalid_mod_name(), json_mode);
-				};
-				Some(value)
-			} else {
-				None
+			let mod_name = match arguments.name.map(ModName::new).transpose() {
+				Ok(mod_name) => mod_name,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_mod_name()).into(),
+					);
+				}
 			};
 			let choices = match parse_choices(arguments.choice) {
 				Ok(choices) => choices,
-				Err(report) => return report_outcome(&report, json_mode),
+				Err(report) => return CommandResult::Failed(report.into()),
 			};
 
 			match install_mod(
-				dependencies.install_mod,
+				dependencies,
 				source,
 				mod_name,
 				arguments.replace,
@@ -532,135 +342,115 @@ async fn dispatch(
 			.await
 			{
 				Ok(InstallModOutput::SelectionRequired(files)) => {
-					let mut stderr = "error [nexus_file_selection_required]: Select a file with --file <id>.\n".to_owned();
-					for file in &files {
-						stderr.push_str(&format!(
-							"file_id = {}, name = {}, version = {}, category = {}\n",
-							file.file_id,
-							output::quote(&file.name),
-							output::quote(&file.version),
-							output::quote(&file.category)
-						));
-					}
-					RunOutcome {
-						presentation: json_mode.then(|| {
-							JsonPresentation::Problem(
-								json_install::file_selection_required(&files),
-							)
-						}),
-						execution_failed: false,
-						diagnostic_log: None,
-						status: 2,
-						stdout: String::new(),
-						stderr,
-					}
+					CommandResult::FileSelectionRequired(files)
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::AdditionalSelectionsRequired(
 					output_value,
 				))) => {
 					let (stdout, stderr) = output::additional_selections(&output_value);
-					let value = json_install::additional(&output_value);
+					let document = json_install::additional(&output_value);
 					let warnings = json_install::warnings(&output_value.warnings);
-					success(stdout, stderr, json_mode, value, warnings)
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document,
+						warnings,
+					}
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::Preview(output_value))) => {
 					let (stdout, stderr) = output::install_preview(&output_value);
-					let value = json_install::preview(&output_value);
+					let document = json_install::preview(&output_value);
 					let warnings = json_install::warnings(&output_value.plan.warnings);
-					success(stdout, stderr, json_mode, value, warnings)
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document,
+						warnings,
+					}
 				}
 				Ok(InstallModOutput::Archive(InstallArchiveOutput::Installed(output_value))) => {
 					let stderr = output::install_warnings(&output_value.warnings);
 					let warnings = json_install::warnings(&output_value.warnings);
-					success(String::new(), stderr, json_mode, json_install::installed(), warnings)
+					CommandResult::Succeeded {
+						stdout: String::new(),
+						stderr,
+						document: json_install::installed(),
+						warnings,
+					}
 				}
-				Err(report) => report_outcome(&report, json_mode),
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
-		Command::Conflicts { command } => match command {
-			ConflictsCommand::List { compare_content } => match list_effective_conflicts(
-				dependencies.list_effective_conflicts,
-				compare_content,
-				operation::ctrl_c_token(),
-			)
-			.await
-			{
-				Ok(output) => success(
-					conflict_output::list(&output),
-					String::new(),
-					json_mode,
-					json_conflicts::list(&output),
-					vec![],
-				),
-				Err(report) => report_outcome(&report, json_mode),
+		PreparedCommand::ListEffectiveConflicts {
+			dependencies,
+			compare_content,
+		} => match list_effective_conflicts(dependencies, compare_content, operation::ctrl_c_token()).await {
+			Ok(output) => CommandResult::Succeeded {
+				stdout: conflict_output::list(&output),
+				stderr: String::new(),
+				document: json_conflicts::list(&output),
+				warnings: Vec::new(),
 			},
-			ConflictsCommand::Inspect {
-				mod_name,
-				compare_content,
-			} => {
-				let mod_name = match ModName::new(mod_name) {
-					Ok(mod_name) => mod_name,
-					Err(report) => {
-						return report_outcome(
-							&report.context(ErrorMarker::invalid_mod_name()),
-							json_mode,
-						);
-					}
-				};
-
-				match inspect_mod_conflicts(
-					dependencies.inspect_mod_conflicts,
-					mod_name,
-					compare_content,
-					operation::ctrl_c_token(),
-				)
-				.await
-				{
-					Ok(output) => success(
-						conflict_output::inspection(&output),
-						String::new(),
-						json_mode,
-						json_conflicts::inspection(&output),
-						vec![],
-					),
-					Err(report) => report_outcome(&report, json_mode),
-				}
-			}
-			ConflictsCommand::Explain { path, compare_content } => {
-				let path = match DataRelativePath::new(path) {
-					Ok(path) => path,
-					Err(report) => {
-						return report_outcome(
-							&report.context(ErrorMarker::invalid_data_path()),
-							json_mode,
-						);
-					}
-				};
-
-				match explain_path(
-					dependencies.explain_path,
-					path,
-					compare_content,
-					operation::ctrl_c_token(),
-				)
-				.await
-				{
-					Ok(output) => success(
-						conflict_output::explanation(&output),
-						String::new(),
-						json_mode,
-						json_conflicts::explanation(&output),
-						vec![],
-					),
-					Err(report) => report_outcome(&report, json_mode),
-				}
-			}
+			Err(report) => CommandResult::Failed(report.into()),
 		},
-		Command::Export(arguments) => {
+		PreparedCommand::InspectModConflicts {
+			dependencies,
+			mod_name,
+			compare_content,
+		} => {
+			let mod_name = match ModName::new(mod_name) {
+				Ok(mod_name) => mod_name,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_mod_name()).into(),
+					);
+				}
+			};
+
+			match inspect_mod_conflicts(dependencies, mod_name, compare_content, operation::ctrl_c_token())
+				.await
+			{
+				Ok(output) => CommandResult::Succeeded {
+					stdout: conflict_output::inspection(&output),
+					stderr: String::new(),
+					document: json_conflicts::inspection(&output),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
+			}
+		}
+		PreparedCommand::ExplainPath {
+			dependencies,
+			path,
+			compare_content,
+		} => {
+			let path = match DataRelativePath::new(path) {
+				Ok(path) => path,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_data_path()).into(),
+					);
+				}
+			};
+
+			match explain_path(dependencies, path, compare_content, operation::ctrl_c_token()).await {
+				Ok(output) => CommandResult::Succeeded {
+					stdout: conflict_output::explanation(&output),
+					stderr: String::new(),
+					document: json_conflicts::explanation(&output),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
+			}
+		}
+		PreparedCommand::ExportEnvironment {
+			dependencies,
+			arguments,
+		} => {
 			let output_path = resolve_path(&arguments.output, &startup);
 
 			match export_environment(
-				dependencies.export_environment,
+				dependencies,
 				output_path.clone(),
 				arguments.include_saves,
 				arguments.include_game_data,
@@ -676,60 +466,72 @@ async fn dispatch(
 						String::new()
 					};
 					let stderr = result.warnings.iter().map(output::plugin_warning).collect();
-					let value = json_export::export(&output_path, &result);
+					let document = json_export::export(&output_path, &result);
 					let warnings = json_export::plugin_warnings(&result.warnings);
-					success(stdout, stderr, json_mode, value, warnings)
+					CommandResult::Succeeded {
+						stdout,
+						stderr,
+						document,
+						warnings,
+					}
 				}
-				Err(report) => {
-					let marker = error::application_marker(&report);
-					let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
-
-					let mut details = json_output::report_details(&report, "retained_export_stage");
-					details.insert("output".into(), json!(output_path.display().to_string()));
-
-					with_problem_details(
-						problem_outcome(
-							status,
-							error::export_error(&report, &output_path),
-							json_mode,
-							marker,
-						),
-						details,
-					)
-				}
+				Err(report) => CommandResult::ExportFailed {
+					report: report.into(),
+					output: output_path,
+				},
 			}
 		}
-		Command::Shortcut(arguments) => {
-			let output_target = if let Some(name) = arguments.output_target {
-				let Ok(name) = ModName::new(name) else {
-					return marker_outcome(ErrorMarker::invalid_output_target(), json_mode);
-				};
-				OutputTarget::DataMod(name)
-			} else {
-				OutputTarget::Overwrite
+		PreparedCommand::CreateShortcut {
+			dependencies,
+			settings,
+			arguments,
+		} => {
+			let output_target = match arguments.output_target.map_or(Ok(OutputTarget::Overwrite), |name| {
+				ModName::new(name).map(OutputTarget::DataMod)
+			}) {
+				Ok(output_target) => output_target,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_output_target()).into(),
+					);
+				}
 			};
-			let Ok(working_directory) = arguments
+			let working_directory = match arguments
 				.cwd
 				.map(|path| WorkingDirectory::new(resolve_path(&path, &startup)))
 				.transpose()
-			else {
-				return marker_outcome(ErrorMarker::invalid_working_directory(), json_mode);
+			{
+				Ok(working_directory) => working_directory,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_working_directory()).into(),
+					);
+				}
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
-				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
+				return CommandResult::Failed(report!(ErrorMarker::program_not_found()).into());
 			};
-			let Ok(program) = Program::new(program) else {
-				return marker_outcome(ErrorMarker::program_not_found(), json_mode);
+			let program = match Program::new(program) {
+				Ok(program) => program,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_not_found()).into(),
+					);
+				}
 			};
-			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
-			else {
-				return marker_outcome(ErrorMarker::program_launch_failed(), json_mode);
+			let program_arguments = match command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() {
+				Ok(program_arguments) => program_arguments,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_launch_failed()).into(),
+					);
+				}
 			};
 
 			match create_shortcut(
-				dependencies.create_shortcut,
-				dependencies.settings,
+				dependencies,
+				settings,
 				output_target,
 				working_directory,
 				program,
@@ -741,38 +543,35 @@ async fn dispatch(
 			)
 			.await
 			{
-				Ok(_) => success(String::new(), String::new(), json_mode, json!({}), vec![]),
-				Err(report) => report_outcome(&report, json_mode),
+				Ok(_) => CommandResult::Succeeded {
+					stdout: String::new(),
+					stderr: String::new(),
+					document: json!({}),
+					warnings: Vec::new(),
+				},
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
-		Command::Exec(arguments) => {
+		PreparedCommand::ExecuteProgram {
+			execute_program,
+			force_cancellation,
+			arguments,
+		} => {
 			if arguments.hidden && !cfg!(windows) {
-				let marker = ErrorMarker::program_unsupported();
-				return RunOutcome {
-					execution_failed: true,
-					..problem_outcome(
-						error::execution_exit_status(marker.code()),
-						"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
-							.to_owned(),
-						json_mode,
-						Some(&marker),
-					)
-				};
+				return CommandResult::HiddenExecutionUnsupported;
 			}
 
-			let output_target = if let Some(name) = arguments.output_target {
-				let Ok(name) = ModName::new(name) else {
-					return execution_report_outcome(
-						&report!(ErrorMarker::invalid_output_target()),
-						json_mode,
-						false,
+			let output_target = match arguments.output_target.map_or(Ok(OutputTarget::Overwrite), |name| {
+				ModName::new(name).map(OutputTarget::DataMod)
+			}) {
+				Ok(output_target) => output_target,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_output_target()).into(),
 					);
-				};
-				OutputTarget::DataMod(name)
-			} else {
-				OutputTarget::Overwrite
+				}
 			};
-			let Ok(working_directory) = arguments
+			let working_directory = match arguments
 				.cwd
 				.map(|path| {
 					WorkingDirectory::new(path).and_then(|path| {
@@ -780,35 +579,33 @@ async fn dispatch(
 					})
 				})
 				.transpose()
-			else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::invalid_working_directory()),
-					json_mode,
-					false,
-				);
+			{
+				Ok(working_directory) => working_directory,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::invalid_working_directory()).into(),
+					);
+				}
 			};
 			let mut command = arguments.command.into_iter();
 			let Some(program) = command.next() else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::program_not_found()),
-					json_mode,
-					false,
-				);
+				return CommandResult::Failed(report!(ErrorMarker::program_not_found()).into());
 			};
-			let Ok(program) = Program::new(program) else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::program_not_found()),
-					json_mode,
-					false,
-				);
+			let program = match Program::new(program) {
+				Ok(program) => program,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_not_found()).into(),
+					);
+				}
 			};
-			let Ok(program_arguments) = command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>()
-			else {
-				return execution_report_outcome(
-					&report!(ErrorMarker::program_launch_failed()),
-					json_mode,
-					false,
-				);
+			let program_arguments = match command.map(ProgramArgument::new).collect::<Result<Vec<_>, _>>() {
+				Ok(program_arguments) => program_arguments,
+				Err(report) => {
+					return CommandResult::Failed(
+						report.context(ErrorMarker::program_launch_failed()).into(),
+					);
+				}
 			};
 
 			let launched = Arc::new(AtomicBool::new(false));
@@ -825,16 +622,13 @@ async fn dispatch(
 			let signals = if arguments.hidden {
 				None
 			} else {
-				Some(operation::ExecutionSignals::new(
-					dependencies.execution_force_cancellation,
-				))
+				Some(operation::ExecutionSignals::new(force_cancellation))
 			};
 			let cancellation = signals
 				.as_ref()
 				.map_or_else(CancellationToken::new, |signals| signals.cancellation.clone());
 
-			match dependencies
-				.execute_program
+			match execute_program
 				.call_once((
 					Some(report_progress),
 					output_target,
@@ -857,74 +651,32 @@ async fn dispatch(
 							),
 						}
 					}
-					RunOutcome {
-						presentation: None,
-						execution_failed: false,
-						diagnostic_log: None,
+					CommandResult::ProgramExited {
 						status: output.status.value(),
-						stdout: String::new(),
 						stderr,
 					}
 				}
-				Err(report) => {
-					execution_report_outcome(&report, json_mode, launched.load(Ordering::Acquire))
+				Err(report) if launched.load(Ordering::Acquire) => {
+					CommandResult::FailedAfterLaunch(report.into())
 				}
+				Err(report) => CommandResult::Failed(report.into()),
 			}
 		}
 	}
-}
-
-#[cfg(any(windows, test))]
-pub(crate) fn hidden_failure_dialog(outcome: &RunOutcome) -> Option<String> {
-	if !outcome.execution_failed {
-		return None;
-	}
-
-	let mut message = outcome.stderr.trim_end().to_owned();
-	if let Some(path) = &outcome.diagnostic_log {
-		message.push_str(&format!("\nDiagnostic log: {}", path.display()));
-	}
-	Some(message)
-}
-
-fn execution_report_outcome<E>(report: &Report<E>, json_mode: bool, launched: bool) -> RunOutcome {
-	let marker = error::application_marker(report);
-	let status = marker.map_or(125, |marker| error::execution_exit_status(marker.code()));
-	let outcome = RunOutcome {
-		execution_failed: true,
-		..problem_outcome(status, error::execution_error(report), json_mode && !launched, marker)
-	};
-	with_problem_details(outcome, json_output::report_details(report, "retained_execution_inis"))
-}
-
-fn with_problem_details(mut outcome: RunOutcome, details: Map<String, Value>) -> RunOutcome {
-	let Some(JsonPresentation::Problem(Value::Object(problem))) = &mut outcome.presentation else {
-		return outcome;
-	};
-	if details.is_empty() {
-		return outcome;
-	}
-
-	match problem.entry("details").or_insert_with(|| json!({})) {
-		Value::Object(existing) => existing.extend(details),
-		other => *other = Value::Object(details),
-	}
-
-	outcome
 }
 
 fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarker> {
 	values.into_iter()
 		.enumerate()
 		.map(|(sequence, value)| {
-			let Some((group_id, option_id)) = value.split_once('=') else {
-				return Err(report!(ErrorMarker::invalid_selection(
+			let (group_id, option_id) = value.split_once('=').ok_or_else(|| {
+				report!(ErrorMarker::invalid_selection(
 					"choices",
 					None,
 					None,
 					Some(sequence as u64),
-				)));
-			};
+				))
+			})?;
 			Ok(FomodChoice {
 				group_id: group_id.to_owned(),
 				option_id: option_id.to_owned(),
@@ -933,91 +685,30 @@ fn parse_choices(values: Vec<String>) -> RootResult<Vec<FomodChoice>, ErrorMarke
 		.collect()
 }
 
-fn marker_outcome(marker: ErrorMarker, json_mode: bool) -> RunOutcome {
-	let status = error::exit_status(marker.code());
-	problem_outcome(status, error::marker(&marker), json_mode, Some(&marker))
-}
-
-fn report_outcome<E>(report: &Report<E>, json_mode: bool) -> RunOutcome {
-	let marker = error::application_marker(report);
-	let status = marker.map_or(1, |marker| error::exit_status(marker.code()));
-	problem_outcome(status, error::application_error(report), json_mode, marker)
-}
-
-fn problem_outcome(status: u32, stderr: String, json_mode: bool, marker: Option<&ErrorMarker>) -> RunOutcome {
-	let presentation = json_mode.then(|| {
-		JsonPresentation::Problem(marker.map_or_else(
-			|| {
-				json_output::problem(
-					"operation_failed",
-					"Operation failed",
-					"operation failed",
-					status,
-					json!({}),
-				)
-			},
-			|marker| json_output::marker_problem(marker, status),
-		))
-	});
-	RunOutcome {
-		presentation,
-		execution_failed: false,
-		diagnostic_log: None,
-		status,
-		stdout: String::new(),
-		stderr,
-	}
-}
-
-#[cfg(test)]
-pub(crate) async fn run(
-	arguments: impl IntoIterator<Item = OsString>,
-	startup_directory: PathBuf,
-	local_app_data: Option<PathBuf>,
-	dependency_factory: impl FnOnce(&EnvironmentRoot) -> Result<Dependencies, ErrorMarker>,
-) -> Result<RunOutcome, ClapError> {
-	let cli = parse_from(arguments)?;
-	Ok(execute(cli, startup_directory, local_app_data, async move |root, _| {
-		dependency_factory(root)
-			.map(|dependencies| CommandDependencies::Existing(Box::new(dependencies)))
-			.map_err(|marker| report!(marker))
-	})
-	.await)
-}
-
 pub(crate) async fn run_current_process(
-	arguments: impl IntoIterator<Item = OsString>,
-	dependency_factory: impl AsyncFnOnce(
-		&EnvironmentRoot,
-		&Path,
-		&Command,
-	) -> RootResult<CommandDependencies, ErrorMarker>,
-) -> Result<RunOutcome, ClapError> {
+	cli: Result<Cli, ClapError>,
+	prepare_command: impl AsyncFnOnce(&EnvironmentRoot, &Path, Composition) -> RootResult<PreparedCommand, ErrorMarker>,
+) -> Result<CommandOutcome, ClapError> {
 	let startup_directory = current_dir().map_err(|error| ClapError::raw(ErrorKind::Io, error.to_string()))?;
 	let local_app_data = var_os("LOCALAPPDATA").map(PathBuf::from);
-	let factory_startup = startup_directory.clone();
-	let cli = parse_from(arguments)?;
-	Ok(
-		execute(cli, startup_directory, local_app_data, async move |root, command| {
-			dependency_factory(root, &factory_startup, command).await
-		})
-		.await,
-	)
+	let cli = cli?;
+	Ok(execute(cli, startup_directory, local_app_data, prepare_command).await)
 }
 
 #[cfg(test)]
 mod tests {
 	use super::Cli;
-	use super::Command;
-	use super::CommandDependencies;
-	use super::Dependencies;
-	use super::RunOutcome;
-	use super::hidden_failure_dialog;
+	use super::PreparedCommand;
+	use super::execute;
 	use super::parse_choices;
-	use super::run;
-	use super::select_environment_root;
+	use super::run_current_process;
+	use crate::command_outcome::CommandOutcome;
+	use crate::command_outcome::hidden_failure_dialog;
+	use crate::commands::Command;
+	use crate::commands::ConflictsCommand;
+	use crate::commands::parse_from;
 	use crate::diagnostics::SINK_WARNING;
-	use application::ErrorCode;
+	use crate::invocation::compose;
 	use application::ErrorMarker;
 	use application::conflicts::ConflictContentRead;
 	use application::conflicts::EnvironmentConflictScan;
@@ -1028,6 +719,7 @@ mod tests {
 	use application::conflicts::ListEffectiveConflictsDependencies;
 	use application::conflicts::ScannedConflictProvider;
 	use application::environment::InitializeEnvironmentDependencies;
+	use application::execution::ExecuteProgram;
 	use application::execution::ExecuteProgramError;
 	use application::execution::ExecuteProgramOutput;
 	use application::execution::ExecutionWarning;
@@ -1058,25 +750,21 @@ mod tests {
 	use application::ports::InitializationTargetAssessment;
 	use application::ports::InstallationChange;
 	use application::ports::LaunchTarget;
-	use application::ports::LoadOrderFile;
 	use application::ports::PortFuture;
 	use application::ports::ProfileProjection;
 	use application::ports::ProfileWarning;
 	use application::ports::ProgressEvent;
 	use application::ports::ResolvedGameInstallation;
-	use application::ports::RetainedProfile;
 	use application::ports::StagedProfile;
-	use application::ports::StoredAndEffectiveBinding;
 	use application::preparation::PluginWarning;
-	use application::settings::GetSettingDependencies;
 	use application::settings::ListSettingsDependencies;
 	use application::settings::ResolvedSettings;
-	use application::settings::SetGameDirectoryDependencies;
 	use application::settings::SettingKey;
 	use application::settings::SettingRecord;
 	use application::settings::SettingSource;
 	use application::settings::SettingValue;
 	use application::shortcut::CreateShortcutDependencies;
+	use clap::Error as ClapError;
 	use clap::Parser;
 	use domain::ArchiveIdentity;
 	use domain::ArchivePath;
@@ -1100,9 +788,8 @@ mod tests {
 	use domain::Sha256Digest;
 	#[cfg(windows)]
 	use domain::WorkingDirectory;
+	#[cfg(not(windows))]
 	use infrastructure_dependencies::Resources;
-	use infrastructure_dependencies::SettingsLoadMode;
-	use rootcause::Result as RootResult;
 	use rootcause::compat::boxed_error::IntoBoxedError;
 	use rootcause::report;
 	use serde_json::Value;
@@ -1124,32 +811,27 @@ mod tests {
 	use tempfile::TempDir;
 	use tokio_util::sync::CancellationToken;
 
-	#[test]
-	fn hidden_dialog_reports_failures_but_not_child_exit_codes() {
-		let failure = RunOutcome {
-			presentation: None,
-			status: 126,
-			stdout: String::new(),
-			stderr: "error [program_launch_failed]: launch failed\n".into(),
-			execution_failed: true,
-			diagnostic_log: Some("logs/session.jsonl".into()),
-		};
-		assert_eq!(
-			hidden_failure_dialog(&failure).as_deref(),
-			Some("error [program_launch_failed]: launch failed\nDiagnostic log: logs/session.jsonl")
-		);
-		let child_exit = RunOutcome {
-			status: 126,
-			execution_failed: false,
-			..failure
-		};
-		assert!(hidden_failure_dialog(&child_exit).is_none());
-	}
-
 	macro_rules! arguments {
 		($($value:expr),* $(,)?) => {
 			vec![$(OsString::from($value)),*]
 		};
+	}
+
+	async fn run(
+		arguments: Vec<OsString>,
+		startup_directory: PathBuf,
+		local_app_data: Option<PathBuf>,
+		prepare: impl FnOnce(&EnvironmentRoot, Command) -> Result<PreparedCommand, ErrorMarker>,
+	) -> Result<CommandOutcome, ClapError> {
+		let cli = parse_from(arguments.clone())?;
+		let command = parse_from(arguments)?.command;
+
+		Ok(
+			execute(cli, startup_directory, local_app_data, async move |root, _, _| {
+				prepare(root, command).map_err(|marker| report!(marker))
+			})
+			.await,
+		)
 	}
 
 	fn successful_conflict_dependencies(
@@ -1193,18 +875,6 @@ mod tests {
 			}),
 		};
 		(list, inspect, explain)
-	}
-
-	fn unavailable_list_effective_conflicts_dependencies() -> ListEffectiveConflictsDependencies {
-		ListEffectiveConflictsDependencies {
-			report_progress: None,
-			scan_environment: Arc::new(|_| {
-				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
-			}),
-			read_conflict_content: Arc::new(|_, _| {
-				Box::pin(async { Err(report!(ErrorMarker::io_failure())) }) as PortFuture<_>
-			}),
-		}
 	}
 
 	fn unavailable_inspect_mod_conflicts_dependencies() -> InspectModConflictsDependencies {
@@ -1301,120 +971,178 @@ mod tests {
 		}
 	}
 
-	fn dependencies_with_list(binding: GameBinding, list_settings: ListSettingsDependencies) -> Dependencies {
-		let install_archive = unavailable_install_archive_dependencies();
-		Dependencies {
-			settings: ResolvedSettings {
-				settings: Vec::new(),
-				effective_binding: binding.clone(),
-				manifest_binding: binding.clone(),
+	fn initialize_environment_dependencies(binding: GameBinding) -> InitializeEnvironmentDependencies {
+		InitializeEnvironmentDependencies {
+			assess_target: Arc::new(|_, _| {
+				Box::pin(async { Ok(InitializationTargetAssessment::Available) }) as PortFuture<_>
+			}),
+			read_game_override: Arc::new(|| Box::pin(async { Ok(None) }) as PortFuture<_>),
+			validate_game_directory: Arc::new({
+				let binding = binding.clone();
+				move |_, _| {
+					let binding = binding.clone();
+					Box::pin(async move { Ok(binding) }) as PortFuture<_>
+				}
+			}),
+			discover_game_installation: Arc::new(move |_| {
+				let binding = binding.clone();
+				Box::pin(async move {
+					Ok(ResolvedGameInstallation {
+						binding,
+						source: GameInstallationSource::Steam,
+					})
+				}) as PortFuture<_>
+			}),
+			load_profile_sources: Arc::new(|_, _| {
+				Box::pin(async {
+					Ok(InitializationProfileSources {
+						files: Vec::new(),
+						fallout_default_ini: Vec::new(),
+					})
+				}) as PortFuture<_>
+			}),
+			publish_environment: Arc::new(|_, _, _| Box::pin(async { Ok(Vec::new()) }) as PortFuture<_>),
+		}
+	}
+
+	fn unavailable_install_mod_dependencies() -> InstallModDependencies {
+		InstallModDependencies {
+			install_archive: unavailable_install_archive_dependencies(),
+			download_mod: Arc::new(|_, _| {
+				Box::pin(async { Err(report!(ErrorMarker::nexus_network_failure())) }) as PortFuture<_>
+			}),
+		}
+	}
+
+	fn prepared_initialize_environment(
+		command: Command,
+		dependencies: InitializeEnvironmentDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Init { game_install } = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::InitializeEnvironment {
+			dependencies,
+			game_install,
+		})
+	}
+
+	fn prepared_install_mod(
+		command: Command,
+		dependencies: InstallModDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Install(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::InstallMod {
+			dependencies,
+			arguments,
+		})
+	}
+
+	fn prepared_list_effective_conflicts(
+		command: Command,
+		dependencies: ListEffectiveConflictsDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Conflicts {
+			command: ConflictsCommand::List { compare_content },
+		} = command
+		else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ListEffectiveConflicts {
+			dependencies,
+			compare_content,
+		})
+	}
+
+	fn prepared_inspect_mod_conflicts(
+		command: Command,
+		dependencies: InspectModConflictsDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Conflicts {
+			command: ConflictsCommand::Inspect {
+				mod_name,
+				compare_content,
 			},
-			create_shortcut: shortcut_dependencies(),
-			execution_force_cancellation: CancellationToken::new(),
-			execute_program: Box::new(|_, _, _, _, _, _| {
+		} = command
+		else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::InspectModConflicts {
+			dependencies,
+			mod_name,
+			compare_content,
+		})
+	}
+
+	fn prepared_explain_path(
+		command: Command,
+		dependencies: ExplainPathDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Conflicts {
+			command: ConflictsCommand::Explain { path, compare_content },
+		} = command
+		else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ExplainPath {
+			dependencies,
+			path,
+			compare_content,
+		})
+	}
+
+	fn prepared_export_environment(
+		command: Command,
+		dependencies: ExportEnvironmentDependencies,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Export(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ExportEnvironment {
+			dependencies,
+			arguments,
+		})
+	}
+
+	fn prepared_create_shortcut(
+		command: Command,
+		dependencies: CreateShortcutDependencies,
+		settings: ResolvedSettings,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Shortcut(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::CreateShortcut {
+			dependencies,
+			settings,
+			arguments,
+		})
+	}
+
+	fn prepared_execute_program(
+		command: Command,
+		execute_program: ExecuteProgram,
+	) -> Result<PreparedCommand, ErrorMarker> {
+		let Command::Exec(arguments) = command else {
+			return Err(ErrorMarker::environment_invalid(None));
+		};
+		Ok(PreparedCommand::ExecuteProgram {
+			execute_program,
+			force_cancellation: CancellationToken::new(),
+			arguments,
+		})
+	}
+
+	fn prepared_failing_execution(command: Command) -> Result<PreparedCommand, ErrorMarker> {
+		prepared_execute_program(
+			command,
+			Box::new(|_, _, _, _, _, _| {
 				Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
 					as PortFuture<_, _>
 			}),
-			initialize_environment: InitializeEnvironmentDependencies {
-				assess_target: Arc::new(|_, _| {
-					Box::pin(async { Ok(InitializationTargetAssessment::Available) })
-						as PortFuture<_>
-				}),
-				read_game_override: Arc::new(|| Box::pin(async { Ok(None) }) as PortFuture<_>),
-				resolve_game_installation: Arc::new({
-					let binding = binding.clone();
-					move |_, _, _, _| {
-						let binding = binding.clone();
-						Box::pin(async move {
-							Ok(ResolvedGameInstallation {
-								binding,
-								source: GameInstallationSource::Explicit,
-							})
-						}) as PortFuture<_>
-					}
-				}),
-				load_profile_sources: Arc::new(|_, _| {
-					Box::pin(async {
-						Ok(InitializationProfileSources {
-							files: Vec::new(),
-							fallout_default_ini: Vec::new(),
-						})
-					}) as PortFuture<_>
-				}),
-				publish_environment: Arc::new(|_, _, _| {
-					Box::pin(async { Ok(Vec::new()) }) as PortFuture<_>
-				}),
-			},
-			list_settings,
-			get_setting: GetSettingDependencies { report_progress: None },
-			set_game_directory: SetGameDirectoryDependencies {
-				report_progress: None,
-				check_settings_readiness: Arc::new(|_| Box::pin(async { Ok(()) }) as PortFuture<_>),
-				validate_game_directory: Arc::new({
-					let binding = binding.clone();
-					move |_, _| {
-						let binding = binding.clone();
-						Box::pin(async move { Ok(binding) }) as PortFuture<_>
-					}
-				}),
-				preview_game_binding: Arc::new({
-					let binding = binding.clone();
-					move |_, _| {
-						let stored = binding.clone();
-						Box::pin(async move {
-							Ok(StoredAndEffectiveBinding {
-								effective: stored.clone(),
-								stored,
-								source: SettingSource::Manifest,
-								shadowed: false,
-							})
-						}) as PortFuture<_>
-					}
-				}),
-				store_game_binding: Arc::new(move |_, _| {
-					let stored = binding.clone();
-					Box::pin(async move {
-						Ok(StoredAndEffectiveBinding {
-							effective: stored.clone(),
-							stored,
-							source: SettingSource::Manifest,
-							shadowed: false,
-						})
-					}) as PortFuture<_>
-				}),
-				validate_effective_binding: Arc::new(|binding, _| {
-					Box::pin(async move { Ok(binding) }) as PortFuture<_>
-				}),
-			},
-			install_mod: InstallModDependencies {
-				install_archive,
-				download_mod: Arc::new(|_, _| {
-					Box::pin(async { Err(report!(ErrorMarker::nexus_network_failure())) })
-						as PortFuture<_>
-				}),
-			},
-			export_environment: unavailable_export_dependencies(),
-			list_effective_conflicts: unavailable_list_effective_conflicts_dependencies(),
-			inspect_mod_conflicts: unavailable_inspect_mod_conflicts_dependencies(),
-			explain_path: unavailable_explain_path_dependencies(),
-		}
-	}
-
-	fn failed<T: Send + 'static>() -> PortFuture<T> {
-		Box::pin(async { Err(report!(ErrorMarker::io_failure())) })
-	}
-
-	fn unavailable_export_dependencies() -> ExportEnvironmentDependencies {
-		ExportEnvironmentDependencies {
-			validate_export_destination: Arc::new(|_| failed()),
-			prepare_environment_plan: Arc::new(|_| failed()),
-			project_profile: Arc::new(|_: &EnvironmentPlan| failed()),
-			stage_profile: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
-			list_export_files: Arc::new(|_: &EnvironmentPlan, _: &StagedProfile, _, _| failed()),
-			write_export: Arc::new(|_, _, _, _| failed()),
-			set_load_order_times: Arc::new(|_: &EnvironmentPlan, _, _| failed()),
-			discard_staged_profile: Arc::new(|_| failed()),
-		}
+		)
 	}
 
 	/// Export ports that list one profile file and record whether it was written.
@@ -1505,12 +1233,20 @@ mod tests {
 		}
 	}
 
-	fn successful_dependencies(root: &Path) -> Result<Dependencies, ErrorMarker> {
+	fn resolved_settings(root: &Path) -> Result<ResolvedSettings, ErrorMarker> {
 		let binding = test_binding(root)?;
-		Ok(dependencies_with_list(
-			binding,
-			ListSettingsDependencies { report_progress: None },
-		))
+		Ok(ResolvedSettings {
+			settings: Vec::new(),
+			effective_binding: binding.clone(),
+			manifest_binding: binding,
+		})
+	}
+
+	fn prepared_list_settings(root: &Path) -> Result<PreparedCommand, ErrorMarker> {
+		Ok(PreparedCommand::ListSettings {
+			dependencies: ListSettingsDependencies { report_progress: None },
+			settings: resolved_settings(root)?,
+		})
 	}
 
 	#[tokio::test]
@@ -1590,8 +1326,8 @@ mod tests {
 			(vec!["first=a", "second=b"], true, "preview"),
 			(vec!["first=a", "second=b"], false, "failed"),
 		] {
-			let mut dependencies = successful_dependencies(temp.path()).expect("dependency fixture");
-			dependencies.install_mod.download_mod = Arc::new({
+			let mut dependencies = unavailable_install_mod_dependencies();
+			dependencies.download_mod = Arc::new({
 				let downloaded = DownloadedMod {
 					suggested_name: "Selected file".into(),
 					archive: archive.clone(),
@@ -1605,7 +1341,7 @@ mod tests {
 						as PortFuture<_>
 				}
 			});
-			dependencies.install_mod.install_archive.load_installation_state = Arc::new({
+			dependencies.install_archive.load_installation_state = Arc::new({
 				let game_binding = game_binding.clone();
 				move |_, _| {
 					let game_binding = game_binding.clone();
@@ -1620,7 +1356,7 @@ mod tests {
 					}) as PortFuture<_>
 				}
 			});
-			dependencies.install_mod.install_archive.index_archive = Arc::new({
+			dependencies.install_archive.index_archive = Arc::new({
 				let archive = archive.clone();
 				let index = index.clone();
 				move |received, _, _| {
@@ -1629,10 +1365,10 @@ mod tests {
 					Box::pin(async move { Ok(index) }) as PortFuture<_>
 				}
 			});
-			dependencies.install_mod.install_archive.assess_installation = Arc::new(|_, _| {
+			dependencies.install_archive.assess_installation = Arc::new(|_, _| {
 				Box::pin(async { Ok(InstallationAssessment { overlaps: Vec::new() }) }) as PortFuture<_>
 			});
-			dependencies.install_mod.install_archive.scan_environment_conflicts = Arc::new(|_| {
+			dependencies.install_archive.scan_environment_conflicts = Arc::new(|_| {
 				Box::pin(async {
 					Ok(EnvironmentConflictScan {
 						providers: Vec::new(),
@@ -1642,7 +1378,7 @@ mod tests {
 			});
 			let began = Arc::new(AtomicBool::new(false));
 			let published = Arc::new(AtomicBool::new(false));
-			dependencies.install_mod.install_archive.begin_installation = Arc::new({
+			dependencies.install_archive.begin_installation = Arc::new({
 				let began = began.clone();
 				let published = published.clone();
 				let provenance = provenance.clone();
@@ -1676,10 +1412,9 @@ mod tests {
 					}) as PortFuture<_>
 				}
 			});
-			dependencies.install_mod.install_archive.extract_approved_files =
-				Arc::new(|_, _, _, _, _, _| {
-					Box::pin(async { Err(report!(ErrorMarker::unsafe_archive())) }) as PortFuture<_>
-				});
+			dependencies.install_archive.extract_approved_files = Arc::new(|_, _, _, _, _, _| {
+				Box::pin(async { Err(report!(ErrorMarker::unsafe_archive())) }) as PortFuture<_>
+			});
 			let mut arguments = arguments![
 				"mods",
 				"--log-level",
@@ -1696,9 +1431,12 @@ mod tests {
 				arguments.push(OsString::from("--dry-run"));
 			}
 
-			let result = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-				Ok(dependencies)
-			})
+			let result = run(
+				arguments,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_, command| prepared_install_mod(command, dependencies),
+			)
 			.await?;
 
 			if expected == "failed" {
@@ -1725,8 +1463,7 @@ mod tests {
 	async fn exec_dispatch_preserves_child_status_and_does_not_capture_streams() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		for status in [0, 1, 125, 126, 127, 256, 259, 0xC000_0005] {
-			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program = Box::new(move |_, target, cwd, program, arguments, _| {
+			let execute_program: ExecuteProgram = Box::new(move |_, target, cwd, program, arguments, _| {
 				assert_eq!(target, OutputTarget::Overwrite);
 				assert!(cwd.is_none());
 				assert_eq!(program.as_os_str(), "tool.exe");
@@ -1745,13 +1482,13 @@ mod tests {
 				arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe", "", "--", "雪"],
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				|_| Ok(dependencies),
+				|_, command| prepared_execute_program(command, execute_program),
 			)
 			.await?;
 			assert_eq!(outcome.status, status);
 			assert!(outcome.stdout.is_empty());
 			assert!(outcome.stderr.is_empty());
-			assert!(!outcome.execution_failed);
+			assert!(!outcome.command_failed);
 		}
 		Ok(())
 	}
@@ -1759,12 +1496,11 @@ mod tests {
 	#[tokio::test]
 	async fn execution_failure_dialog_uses_the_created_diagnostic_path() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let outcome = run(
 			arguments!["mods", "exec", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(dependencies),
+			|_, command| prepared_failing_execution(command),
 		)
 		.await?;
 		let path = outcome.diagnostic_log.as_ref().ok_or("expected diagnostic log")?;
@@ -1779,11 +1515,10 @@ mod tests {
 	async fn hidden_exec_runs_managed_execution_and_classifies_its_result() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		for failed in [false, true] {
-			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 			let called = Arc::new(AtomicBool::new(false));
 			let observed = called.clone();
 			let expected_cwd = temp.path().join("tools");
-			dependencies.execute_program =
+			let execute_program: ExecuteProgram =
 				Box::new(move |_, target, cwd, program, arguments, cancellation| {
 					observed.store(true, Ordering::SeqCst);
 					assert!(
@@ -1833,13 +1568,13 @@ mod tests {
 				],
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				|_| Ok(dependencies),
+				|_, command| prepared_execute_program(command, execute_program),
 			)
 			.await?;
 
 			assert!(called.load(Ordering::SeqCst));
 			assert_eq!(outcome.status, 125);
-			assert_eq!(outcome.execution_failed, failed);
+			assert_eq!(outcome.command_failed, failed);
 			assert_eq!(hidden_failure_dialog(&outcome).is_some(), failed);
 			assert!(outcome.diagnostic_log.is_none());
 		}
@@ -1850,12 +1585,11 @@ mod tests {
 	#[tokio::test]
 	async fn hidden_exec_is_explicitly_unsupported_on_non_windows() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let outcome = run(
 			arguments!["mods", "--log-level", "off", "exec", "--hidden", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(dependencies),
+			|_, command| prepared_failing_execution(command),
 		)
 		.await?;
 		assert_eq!(outcome.status, 126);
@@ -1863,15 +1597,14 @@ mod tests {
 			outcome.stderr,
 			"error [program_unsupported]: hidden managed execution is unsupported on this platform\n"
 		);
-		assert!(outcome.execution_failed);
+		assert!(outcome.command_failed);
 		Ok(())
 	}
 
 	#[tokio::test]
 	async fn exec_qualifies_projection_warnings_without_changing_child_output() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-		dependencies.execute_program = Box::new(|_, _, _, _, _, _| {
+		let execute_program: ExecuteProgram = Box::new(|_, _, _, _, _, _| {
 			Box::pin(async {
 				Ok(ExecuteProgramOutput {
 					status: ProcessStatus::new(259),
@@ -1892,7 +1625,7 @@ mod tests {
 			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(dependencies),
+			|_, command| prepared_execute_program(command, execute_program),
 		)
 		.await?;
 
@@ -1908,10 +1641,9 @@ mod tests {
 	#[tokio::test]
 	async fn exec_rejects_reserved_output_target_before_calling_port() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let called = Arc::new(AtomicBool::new(false));
 		let observed = called.clone();
-		dependencies.execute_program = Box::new(move |_, _, _, _, _, _| {
+		let execute_program: ExecuteProgram = Box::new(move |_, _, _, _, _, _| {
 			observed.store(true, Ordering::SeqCst);
 			Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
 				as PortFuture<_, _>
@@ -1929,7 +1661,7 @@ mod tests {
 			],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(dependencies),
+			|_, command| prepared_execute_program(command, execute_program),
 		)
 		.await?;
 		assert_eq!(outcome.status, 125);
@@ -1940,9 +1672,8 @@ mod tests {
 
 	#[test]
 	fn direct_choices_preserve_occurrence_order_and_whitespace() -> Result<(), Box<dyn Error>> {
-		let Ok(choices) = parse_choices(vec![" first = one ".to_owned(), "second=two=parts".to_owned()]) else {
-			return Err("valid direct choices must parse".into());
-		};
+		let choices = parse_choices(vec![" first = one ".to_owned(), "second=two=parts".to_owned()])
+			.map_err(|report| -> Box<dyn Error> { report.into_boxed_error() })?;
 
 		assert_eq!(choices[0].group_id, " first ");
 		assert_eq!(choices[0].option_id, " one ");
@@ -1951,52 +1682,80 @@ mod tests {
 		Ok(())
 	}
 
-	#[test]
-	fn malformed_direct_choice_reports_its_total_sequence() -> Result<(), Box<dyn Error>> {
-		let result = parse_choices(vec!["valid=choice".to_owned(), "malformed".to_owned()]);
-		let Err(report) = result else {
-			return Err("malformed direct choice must fail".into());
-		};
-		let marker = report.current_context();
+	#[tokio::test]
+	async fn malformed_direct_choice_reports_its_total_sequence() -> Result<(), Box<dyn Error>> {
+		let temp = TempDir::new()?;
+		let outcome = run(
+			arguments![
+				"mods",
+				"--json",
+				"--log-level",
+				"off",
+				"install",
+				"archive.zip",
+				"--choice",
+				"valid=choice",
+				"--choice",
+				"malformed",
+			],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_, command| prepared_install_mod(command, unavailable_install_mod_dependencies()),
+		)
+		.await?;
+		let problem: Value = from_str(&outcome.stderr)?;
 
-		assert_eq!(marker.code(), ErrorCode::InvalidSelection);
-		assert_eq!(marker.field(), Some("choices"));
-		assert_eq!(marker.supplied_sequence(), Some(1));
+		assert_eq!(outcome.status, 2);
+		assert_eq!(problem["code"], "invalid_selection");
+		assert_eq!(problem["details"]["field"], "choices");
+		assert_eq!(problem["details"]["sequence"], 1);
 		Ok(())
 	}
 
-	#[test]
-	fn default_and_relative_explicit_roots_resolve_against_fixed_bases() -> Result<(), Box<dyn Error>> {
+	#[tokio::test]
+	async fn default_and_relative_explicit_roots_resolve_against_fixed_bases() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let default = Cli::try_parse_from(["mods", "--log-level", "off", "config", "list"])?;
 		assert_eq!(
-			select_environment_root(&default, temp.path(), Some(temp.path()))?.as_path(),
+			selected_root(
+				arguments!["mods", "--log-level", "off", "config", "list"],
+				temp.path(),
+				Some(temp.path())
+			)
+			.await?,
 			temp.path().join("mods/environments/default")
 		);
-		let explicit = Cli::try_parse_from([
-			"mods",
-			"--environment",
-			"portable",
-			"--log-level",
-			"off",
-			"config",
-			"list",
-		])?;
 		assert_eq!(
-			select_environment_root(&explicit, temp.path(), Some(Path::new("/ignored")))?.as_path(),
+			selected_root(
+				arguments![
+					"mods",
+					"--environment",
+					"portable",
+					"--log-level",
+					"off",
+					"config",
+					"list"
+				],
+				temp.path(),
+				Some(Path::new("/ignored")),
+			)
+			.await?,
 			temp.path().join("portable")
 		);
-		let parent_relative = Cli::try_parse_from([
-			"mods",
-			"--environment",
-			"../portable",
-			"--log-level",
-			"off",
-			"config",
-			"list",
-		])?;
 		assert_eq!(
-			select_environment_root(&parent_relative, temp.path(), None)?.as_path(),
+			selected_root(
+				arguments![
+					"mods",
+					"--environment",
+					"../portable",
+					"--log-level",
+					"off",
+					"config",
+					"list"
+				],
+				temp.path(),
+				None,
+			)
+			.await?,
 			temp.path()
 				.parent()
 				.ok_or("temporary directory must have a parent")?
@@ -2005,16 +1764,23 @@ mod tests {
 		Ok(())
 	}
 
-	fn dependencies_with_conflict_scan(
-		root: &Path,
-		scan: EnvironmentConflictScan,
-	) -> Result<Dependencies, ErrorMarker> {
-		let mut dependencies = successful_dependencies(root)?;
-		let (list, inspect, explain) = successful_conflict_dependencies(scan);
-		dependencies.list_effective_conflicts = list;
-		dependencies.inspect_mod_conflicts = inspect;
-		dependencies.explain_path = explain;
-		Ok(dependencies)
+	async fn selected_root(
+		arguments: Vec<OsString>,
+		startup_directory: &Path,
+		local_app_data: Option<&Path>,
+	) -> Result<PathBuf, Box<dyn Error>> {
+		let mut selected = None;
+		run(
+			arguments,
+			startup_directory.to_owned(),
+			local_app_data.map(Path::to_owned),
+			|root, _| {
+				selected = Some(root.as_path().to_owned());
+				prepared_list_settings(startup_directory)
+			},
+		)
+		.await?;
+		Ok(selected.ok_or("the dependency factory must receive the selected root")?)
 	}
 
 	#[tokio::test]
@@ -2084,6 +1850,7 @@ mod tests {
 			],
 			problems: Vec::new(),
 		};
+		let (list, inspect, explain) = successful_conflict_dependencies(scan);
 
 		let listed = run(
 			arguments![
@@ -2097,7 +1864,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| dependencies_with_conflict_scan(&root, scan.clone()),
+			|_, command| prepared_list_effective_conflicts(command, list),
 		)
 		.await?;
 		assert_eq!(listed.status, 0);
@@ -2119,7 +1886,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| dependencies_with_conflict_scan(&root, scan.clone()),
+			|_, command| prepared_inspect_mod_conflicts(command, inspect),
 		)
 		.await?;
 		assert_eq!(inspected.status, 0);
@@ -2147,7 +1914,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| dependencies_with_conflict_scan(&root, scan),
+			|_, command| prepared_explain_path(command, explain),
 		)
 		.await?;
 		assert_eq!(explained.status, 0);
@@ -2175,7 +1942,12 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| successful_dependencies(&root),
+			|_, command| {
+				prepared_inspect_mod_conflicts(
+					command,
+					unavailable_inspect_mod_conflicts_dependencies(),
+				)
+			},
 		)
 		.await?;
 		assert_eq!(invalid_mod.status, 1);
@@ -2194,7 +1966,7 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| successful_dependencies(&root),
+			|_, command| prepared_explain_path(command, unavailable_explain_path_dependencies()),
 		)
 		.await?;
 		assert_eq!(invalid_path.status, 1);
@@ -2222,14 +1994,14 @@ mod tests {
 			],
 			temp.path().to_path_buf(),
 			None,
-			|_| successful_dependencies(&root),
+			|_, _| prepared_list_settings(&root),
 		)
 		.await?;
 		let result = run(
 			arguments!["mods", "--environment", root.as_os_str(), "config", "list"],
 			temp.path().to_path_buf(),
 			None,
-			|_| successful_dependencies(&root),
+			|_, _| prepared_list_settings(&root),
 		)
 		.await?;
 		assert_eq!(result.status, expected.status);
@@ -2247,7 +2019,7 @@ mod tests {
 			arguments!["mods", "--environment", root.as_os_str(), "install", "archive.zip",],
 			temp.path().to_path_buf(),
 			None,
-			|_| successful_dependencies(&root),
+			|_, command| prepared_install_mod(command, unavailable_install_mod_dependencies()),
 		)
 		.await?;
 		let files = read_dir(root.join("logs"))?.collect::<Result<Vec<_>, _>>()?;
@@ -2271,7 +2043,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			None,
-			|_| Err(ErrorMarker::io_failure()),
+			|_, _| Err(ErrorMarker::io_failure()),
 		)
 		.await?;
 		let error: Value = from_str(&root_failure.stderr)?;
@@ -2284,7 +2056,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| successful_dependencies(temp.path()),
+			|_, _| prepared_list_settings(temp.path()),
 		)
 		.await?;
 		let document: Value = from_str(&settings.stdout)?;
@@ -2295,7 +2067,14 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "init", "--game-install", "game"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| successful_dependencies(temp.path()),
+			|_, command| {
+				test_binding(temp.path()).and_then(|binding| {
+					prepared_initialize_environment(
+						command,
+						initialize_environment_dependencies(binding),
+					)
+				})
+			},
 		)
 		.await?;
 		assert_eq!(from_str::<Value>(&mutation.stdout)?, json!({"warnings": []}));
@@ -2307,8 +2086,7 @@ mod tests {
 	async fn json_exec_distinguishes_prelaunch_and_postlaunch_failures() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		for launched in [false, true] {
-			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program = Box::new(move |reporter, _, _, _, _, _| {
+			let execute_program: ExecuteProgram = Box::new(move |reporter, _, _, _, _, _| {
 				Box::pin(async move {
 					if launched && let Some(reporter) = reporter {
 						reporter.call((ProgressEvent::ExecutionPrepared,)).await;
@@ -2321,7 +2099,7 @@ mod tests {
 				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				|_| Ok(dependencies),
+				|_, command| prepared_execute_program(command, execute_program),
 			)
 			.await?;
 			assert_eq!(outcome.status, 125);
@@ -2344,7 +2122,7 @@ mod tests {
 			arguments!["mods", "--json", "--environment", root.as_os_str(), "config", "list"],
 			temp.path().to_owned(),
 			None,
-			|_| successful_dependencies(&root),
+			|_, _| prepared_list_settings(&root),
 		)
 		.await?;
 		let document: Value = from_str(&warned.stdout)?;
@@ -2366,7 +2144,7 @@ mod tests {
 			],
 			temp.path().to_owned(),
 			None,
-			|_| successful_dependencies(&valid_root),
+			|_, command| prepared_install_mod(command, unavailable_install_mod_dependencies()),
 		)
 		.await?;
 		let problem: Value = from_str(&failed.stderr)?;
@@ -2385,7 +2163,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			Some(Path::new("relative-root").to_owned()),
-			|_| Err(ErrorMarker::io_failure()),
+			|_, _| Err(ErrorMarker::io_failure()),
 		)
 		.await?;
 		assert_eq!(json.status, 2);
@@ -2396,7 +2174,7 @@ mod tests {
 			arguments!["mods", "--log-level", "off", "config", "list"],
 			temp.path().to_owned(),
 			Some(Path::new("relative-root").to_owned()),
-			|_| Err(ErrorMarker::io_failure()),
+			|_, _| Err(ErrorMarker::io_failure()),
 		)
 		.await?;
 		assert_eq!(text.stderr, "error: environment root must be an absolute path\n");
@@ -2404,7 +2182,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn nexus_file_selection_is_a_problem_with_files_in_published_order() -> Result<(), Box<dyn Error>> {
+	async fn nexus_file_selection_reports_the_files_in_published_order() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		let files = vec![
 			DownloadModFile {
@@ -2423,60 +2201,48 @@ mod tests {
 		let game_binding = GameBinding::new(
 			GameInstallationPath::new(temp.path().join("game")).map_err(|_| "game fixture")?,
 		);
-		let mut outcomes = Vec::new();
-		for json_flag in [true, false] {
-			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.install_mod.install_archive.load_installation_state = Arc::new({
+		let mut dependencies = unavailable_install_mod_dependencies();
+		dependencies.install_archive.load_installation_state = Arc::new({
+			let game_binding = game_binding.clone();
+			move |_, _| {
 				let game_binding = game_binding.clone();
-				move |_, _| {
-					let game_binding = game_binding.clone();
-					Box::pin(async move {
-						Ok(InstallationState {
-							game_binding,
-							installed_mods: Vec::new(),
-							unlisted_mod_names: Vec::new(),
-							current_winners: HashMap::new(),
-							file_dependencies: HashMap::new(),
-						})
-					}) as PortFuture<_>
-				}
-			});
-			dependencies.install_mod.download_mod = Arc::new({
-				let files = files.clone();
-				move |_, _| {
-					let files = files.clone();
-					Box::pin(async move { Ok(DownloadModOutput::SelectionRequired(files)) })
-						as PortFuture<_>
-				}
-			});
-			let mut arguments = arguments!["mods", "--log-level", "off"];
-			if json_flag {
-				arguments.push(OsString::from("--json"));
+				Box::pin(async move {
+					Ok(InstallationState {
+						game_binding,
+						installed_mods: Vec::new(),
+						unlisted_mod_names: Vec::new(),
+						current_winners: HashMap::new(),
+						file_dependencies: HashMap::new(),
+					})
+				}) as PortFuture<_>
 			}
-			arguments.extend(arguments!["install", "https://www.nexusmods.com/newvegas/mods/42"]);
-			outcomes.push(
-				run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-					Ok(dependencies)
-				})
-				.await?,
-			);
-		}
+		});
+		dependencies.download_mod = Arc::new({
+			let files = files.clone();
+			move |_, _| {
+				let files = files.clone();
+				Box::pin(async move { Ok(DownloadModOutput::SelectionRequired(files)) })
+					as PortFuture<_>
+			}
+		});
+		let outcome = run(
+			arguments![
+				"mods",
+				"--log-level",
+				"off",
+				"install",
+				"https://www.nexusmods.com/newvegas/mods/42"
+			],
+			temp.path().to_owned(),
+			Some(temp.path().to_owned()),
+			|_, command| prepared_install_mod(command, dependencies),
+		)
+		.await?;
 
-		let problem: Value = from_str(&outcomes[0].stderr)?;
-		assert_eq!(outcomes[0].status, 2);
-		assert!(outcomes[0].stdout.is_empty());
-		assert_eq!(problem["code"], "nexus_file_selection_required");
-		assert_eq!(problem["exit_code"], 2);
+		assert_eq!(outcome.status, 2);
+		assert!(outcome.stdout.is_empty());
 		assert_eq!(
-			problem["details"]["files"],
-			json!([
-				{"file_id": 9, "name": "Optional", "version": "2.0", "category": "OPTIONAL"},
-				{"file_id": 7, "name": "Main", "version": "1.0", "category": "MAIN"},
-			])
-		);
-		assert_eq!(outcomes[1].status, 2);
-		assert_eq!(
-			outcomes[1].stderr,
+			outcome.stderr,
 			concat!(
 				"error [nexus_file_selection_required]: Select a file with --file <id>.\n",
 				"file_id = 9, name = \"Optional\", version = \"2.0\", category = \"OPTIONAL\"\n",
@@ -2484,42 +2250,6 @@ mod tests {
 			)
 		);
 		Ok(())
-	}
-
-	async fn system_dependencies(
-		root: &EnvironmentRoot,
-		startup: &Path,
-		command: &Command,
-	) -> RootResult<CommandDependencies, ErrorMarker> {
-		let resources = Resources::system(root.clone());
-		let mode = if matches!(command, Command::Install(_)) {
-			SettingsLoadMode::Inspection
-		} else {
-			SettingsLoadMode::ReadOnly
-		};
-		let loaded = resources.load_settings(mode, &CancellationToken::new()).await?;
-		let binding = loaded.resolved.effective_binding.clone();
-		let execution_force_cancellation = CancellationToken::new();
-
-		Ok(CommandDependencies::Existing(Box::new(Dependencies {
-			settings: loaded.resolved.clone(),
-			create_shortcut: resources.create_shortcut_dependencies(binding.clone(), startup.to_owned()),
-			execute_program: resources.execute_program(
-				binding.clone(),
-				startup.to_owned(),
-				execution_force_cancellation.clone(),
-			),
-			execution_force_cancellation,
-			initialize_environment: resources.initialize_environment_dependencies(),
-			list_settings: resources.list_settings_dependencies(),
-			get_setting: resources.get_setting_dependencies(),
-			set_game_directory: resources.set_game_directory_dependencies(loaded.clone()),
-			install_mod: resources.install_mod_dependencies(&loaded),
-			export_environment: resources.export_environment_dependencies(binding.clone()),
-			list_effective_conflicts: resources.list_effective_conflicts_dependencies(binding.clone()),
-			inspect_mod_conflicts: resources.inspect_mod_conflicts_dependencies(binding.clone()),
-			explain_path: resources.explain_path_dependencies(binding),
-		})))
 	}
 
 	#[tokio::test]
@@ -2574,15 +2304,9 @@ mod tests {
 						arguments.push(OsString::from("--json"));
 					}
 					arguments.extend(command.clone());
-					let outcome = super::execute(
-						Cli::try_parse_from(arguments)?,
-						root.clone(),
-						None,
-						async |environment_root, command| {
-							system_dependencies(environment_root, &root, command).await
-						},
-					)
-					.await;
+					let outcome =
+						execute(Cli::try_parse_from(arguments)?, root.clone(), None, compose)
+							.await;
 					assert_eq!(outcome.status == 0, succeeds, "{}", outcome.stderr);
 					assert!(!outcome.stdout.contains(secret));
 					assert!(!outcome.stderr.contains(secret));
@@ -2592,12 +2316,9 @@ mod tests {
 		Ok(())
 	}
 	#[tokio::test]
-	async fn shortcut_forwards_startup_relative_paths_and_stays_quiet_without_execution()
-	-> Result<(), Box<dyn Error>> {
+	async fn shortcut_forwards_startup_relative_paths_and_publishes_quietly() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
 		for custom in [false, true] {
-			let mut dependencies = successful_dependencies(temp.path())
-				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
 			let expected_root = temp.path().join("environment");
 			let expected_cwd = if custom {
 				temp.path().join("work")
@@ -2609,18 +2330,12 @@ mod tests {
 			let program = temp.path().join("tool.exe");
 			let published = Arc::new(AtomicBool::new(false));
 			let observed = published.clone();
-			let executed = Arc::new(AtomicBool::new(false));
-			let observed_execution = executed.clone();
-			dependencies.execute_program = Box::new(move |_, _, _, _, _, _| {
-				observed_execution.store(true, Ordering::SeqCst);
-				Box::pin(async { Err(report!(ErrorMarker::vfs_failed()).context(ExecuteProgramError)) })
-			});
 			let resolved_cwd = expected_cwd.clone();
 			let resolved_program = program.clone();
 			let binding = test_binding(temp.path())
 				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
-			dependencies.settings = named_settings(binding, "Vanilla Plus");
-			dependencies.create_shortcut = CreateShortcutDependencies {
+			let settings = named_settings(binding, "Vanilla Plus");
+			let dependencies = CreateShortcutDependencies {
 				locate_launcher: Arc::new(move || {
 					let launcher = launcher.clone();
 					Box::pin(async move { Ok(launcher) })
@@ -2691,13 +2406,15 @@ mod tests {
 				]);
 			}
 			values.extend(arguments!["--", "tool.exe", "", "a\"b", "雪", "--"]);
-			let outcome = run(values, temp.path().to_owned(), None, |_| Ok(dependencies)).await?;
+			let outcome = run(values, temp.path().to_owned(), None, |_, command| {
+				prepared_create_shortcut(command, dependencies, settings)
+			})
+			.await?;
 
 			assert_eq!(outcome.status, 0);
 			assert!(outcome.stdout.is_empty());
 			assert!(outcome.stderr.is_empty());
 			assert!(published.load(Ordering::SeqCst));
-			assert!(!executed.load(Ordering::SeqCst));
 		}
 		Ok(())
 	}
@@ -2706,20 +2423,21 @@ mod tests {
 		let temp = TempDir::new()?;
 		write(temp.path().join("logs"), b"block diagnostic directory creation")?;
 		for succeeds in [true, false] {
-			let mut dependencies = successful_dependencies(temp.path())
+			let settings = resolved_settings(temp.path())
 				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let mut dependencies = shortcut_dependencies();
 			let root = temp.path().to_owned();
 			let launcher = root.join("mods.exe");
 			let environment = root.clone();
-			dependencies.create_shortcut.locate_launcher = Arc::new(move || {
+			dependencies.locate_launcher = Arc::new(move || {
 				let launcher = launcher.clone();
 				Box::pin(async move { Ok(launcher) })
 			});
-			dependencies.create_shortcut.locate_environment_root = Arc::new(move || {
+			dependencies.locate_environment_root = Arc::new(move || {
 				let environment = environment.clone();
 				Box::pin(async move { Ok(environment) })
 			});
-			dependencies.create_shortcut.persist = Arc::new(move |_| {
+			dependencies.persist = Arc::new(move |_| {
 				Box::pin(async move {
 					if !succeeds {
 						return Err(report!(ErrorMarker::shortcut_failed()));
@@ -2740,7 +2458,7 @@ mod tests {
 				],
 				temp.path().to_owned(),
 				None,
-				|_| Ok(dependencies),
+				|_, command| prepared_create_shortcut(command, dependencies, settings),
 			)
 			.await?;
 
@@ -2762,19 +2480,18 @@ mod tests {
 	#[tokio::test]
 	async fn shortcut_reports_unsupported_platform_through_normal_diagnostics() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let mut dependencies = successful_dependencies(temp.path())
+		let settings = resolved_settings(temp.path())
 			.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
 		let outcome = run(
 			arguments!["mods", "--log-level", "off", "shortcut", "--", "tool.exe"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|root| {
-				dependencies.create_shortcut = Resources::system(root.clone())
-					.create_shortcut_dependencies(
-						dependencies.settings.effective_binding.clone(),
-						temp.path().to_owned(),
-					);
-				Ok(dependencies)
+			|root, command| {
+				let dependencies = Resources::system(root.clone()).create_shortcut_dependencies(
+					settings.effective_binding.clone(),
+					temp.path().to_owned(),
+				);
+				prepared_create_shortcut(command, dependencies, settings)
 			},
 		)
 		.await?;
@@ -2814,22 +2531,26 @@ mod tests {
 		];
 		let mut documents = Vec::new();
 		for (command, status) in cases {
-			let mut dependencies = successful_dependencies(temp.path())
+			let settings = resolved_settings(temp.path())
 				.map_err(|error| -> Box<dyn Error> { report!(error).into_boxed_error() })?;
+			let mut dependencies = shortcut_dependencies();
 			let launcher = temp.path().join("mods.exe");
 			let environment = temp.path().to_owned();
-			dependencies.create_shortcut.locate_launcher = Arc::new(move || {
+			dependencies.locate_launcher = Arc::new(move || {
 				let launcher = launcher.clone();
 				Box::pin(async move { Ok(launcher) })
 			});
-			dependencies.create_shortcut.locate_environment_root = Arc::new(move || {
+			dependencies.locate_environment_root = Arc::new(move || {
 				let environment = environment.clone();
 				Box::pin(async move { Ok(environment) })
 			});
-			dependencies.create_shortcut.persist = Arc::new(|_| Box::pin(async { Ok(()) }));
+			dependencies.persist = Arc::new(|_| Box::pin(async { Ok(()) }));
 			let mut values = arguments!["mods", "--json", "--environment", temp.path().as_os_str()];
 			values.extend(command);
-			let outcome = run(values, temp.path().to_owned(), None, |_| Ok(dependencies)).await?;
+			let outcome = run(values, temp.path().to_owned(), None, |_, command| {
+				prepared_create_shortcut(command, dependencies, settings)
+			})
+			.await?;
 
 			assert_eq!(outcome.status, status, "{}", outcome.stderr);
 			let (document, other) = if status == 0 {
@@ -2858,7 +2579,7 @@ mod tests {
 	async fn help_and_version_never_construct_or_load_command_resources() {
 		for argument in ["--help", "--version"] {
 			let called = AtomicBool::new(false);
-			let result = super::run_current_process(arguments!["mods", argument], async |_, _, _| {
+			let result = run_current_process(parse_from(arguments!["mods", argument]), async |_, _, _| {
 				called.store(true, Ordering::SeqCst);
 				Err(report!(ErrorMarker::environment_invalid(None)))
 			})
@@ -2866,28 +2587,6 @@ mod tests {
 			assert!(result.is_err());
 			assert!(!called.load(Ordering::SeqCst));
 		}
-	}
-
-	#[tokio::test]
-	async fn initialization_composition_does_not_need_an_existing_manifest() -> Result<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		let dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-		let cli = Cli::try_parse_from(arguments!["mods", "--log-level", "off", "init"])?;
-		let result = super::execute(
-			cli,
-			temp.path().to_owned(),
-			Some(temp.path().to_owned()),
-			async move |_, command| {
-				assert!(matches!(command, super::Command::Init { .. }));
-				Ok(super::CommandDependencies::Initialize(
-					dependencies.initialize_environment,
-				))
-			},
-		)
-		.await;
-		assert_eq!(result.status, 0);
-		assert!(!temp.path().join("mods.toml").exists());
-		Ok(())
 	}
 
 	#[tokio::test]
@@ -2905,49 +2604,16 @@ mod tests {
 				"--",
 				"tool.exe"
 			])?;
-			let result = super::execute(
+			let result = execute(
 				cli,
 				temp.path().to_owned(),
 				Some(temp.path().to_owned()),
-				async |_, _| Err(report!(std::io::Error::other("private source path")).context(code)),
+				async |_, _, _| Err(report!(std::io::Error::other("private source path")).context(code)),
 			)
 			.await;
 			assert_eq!(result.status, expected);
 			assert!(!result.stderr.contains("private source path"));
 		}
-		Ok(())
-	}
-
-	#[tokio::test]
-	async fn exec_failure_keeps_status_and_reports_retained_ini_path_without_raw_report()
-	-> Result<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-		dependencies.execute_program = Box::new(|_, _, _, _, _, _| {
-			let mut failure =
-				report!(ErrorMarker::execution_supervision_failed().with_phase("profile_retained"));
-			failure.children_mut().push(report!(RetainedProfile {
-				path: PathBuf::from("C:\\private\\inis")
-			})
-			.into_dynamic()
-			.into_cloneable());
-			Box::pin(async move { Err(failure.context(ExecuteProgramError)) }) as PortFuture<_, _>
-		});
-
-		let outcome = run(
-			arguments!["mods", "--log-level", "off", "exec", "--", "tool.exe"],
-			temp.path().to_owned(),
-			Some(temp.path().to_owned()),
-			|_| Ok(dependencies),
-		)
-		.await?;
-		assert_eq!(outcome.status, 125);
-		assert!(outcome.stdout.is_empty());
-		assert!(outcome
-			.stderr
-			.contains("retained_execution_inis = \"C:\\\\private\\\\inis\""));
-		assert!(outcome.stderr.contains("after all managed processes have stopped"));
-		assert!(!outcome.stderr.contains("ExecuteProgramError"));
 		Ok(())
 	}
 
@@ -2962,8 +2628,7 @@ mod tests {
 				include_game_data: dry_run,
 			};
 
-			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.export_environment =
+			let dependencies =
 				export_dependencies(temp.path().join("payload"), selection, published.clone());
 
 			let arguments = if dry_run {
@@ -2980,9 +2645,12 @@ mod tests {
 			} else {
 				arguments!["mods", "--log-level", "off", "export", "payload"]
 			};
-			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-				Ok(dependencies)
-			})
+			let outcome = run(
+				arguments,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_, command| prepared_export_environment(command, dependencies),
+			)
 			.await?;
 			assert_eq!(outcome.status, 0);
 			assert!(outcome.stderr.starts_with("warning [stale_plugin_entry]"));
@@ -3007,8 +2675,7 @@ mod tests {
 				include_saves: false,
 				include_game_data: false,
 			};
-			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.export_environment = export_dependencies(
+			let dependencies = export_dependencies(
 				temp.path().join("payload"),
 				selection,
 				Arc::new(AtomicBool::new(false)),
@@ -3018,9 +2685,12 @@ mod tests {
 				arguments.push(OsString::from("--dry-run"));
 			}
 
-			let outcome = run(arguments, temp.path().to_owned(), Some(temp.path().to_owned()), |_| {
-				Ok(dependencies)
-			})
+			let outcome = run(
+				arguments,
+				temp.path().to_owned(),
+				Some(temp.path().to_owned()),
+				|_, command| prepared_export_environment(command, dependencies),
+			)
 			.await?;
 
 			assert_eq!(outcome.status, 0);
@@ -3047,14 +2717,13 @@ mod tests {
 	#[tokio::test]
 	async fn json_export_failure_exposes_only_allowlisted_retained_paths() -> Result<(), Box<dyn Error>> {
 		let temp = TempDir::new()?;
-		let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
 		let selection = ExportSelection {
 			include_saves: false,
 			include_game_data: false,
 		};
-		dependencies.export_environment =
+		let mut dependencies =
 			export_dependencies(temp.path().join("payload"), selection, Arc::new(AtomicBool::new(false)));
-		dependencies.export_environment.discard_staged_profile =
+		dependencies.discard_staged_profile =
 			Arc::new(|_| {
 				Box::pin(async {
 					Err(report!(std::io::Error::other("private cause"))
@@ -3066,7 +2735,7 @@ mod tests {
 			arguments!["mods", "--json", "--log-level", "off", "export", "payload"],
 			temp.path().to_owned(),
 			Some(temp.path().to_owned()),
-			|_| Ok(dependencies),
+			|_, command| prepared_export_environment(command, dependencies),
 		)
 		.await?;
 
@@ -3083,57 +2752,6 @@ mod tests {
 				"output": temp.path().join("payload").display().to_string(),
 			})
 		);
-		Ok(())
-	}
-
-	#[tokio::test]
-	async fn json_exec_problem_names_the_load_order_file_and_unlisted_mod() -> Result<(), Box<dyn Error>> {
-		let temp = TempDir::new()?;
-		for with_file in [true, false] {
-			let mut dependencies = successful_dependencies(temp.path()).map_err(|_| "fixture failed")?;
-			dependencies.execute_program = Box::new(move |_, _, _, _, _, _| {
-				Box::pin(async move {
-					if !with_file {
-						let missing = ModName::new("Missing Mod".into()).map_err(|_| {
-							report!(ErrorMarker::invalid_mod_name())
-								.context(ExecuteProgramError)
-						})?;
-						return Err(report!(
-							ErrorMarker::environment_invalid(None).with_mod_name(missing)
-						)
-						.context(ExecuteProgramError));
-					}
-
-					let mut failure = report!(ErrorMarker::io_failure().with_phase("load_order"));
-					failure.children_mut().push(report!(LoadOrderFile {
-						path: PathBuf::from("Data/FalloutNV.esm"),
-					})
-					.into_dynamic()
-					.into_cloneable());
-					Err(failure.context(ExecuteProgramError))
-				}) as PortFuture<_, _>
-			});
-
-			let outcome = run(
-				arguments!["mods", "--json", "--log-level", "off", "exec", "--", "tool.exe"],
-				temp.path().to_owned(),
-				Some(temp.path().to_owned()),
-				|_| Ok(dependencies),
-			)
-			.await?;
-
-			let problem: Value = from_str(&outcome.stderr)?;
-			if with_file {
-				assert_eq!(problem["code"], "io_failure");
-				assert_eq!(
-					problem["details"],
-					json!({"phase": "load_order", "load_order_file": "Data/FalloutNV.esm"})
-				);
-			} else {
-				assert_eq!(problem["code"], "environment_invalid");
-				assert_eq!(problem["details"], json!({"mod_name": "Missing Mod"}));
-			}
-		}
 		Ok(())
 	}
 }

@@ -11,35 +11,12 @@ use rootcause::report;
 use tokio_util::sync::CancellationToken;
 
 impl GamePlatformAdapter {
-	pub(crate) async fn resolve(
+	pub(crate) async fn discover(
 		&self,
-		explicit: Option<GameInstallationPath>,
-		environment: Option<GameInstallationPath>,
 		cancellation: &CancellationToken,
 	) -> Result<ResolvedGameInstallation, ErrorMarker> {
 		if cancellation.is_cancelled() {
 			return Err(report!(ErrorMarker::operation_cancelled()));
-		}
-
-		if let Some(path) = explicit {
-			let binding = self.validate(path).await?;
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			return Ok(ResolvedGameInstallation {
-				binding,
-				source: GameInstallationSource::Explicit,
-			});
-		}
-		if let Some(path) = environment {
-			let binding = self.validate(path).await?;
-			if cancellation.is_cancelled() {
-				return Err(report!(ErrorMarker::operation_cancelled()));
-			}
-			return Ok(ResolvedGameInstallation {
-				binding,
-				source: GameInstallationSource::Environment,
-			});
 		}
 
 		let mut first_invalid = None;
@@ -72,10 +49,7 @@ impl GamePlatformAdapter {
 				Err(_) => {}
 			}
 		}
-		if let Some(error) = first_invalid {
-			return Err(error);
-		}
-		Err(report!(ErrorMarker::game_install_not_found()))
+		Err(first_invalid.unwrap_or_else(|| report!(ErrorMarker::game_install_not_found())))
 	}
 
 	pub(crate) async fn validate(&self, path: GameInstallationPath) -> Result<GameBinding, ErrorMarker> {
@@ -93,7 +67,6 @@ mod tests {
 	use super::GamePlatformAdapter;
 	use crate::adapter::KnownFolderSource;
 	use application::ErrorCode;
-	use domain::GameInstallationPath;
 	use rootcause::Result;
 	use std::fs;
 	use std::io::Error as IoError;
@@ -104,28 +77,18 @@ mod tests {
 	use tokio_util::sync::CancellationToken;
 
 	#[tokio::test]
-	async fn cancelled_resolution_stops_before_validation() -> Result<()> {
+	async fn cancelled_discovery_stops_before_searching() -> Result<()> {
 		let (_temp, game) = fixture()?;
-		let path = GameInstallationPath::new(game)?;
 		let cancellation = CancellationToken::new();
 		cancellation.cancel();
 
-		let result = adapter_without_sources().resolve(Some(path), None, &cancellation).await;
+		let result = adapter_with_discovery(Vec::new(), vec![game])
+			.discover(&cancellation)
+			.await;
 		assert_eq!(
 			result.as_ref().err().map(|error| error.current_context().code()),
 			Some(ErrorCode::OperationCancelled),
 		);
-		Ok(())
-	}
-
-	#[tokio::test]
-	async fn explicit_precedes_environment_and_discovery() -> Result<()> {
-		let (_temp, game) = fixture()?;
-		let path = GameInstallationPath::new(game)?;
-		let resolved = adapter_without_sources()
-			.resolve(Some(path.clone()), Some(path), &CancellationToken::new())
-			.await?;
-		assert_eq!(resolved.source, GameInstallationSource::Explicit);
 		Ok(())
 	}
 
@@ -140,14 +103,14 @@ mod tests {
 			.ok_or_else(|| IoError::other("missing steam root"))?
 			.to_path_buf();
 		let resolved = adapter_with_discovery(vec![steam_root], vec![bethesda_game.clone()])
-			.resolve(None, None, &CancellationToken::new())
+			.discover(&CancellationToken::new())
 			.await?;
 		assert_eq!(resolved.source, GameInstallationSource::Steam);
 		assert_eq!(resolved.binding.game_directory().as_path(), steam_game);
 		drop(steam_fixture);
 
 		let fallback = adapter_with_discovery(Vec::new(), vec![bethesda_game])
-			.resolve(None, None, &CancellationToken::new())
+			.discover(&CancellationToken::new())
 			.await?;
 		assert_eq!(fallback.source, GameInstallationSource::BethesdaRegistryFallback);
 		drop(bethesda_fixture);
@@ -171,7 +134,7 @@ mod tests {
 			format!("\"libraryfolders\"\n{{\n\"1\"\n{{\n\"path\" \"{library_path}\"\n}}\n}}"),
 		)?;
 		let resolved = adapter_with_discovery(vec![primary_root], Vec::new())
-			.resolve(None, None, &CancellationToken::new())
+			.discover(&CancellationToken::new())
 			.await?;
 		assert_eq!(resolved.source, GameInstallationSource::Steam);
 		assert_eq!(resolved.binding.game_directory().as_path(), fs::canonicalize(game)?);
@@ -198,10 +161,6 @@ mod tests {
 			),
 		)?;
 		Ok((temp, game))
-	}
-
-	fn adapter_without_sources() -> GamePlatformAdapter {
-		adapter_with_discovery(Vec::new(), Vec::new())
 	}
 
 	fn adapter_with_discovery(steam_roots: Vec<PathBuf>, bethesda_hints: Vec<PathBuf>) -> GamePlatformAdapter {

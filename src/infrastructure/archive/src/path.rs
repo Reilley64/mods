@@ -119,13 +119,14 @@ fn is_windows_device_alias(component: &str) -> bool {
 		return true;
 	}
 
-	let Some(port_number) = upper.strip_prefix("COM").or_else(|| upper.strip_prefix("LPT")) else {
-		return false;
-	};
-	matches!(
-		port_number,
-		"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
-	)
+	upper.strip_prefix("COM")
+		.or_else(|| upper.strip_prefix("LPT"))
+		.is_some_and(|port_number| {
+			matches!(
+				port_number,
+				"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+			)
+		})
 }
 
 #[cfg(test)]

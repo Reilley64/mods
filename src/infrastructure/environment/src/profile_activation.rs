@@ -89,13 +89,10 @@ fn decode_ini(bytes: &[u8]) -> Result<String, ErrorMarker> {
 		}
 		return String::from_utf16(&values).context(ErrorMarker::environment_invalid(None));
 	}
-	match String::from_utf8(bytes.to_vec()) {
-		Ok(text) => Ok(text),
-		Err(_) => {
-			let (text, _, _) = WINDOWS_1252.decode(bytes);
-			Ok(text.into_owned())
-		}
-	}
+	Ok(String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| {
+		let (text, _, _) = WINDOWS_1252.decode(bytes);
+		text.into_owned()
+	}))
 }
 
 #[cfg(test)]

@@ -285,6 +285,7 @@ async fn write_output(
 	}
 
 	check_destination(root, output).await?;
+
 	create_dir(output).await.context(ErrorMarker::io_failure())?;
 
 	let result = copy_files(output, table, files, cancellation).await;
