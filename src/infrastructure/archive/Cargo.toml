@@ -14,7 +14,7 @@ crc32fast = "1.5.2"
 domain = { workspace = true }
 lzma-rust2 = { version = "0.21.0", default-features = false, features = ["std"] }
 quick-xml = { version = "0.42.0", default-features = false, features = ["encoding"] }
-rars = "0.9.4"
+rars = "0.10.0"
 rootcause = { workspace = true }
 sevenz-rust2 = { version = "0.23.0", default-features = false, features = ["aes256", "bzip2", "deflate", "ppmd", "brotli", "lz4", "zstd"] }
 sha2 = { workspace = true }
