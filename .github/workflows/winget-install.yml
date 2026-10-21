@@ -1,0 +1,50 @@
+name: WinGet install
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LIBCLANG_PATH: C:/Program Files/LLVM/bin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: nightly-2026-08-21
+          targets: x86_64-pc-windows-msvc
+      - name: Build the checked-out commit and complete corresponding source
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -ReleaseId $env:GITHUB_SHA
+      - name: Provision pinned WinGet on the disposable runner
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.WinGet.Client -RequiredVersion 1.29.380 -Scope CurrentUser -Repository PSGallery -Force -ErrorAction Stop
+          Import-Module Microsoft.WinGet.Client -RequiredVersion 1.29.380 -ErrorAction Stop
+          Repair-WinGetPackageManager -Version 1.29.380 -Force -ErrorAction Stop
+          $apps = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
+          $env:PATH += ";$apps"
+          $apps >> $env:GITHUB_PATH
+          $version = winget --version
+          if ($LASTEXITCODE -ne 0 -or $version.Trim() -cne 'v1.29.380') { throw 'Pinned WinGet is unavailable' }
+      - name: Install and remove the exact commit candidate
+        shell: pwsh
+        run: bun scripts/test-winget-candidate.ts $env:GITHUB_SHA
+      - name: Retain candidate, corresponding source and install evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mods-${{ github.sha }}-winget-ci
+          path: dist/
+          retention-days: 90
